@@ -2,7 +2,7 @@
 
 llm:
   baseURL: "https://api.openai.com/v1"  # OpenAI API endpoint
-  model: "gpt-5-mini"  # For Responses API
+  model: "gpt-5.4-mini"  # For Responses API
   apiKey: ""  # Leave empty - will be read from OPENAI_API_KEY env var
   harmonyTemplate: false  # OpenAI models don't use Harmony template
   maxTokens: 8192

@@ -29,7 +29,7 @@ fn main() {
     let base_url = std::env::var("LLM_BASE_URL")
         .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
     let model = std::env::var("LLM_MODEL")
-        .unwrap_or_else(|_| "gpt-5-mini".to_string());
+        .unwrap_or_else(|_| "gpt-5.4-mini".to_string());
     let api_key = std::env::var("OPENAI_API_KEY").ok();
     let working_dir = std::env::var("WORKING_DIR")
         .unwrap_or_else(|_| std::env::current_dir().unwrap().to_string_lossy().to_string());
@@ -42,7 +42,7 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
 
-    // Create provider (no temperature for models like gpt-5-mini that don't support it)
+    // Create provider (no temperature for models like gpt-5.4-mini that don't support it)
     let temperature: Option<f32> = std::env::var("LLM_TEMPERATURE")
         .ok()
         .and_then(|s| s.parse().ok());

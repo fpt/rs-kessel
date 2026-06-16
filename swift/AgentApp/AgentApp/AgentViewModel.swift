@@ -87,7 +87,7 @@ final class AgentViewModel {
         set { UserDefaults.standard.set(newValue, forKey: "openai_api_key") }
     }
     var model: String {
-        get { UserDefaults.standard.string(forKey: "openai_model") ?? "gpt-5-mini" }
+        get { UserDefaults.standard.string(forKey: "openai_model") ?? "gpt-5.4-mini" }
         set { UserDefaults.standard.set(newValue, forKey: "openai_model") }
     }
     var baseURL: String {

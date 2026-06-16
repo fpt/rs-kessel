@@ -53,7 +53,7 @@ YAML configs live in `configs/`. Key sections:
 llm:
   modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"  # Local model (omit for cloud)
   baseURL: "https://api.openai.com/v1"           # API endpoint (omit for local)
-  model: "gpt-5-mini"
+  model: "gpt-5.4-mini"
   harmonyTemplate: false
   temperature: 0.7
   maxTokens: 2048
