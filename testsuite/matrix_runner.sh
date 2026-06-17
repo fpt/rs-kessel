@@ -14,7 +14,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 proj_root="$(cd "$script_dir/.." && pwd)"
 
 if [ -z "$CLI" ]; then
-    CLI="$proj_root/win/VoiceAgentCLI/bin/Release/net8.0/voice-agent.exe"
+    CLI="$proj_root/win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe"
 fi
 if [ ! -f "$CLI" ]; then
     echo "Error: CLI binary '$CLI' not found. Build with:"

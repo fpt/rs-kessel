@@ -182,13 +182,15 @@ bash scripts/gen_uniffi_cs.sh
 # 3. Build & run the CLI (net8.0, x64). The build copies agent_core.dll next to
 #    the exe as uniffi_agent_core.dll (the DllImport name the bindings expect).
 dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release
-win/VoiceAgentCLI/bin/Release/net8.0/voice-agent.exe --config configs/default.yaml
+win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe --config configs/default.yaml
 ```
 
-- `win/VoiceAgentCLI/Program.cs` — text REPL (`/reset`, `/history`, `/help`, `/quit`)
+- `win/VoiceAgentCLI/Program.cs` — REPL with two modes toggled by **Shift+Tab** (like Claude Code's plan/auto cycle): `text` (type → printed reply) ⇄ `listen` (speak → reply printed **and** spoken). Interactive terminals use a key-level loop (`ReadLineOrToggle`/`TogglePressed`); piped stdin (the testsuite) uses a plain line loop with no mode switching. Commands: `/listen` (one-shot), `/reset`, `/history`, `/help`, `/quit`.
+- `win/VoiceAgentCLI/SpeechInput.cs` — STT via `System.Speech` (Windows desktop recognizer). `RecognizeOnce()` for the `/listen` command; `Listen(toggleRequested)` for continuous listen mode (async recognition + key polling so Shift+Tab stays responsive; mic released during TTS = half-duplex). Requires `net8.0-windows`.
+- `win/VoiceAgentCLI/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`; strips `<think>` blocks and markdown before speaking.
 - `win/VoiceAgentCLI/AppConfig.cs` — YAML loader (YamlDotNet) for the same `configs/*.yaml` schema; API key falls back to `OPENAI_API_KEY`
 - `win/vendor/agent_core.cs` — generated bindings (gitignored; namespace `uniffi.agent_core`, `DllImport("uniffi_agent_core")`)
-- No TTS/STT/watcher yet — cloud + local chat only.
+- No watcher integration yet.
 
 ## Claude Code Watcher
 

@@ -1,4 +1,4 @@
-.PHONY: help build run run-text run-openai run-openai-text run-ministral3 clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
+.PHONY: help build run run-text run-openai run-openai-text run-ministral3 run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
 
 help:
 	@echo "Voice Agent - Makefile"
@@ -12,6 +12,7 @@ help:
 	@echo "  make run-ministral3  - Run with local Ministral-3B (auto-downloads model)"
 	@echo "  make run-verbose     - Run in Voice Mode (verbose)"
 	@echo "  make run-text-verbose- Run in Text Mode (verbose)"
+	@echo "  make run-win         - Build & run the Windows C# CLI (CONFIG=configs/foo.yaml)"
 	@echo ""
 	@echo "  make clean           - Clean build artifacts"
 	@echo "  make test            - Run tests"
@@ -84,6 +85,15 @@ run-openai-ja:
 	@echo "Running Voice Agent with OpenAI (ja mode)..."
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
 	@cd swift && swift run voice-agent --config ../configs/openai-ja.yaml
+
+# Windows C# CLI: build then run. Override the config with CONFIG=...
+# e.g. make run-win CONFIG=configs/local-lfm2.yaml
+WIN_CLI := win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe
+CONFIG  ?= configs/default.yaml
+run-win:
+	@dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release --nologo
+	@echo "Running Windows CLI with $(CONFIG)..."
+	@"$(WIN_CLI)" --config "$(CONFIG)"
 
 clean:
 	@echo "Cleaning build artifacts..."

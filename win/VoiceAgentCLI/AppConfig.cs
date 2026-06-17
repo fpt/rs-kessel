@@ -12,8 +12,24 @@ public sealed class AppConfig
     [YamlMember(Alias = "agent")]
     public AgentSection Agent { get; set; } = new();
 
+    [YamlMember(Alias = "stt")]
+    public SttSection? Stt { get; set; }
+
     [YamlMember(Alias = "mcpServers")]
     public List<McpServerEntry>? McpServers { get; set; }
+
+    public sealed class SttSection
+    {
+        [YamlMember(Alias = "locale")]
+        public string? Locale { get; set; }
+    }
+
+    /// BCP-47 culture for speech recognition / synthesis: explicit stt.locale,
+    /// else derived from agent.language (ja -> ja-JP, otherwise en-US).
+    public string SpeechCulture =>
+        !string.IsNullOrWhiteSpace(Stt?.Locale) ? Stt!.Locale!
+        : Agent.Language == "ja" ? "ja-JP"
+        : "en-US";
 
     public sealed class LlmSection
     {

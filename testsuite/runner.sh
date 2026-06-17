@@ -19,7 +19,7 @@ proj_root="$(cd "$script_dir/.." && pwd)"
 
 # Default to the Release build of the Windows CLI if CLI is unset.
 if [ -z "$CLI" ]; then
-    CLI="$proj_root/win/VoiceAgentCLI/bin/Release/net8.0/voice-agent.exe"
+    CLI="$proj_root/win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe"
 fi
 # Resolve to an absolute path (we cd into a temp dir before running).
 CLI="$(cd "$(dirname "$CLI")" && pwd)/$(basename "$CLI")"
