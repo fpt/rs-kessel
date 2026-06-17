@@ -12,6 +12,10 @@ name = "agent_core"
 [features]
 default = ["local"]
 local = ["dep:llama-cpp-2"]
+# GPU backends for the in-process llama.cpp (each implies `local`).
+cuda = ["local", "llama-cpp-2/cuda"]
+metal = ["local", "llama-cpp-2/metal"]
+vulkan = ["local", "llama-cpp-2/vulkan"]
 
 [dependencies]
 crossbeam.workspace = true

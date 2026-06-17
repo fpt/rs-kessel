@@ -166,6 +166,15 @@ cd crates && cargo build --release --no-default-features   # -> crates/target/re
 #     SDK + bundled Ninja), and an up-to-date rustup MSVC toolchain (rustup update stable).
 scripts/build-win-local.bat
 
+# 1c. GPU-accelerated llama.cpp. Cargo features: cuda / metal / vulkan (each implies
+#     local). On Windows with NVIDIA:
+scripts/build-win-cuda.bat   # CUDA build; pins a Pascal-capable toolkit + sm_61
+#     NOTE: CUDA 13 dropped Pascal (GTX 10xx). The script defaults to CUDA_VER=v12.9,
+#     CUDA_ARCH=61 (GTX 1060); override for other GPUs, e.g.:
+#       set CUDA_VER=v12.9 & set CUDA_ARCH=86 & scripts\build-win-cuda.bat
+#     The provider offloads all layers by default; cap it for small VRAM via
+#     VOICE_AGENT_GPU_LAYERS=N (e.g. 20 on a 6 GB card with a big model).
+
 # 2. Generate C# bindings into win/vendor/ (install once:
 #    cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3)
 bash scripts/gen_uniffi_cs.sh
