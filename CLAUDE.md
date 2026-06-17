@@ -28,7 +28,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `lib/src/llm.rs` | LlmProvider trait, OpenAiProvider (Responses API) |
 | `lib/src/llm_local.rs` | LlamaLocalProvider (in-process llama-cpp-2 FFI) |
 | `lib/src/react.rs` | Provider-agnostic ReAct loop |
-| `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools |
+| `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools, ToolSession (read-tracking + permissions) |
 | `lib/src/skill.rs` | SkillRegistry, lookup_skill tool |
 | `lib/src/memory.rs` | ConversationMemory (thread-safe) |
 | `lib/src/state_capsule.rs` | State capsule for context injection |
@@ -57,6 +57,8 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 - OpenAI provider uses Responses API (`/v1/responses`) with `function_call`/`function_call_output` input items
 - Local LLM tool calling: `apply_chat_template_oaicompat()` -> grammar-constrained generation -> `parse_response_oaicompat()`
 - `ToolAccess` trait abstracts `ToolRegistry` and `FilteredToolRegistry` for restricted tool access
+- Built-in tools (`create_default_registry`): `read`, `glob`, `grep`, `write`, `edit`, `bash`, `tasks`, `lookup_skill`, `read_situation_messages` (+ `capture_screen`/`find_window`/`apply_ocr` from `lib.rs`, + MCP tools)
+- **Mutation safety** (`ToolSession`, shared per-agent): `edit` and overwriting `write` require the file to have been `read` first (read-first, like klein-cli). `write`/`edit` and non-whitelisted `bash` commands prompt on the terminal (`1` yes / `2` yes-to-all (remembered for the session) / `3` no). `bash` runs a default allowlist (make, go, gcc, uv, cargo, ls, ps, cd, pwd, grep, …; extend via `VOICE_AGENT_BASH_ALLOW`) without prompting. Non-interactive contexts (no TTY) deny mutations unless `VOICE_AGENT_AUTO_APPROVE=1`.
 - Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback
 
 ## Configuration
@@ -65,11 +67,12 @@ YAML configs in `configs/`. System prompt supports `{language}` template variabl
 
 ```yaml
 llm:
-  modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"  # For local provider
-  modelRepo: "Qwen/Qwen3-8B-GGUF"              # HuggingFace repo (auto-download)
+  modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"  # For local provider (local path), OR
+  # modelPath: "hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf"  # auto-download
+  modelRepo: "Qwen/Qwen3-8B-GGUF"              # HuggingFace repo (Swift auto-download)
   modelFile: "Qwen3-8B-Q4_K_M.gguf"            # File in repo
   baseURL: "https://api.openai.com/v1"          # For OpenAI provider
-  model: "gpt-5-mini"
+  model: "gpt-5.4-mini"
   apiKey: ""                                     # Or OPENAI_API_KEY env var
   harmonyTemplate: false
   temperature: 0.7
@@ -100,6 +103,20 @@ watcher:
 
 Provider selection logic: if `modelPath` is set -> `LlamaLocalProvider`; else if `baseURL` is set -> `OpenAiProvider`.
 
+### Model auto-download (`lib/src/model_downloader.rs`)
+
+`modelPath` may be a HuggingFace spec instead of a local path:
+`hf:ORG/REPO[@REVISION]/path/to/file.gguf` (e.g.
+`hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf`). On first use the
+local provider downloads it into the HuggingFace hub cache
+(`HF_HUB_CACHE`/`HUGGINGFACE_HUB_CACHE`/`HF_HOME`/`~/.cache/huggingface/hub`),
+laid out as `models--org--name/{blobs,snapshots/<commit>,refs}` like
+`huggingface_hub`. Downloads are **transactional** (stream to
+`blobs/<etag>.incomplete`, atomic-rename on success) and **resumable** (a
+leftover `.incomplete` continues via an HTTP `Range` request). Set `HF_TOKEN` /
+`HUGGING_FACE_HUB_TOKEN` for gated/private repos. A plain `modelPath` that is an
+existing file is used as-is.
+
 ## Skills
 
 Skills are `SKILL.md` files with YAML frontmatter loaded from:
@@ -129,6 +146,40 @@ cd swift && swift run voice-agent --config ../configs/qwen3.yaml
 # Local model standalone (Rust only, no Swift)
 MODEL_PATH=../models/Qwen3-8B-Q4_K_M.gguf cargo run -p app
 ```
+
+## Windows CLI (`win/`)
+
+A C# console frontend (text REPL) that consumes the same Rust `agent_core`
+library through **UniFFI C# bindings** — the Windows analogue of the Swift CLI.
+Mirrors the `../rs-gallium` approach (cdylib + `uniffi-bindgen-cs` + .NET).
+
+```bash
+# 1a. Cloud-only cdylib (no llama.cpp; uses whatever cargo is on PATH):
+cd crates && cargo build --release --no-default-features   # -> crates/target/release/agent_core.dll
+
+# 1b. With in-process llama.cpp (local GGUF models): use the helper script.
+#     It enters the MSVC dev env (vcvars64), forces cmake's Ninja generator, and
+#     uses rustup's MSVC toolchain so the C++ libs (common.lib/llama.lib, built by
+#     cl.exe) match what rustc links. Building with the GNU toolchain fails with
+#     "could not find native static library `common`".
+#     Requires: VS Build Tools w/ "Desktop development with C++" (cl.exe + Windows
+#     SDK + bundled Ninja), and an up-to-date rustup MSVC toolchain (rustup update stable).
+scripts/build-win-local.bat
+
+# 2. Generate C# bindings into win/vendor/ (install once:
+#    cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3)
+bash scripts/gen_uniffi_cs.sh
+
+# 3. Build & run the CLI (net8.0, x64). The build copies agent_core.dll next to
+#    the exe as uniffi_agent_core.dll (the DllImport name the bindings expect).
+dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release
+win/VoiceAgentCLI/bin/Release/net8.0/voice-agent.exe --config configs/default.yaml
+```
+
+- `win/VoiceAgentCLI/Program.cs` — text REPL (`/reset`, `/history`, `/help`, `/quit`)
+- `win/VoiceAgentCLI/AppConfig.cs` — YAML loader (YamlDotNet) for the same `configs/*.yaml` schema; API key falls back to `OPENAI_API_KEY`
+- `win/vendor/agent_core.cs` — generated bindings (gitignored; namespace `uniffi.agent_core`, `DllImport("uniffi_agent_core")`)
+- No TTS/STT/watcher yet — cloud + local chat only.
 
 ## Claude Code Watcher
 

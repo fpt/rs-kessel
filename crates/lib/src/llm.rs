@@ -826,12 +826,17 @@ pub fn create_provider(
         #[cfg(feature = "local")]
         {
             tracing::info!("Using local llama.cpp provider (FFI)");
+            // Resolve `hf:` specs (download into the HF cache if needed); plain
+            // paths pass through unchanged.
+            let resolved = crate::model_downloader::ensure_model(path)
+                .map_err(|e| anyhow::anyhow!("Failed to resolve model '{}': {}", path, e))?;
+            let resolved = resolved.to_string_lossy().to_string();
             let temp = temperature.unwrap_or(0.7);
             let provider =
-                crate::llm_local::LlamaLocalProvider::new(path, temp, max_tokens, 8192)
+                crate::llm_local::LlamaLocalProvider::new(&resolved, temp, max_tokens, 8192)
                     .map_err(|e| {
                         tracing::error!("Failed to create local provider: {}", e);
-                        anyhow::anyhow!("Failed to load model from {}: {}", path, e)
+                        anyhow::anyhow!("Failed to load model from {}: {}", resolved, e)
                     })?;
             return Ok(Box::new(provider));
         }

@@ -1,0 +1,10 @@
+# Local GPT-OSS 20B (in-process llama.cpp, Harmony template)
+llm:
+  modelPath: "C:/Users/Youichi/.cache/huggingface/hub/models--unsloth--gpt-oss-20b-GGUF/snapshots/d449b42d93e1c2c7bda5312f5c25c8fb91dfa9b4/gpt-oss-20b-Q4_K_M.gguf"
+  harmonyTemplate: true
+  temperature: 0.3
+  maxTokens: 384
+
+agent:
+  language: "en"
+  maxTurns: 50

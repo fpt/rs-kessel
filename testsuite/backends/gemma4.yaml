@@ -1,0 +1,10 @@
+# Local Gemma 4 E4B (in-process llama.cpp)
+llm:
+  modelPath: "C:/Users/Youichi/.cache/huggingface/hub/models--unsloth--gemma-4-E4B-it-GGUF/snapshots/ce152932ac27bc40bc9c727386760424d50bb456/gemma-4-E4B-it-Q4_K_M.gguf"
+  harmonyTemplate: false
+  temperature: 0.3
+  maxTokens: 384
+
+agent:
+  language: "en"
+  maxTurns: 50

@@ -1,4 +1,4 @@
-.PHONY: help build run run-text run-openai run-openai-text run-ministral3 clean test gen-uniffi install-deps zip
+.PHONY: help build run run-text run-openai run-openai-text run-ministral3 clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
 
 help:
 	@echo "Voice Agent - Makefile"
@@ -15,6 +15,9 @@ help:
 	@echo ""
 	@echo "  make clean           - Clean build artifacts"
 	@echo "  make test            - Run tests"
+	@echo "  make integration-test- Run Rust ReAct tool-calling tests"
+	@echo "  make testsuite       - Run CLI capability matrix (all backends; see testsuite/)"
+	@echo "  make testsuite-local - Run matrix for local backends only (gemma4,gpt-oss)"
 	@echo "  make gen-uniffi      - Generate UniFFI Swift bindings"
 	@echo "  make install-deps    - Install development dependencies"
 	@echo "  make zip             - Create source archive (excludes models/build artifacts)"
@@ -98,6 +101,15 @@ test:
 
 integration-test:
 	./scripts/test_tools.sh
+
+# CLI capability matrix (see testsuite/README.md). Backends: gemma4, gpt-oss
+# (local llama.cpp) and gpt-5.4-mini (cloud; needs OPENAI_API_KEY or .env).
+# Filter with TESTS=... / BACKENDS=...; override the binary with CLI=...
+testsuite:
+	@bash testsuite/matrix_runner.sh
+
+testsuite-local:
+	@BACKENDS="gemma4,gpt-oss" bash testsuite/matrix_runner.sh
 
 gen-uniffi:
 	@echo "🦀 Building Rust library..."

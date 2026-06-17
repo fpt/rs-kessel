@@ -83,14 +83,18 @@ if (cfg.Agent.SystemPromptPath is { } promptPath && resolvedConfigPath is not nu
 }
 
 // ── Text REPL ─────────────────────────────────────────────────────────────────
+var (modelLine, endpointLine) = string.IsNullOrEmpty(cfg.Llm.ModelPath)
+    ? ($"Model: {cfg.Llm.Model}", $"Endpoint: {cfg.Llm.BaseUrl}")
+    : ($"Model: {Path.GetFileName(cfg.Llm.ModelPath)}", "Endpoint: local (in-process llama.cpp)");
+
 Console.WriteLine($"""
 
 ===========================================
   Voice Agent - Windows CLI (text mode)
 ===========================================
 
-Model: {cfg.Llm.Model}
-Endpoint: {cfg.Llm.BaseUrl}
+{modelLine}
+{endpointLine}
 
 Type your messages below. Commands:
   /reset    - Clear conversation history

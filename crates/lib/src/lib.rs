@@ -10,6 +10,7 @@ pub mod mcp_client_http;
 pub mod mcp_server;
 pub mod mcp_server_http;
 mod memory;
+pub mod model_downloader;
 pub mod react;
 pub mod situation;
 pub mod skill;
