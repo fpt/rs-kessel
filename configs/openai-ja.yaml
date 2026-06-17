@@ -39,5 +39,5 @@ stt:
 watcher:
   enabled: true                              # Watch Claude Code activity
   debounceInterval: 5.0                      # Seconds to batch events before summarizing
-  socketPath: null                         # Unix socket path (null = /tmp/voice-agent-<uid>.sock)
+  socketPath: null                         # Unix socket path (null = /tmp/kessel-cli-<uid>.sock)
   sessionPath: null                        # Session JSONL path (null = auto-detect)

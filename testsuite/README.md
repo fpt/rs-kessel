@@ -1,10 +1,10 @@
-# Voice Agent Test Suite
+# Kessel Test Suite
 
-Capability tests for the voice-agent CLI across multiple LLM backends, modeled
+Capability tests for the kessel-cli CLI across multiple LLM backends, modeled
 after `../klein-cli`'s testsuite (`runner.sh` + `matrix_runner.sh` + per-testcase
 `prompt.txt`/`check.sh`).
 
-Because the voice-agent CLI takes a YAML `--config` and reads prompts from
+Because the kessel-cli CLI takes a YAML `--config` and reads prompts from
 **stdin** (a REPL, one line per turn) — and its tool set is read-only
 (`read`/`glob`/`tasks`, no file writing) — the tests validate the assistant's
 **text responses** rather than generated files.
@@ -33,7 +33,7 @@ testsuite/
 
 ```bash
 # Build the CLI first (cloud-only, or scripts/build-win-local.bat for local models)
-dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release
+dotnet build win/KesselCli/KesselCli.csproj -c Release
 
 # List testcases / backends
 bash testsuite/runner.sh

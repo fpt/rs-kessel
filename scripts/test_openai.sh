@@ -62,7 +62,7 @@ echo ""
 # Run the agent with a test query
 echo "What is 2+2? Reply with just the number." | \
     OPENAI_API_KEY=$OPENAI_API_KEY \
-    swift run voice-agent --config ../configs/openai.yaml 2>/dev/null | \
+    swift run kessel-cli --config ../configs/openai.yaml 2>/dev/null | \
     grep "Assistant:" || true
 
 echo ""

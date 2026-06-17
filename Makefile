@@ -1,7 +1,7 @@
 .PHONY: help build run run-text run-openai run-openai-text run-ministral3 run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
 
 help:
-	@echo "Voice Agent - Makefile"
+	@echo "Kessel - Makefile"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make build           - Build Rust and Swift"
@@ -43,12 +43,12 @@ build:
 	@echo "Build complete!"
 
 run:
-	@echo "Running Voice Agent in Default Mode..."
-	@cd swift && swift run voice-agent --config ../configs/default.yaml
+	@echo "Running Kessel in Default Mode..."
+	@cd swift && swift run kessel-cli --config ../configs/default.yaml
 
 run-verbose:
-	@echo "Running Voice Agent in Auto-Listen Voice Mode (verbose)..."
-	@cd swift && swift run voice-agent --config ../configs/default.yaml --verbose
+	@echo "Running Kessel in Auto-Listen Voice Mode (verbose)..."
+	@cd swift && swift run kessel-cli --config ../configs/default.yaml --verbose
 
 run-openai:
 	@if [ -z "$$OPENAI_API_KEY" ]; then \
@@ -62,13 +62,13 @@ run-openai:
 		echo ""; \
 		exit 1; \
 	fi
-	@echo "Running Voice Agent with OpenAI (voice mode)..."
+	@echo "Running Kessel with OpenAI (voice mode)..."
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
-	@cd swift && swift run voice-agent --config ../configs/openai.yaml
+	@cd swift && swift run kessel-cli --config ../configs/openai.yaml
 
 run-qwen3:
-	@echo "Running Voice Agent with Qwen3 (local)..."
-	@cd swift && swift run voice-agent --config ../configs/qwen3.yaml
+	@echo "Running Kessel with Qwen3 (local)..."
+	@cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 run-openai-ja:
 	@if [ -z "$$OPENAI_API_KEY" ]; then \
@@ -82,16 +82,16 @@ run-openai-ja:
 		echo ""; \
 		exit 1; \
 	fi
-	@echo "Running Voice Agent with OpenAI (ja mode)..."
+	@echo "Running Kessel with OpenAI (ja mode)..."
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
-	@cd swift && swift run voice-agent --config ../configs/openai-ja.yaml
+	@cd swift && swift run kessel-cli --config ../configs/openai-ja.yaml
 
 # Windows C# CLI: build then run. Override the config with CONFIG=...
 # e.g. make run-win CONFIG=configs/local-lfm2.yaml
-WIN_CLI := win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe
+WIN_CLI := win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
 CONFIG  ?= configs/default.yaml
 run-win:
-	@dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release --nologo
+	@dotnet build win/KesselCli/KesselCli.csproj -c Release --nologo
 	@echo "Running Windows CLI with $(CONFIG)..."
 	@"$(WIN_CLI)" --config "$(CONFIG)"
 
@@ -127,9 +127,9 @@ gen-uniffi:
 	@echo "🔧 Generating UniFFI Swift bindings..."
 	@mkdir -p vendor/uniffi-swift
 	@cd crates/lib && \
-		cargo run --bin uniffi-bindgen-swift -- --swift-sources ../target/release/libagent_core.dylib ../../vendor/uniffi-swift && \
-		cargo run --bin uniffi-bindgen-swift -- --headers ../target/release/libagent_core.dylib ../../vendor/uniffi-swift && \
-		cargo run --bin uniffi-bindgen-swift -- --modulemap ../target/release/libagent_core.dylib ../../vendor/uniffi-swift
+		cargo run --bin uniffi-bindgen-swift -- --swift-sources ../target/release/libkessel_core.dylib ../../vendor/uniffi-swift && \
+		cargo run --bin uniffi-bindgen-swift -- --headers ../target/release/libkessel_core.dylib ../../vendor/uniffi-swift && \
+		cargo run --bin uniffi-bindgen-swift -- --modulemap ../target/release/libkessel_core.dylib ../../vendor/uniffi-swift
 	@echo ""
 	@echo "✅ UniFFI bindings generated!"
 	@echo ""
@@ -137,7 +137,7 @@ gen-uniffi:
 	@ls -lh vendor/uniffi-swift/
 	@echo ""
 	@echo "📝 Next steps:"
-	@echo "  1. Copy agent_core.swift to swift/Sources/AgentBridge/"
+	@echo "  1. Copy kessel_core.swift to swift/Sources/AgentBridge/"
 	@echo "  2. Verify swift/Package.swift links the dylib"
 
 # Development shortcuts
@@ -161,7 +161,7 @@ fmt-fix:
 zip:
 	@echo "Creating source archive..."
 	@TIMESTAMP=$$(date +%Y%m%d-%H%M%S); \
-	ARCHIVE_NAME="voice-agent-$$TIMESTAMP.zip"; \
+	ARCHIVE_NAME="kessel-cli-$$TIMESTAMP.zip"; \
 	zip -r "$$ARCHIVE_NAME" \
 		README.md \
 		CLAUDE.md \

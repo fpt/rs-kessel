@@ -7,8 +7,8 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
-#if canImport(agent_coreFFI)
-import agent_coreFFI
+#if canImport(kessel_coreFFI)
+import kessel_coreFFI
 #endif
 
 fileprivate extension RustBuffer {
@@ -25,13 +25,13 @@ fileprivate extension RustBuffer {
     }
 
     static func from(_ ptr: UnsafeBufferPointer<UInt8>) -> RustBuffer {
-        try! rustCall { ffi_agent_core_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
+        try! rustCall { ffi_kessel_core_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
     // Frees the buffer in place.
     // The buffer must not be used after this is called.
     func deallocate() {
-        try! rustCall { ffi_agent_core_rustbuffer_free(self, $0) }
+        try! rustCall { ffi_kessel_core_rustbuffer_free(self, $0) }
     }
 }
 
@@ -589,7 +589,7 @@ open class Agent:
     @_documentation(visibility: private)
 #endif
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_agent_core_fn_clone_agent(self.pointer, $0) }
+        return try! rustCall { uniffi_kessel_core_fn_clone_agent(self.pointer, $0) }
     }
     // No primary constructor declared for this class.
 
@@ -598,14 +598,14 @@ open class Agent:
             return
         }
 
-        try! rustCall { uniffi_agent_core_fn_free_agent(pointer, $0) }
+        try! rustCall { uniffi_kessel_core_fn_free_agent(pointer, $0) }
     }
 
     
 
     
 open func addSkill(name: String, description: String, prompt: String) {try! rustCall() {
-    uniffi_agent_core_fn_method_agent_add_skill(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_add_skill(self.uniffiClonePointer(),
         FfiConverterString.lower(name),
         FfiConverterString.lower(description),
         FfiConverterString.lower(prompt),$0
@@ -615,13 +615,13 @@ open func addSkill(name: String, description: String, prompt: String) {try! rust
     
 open func drainCaptureRequests() -> [CaptureRequest] {
     return try!  FfiConverterSequenceTypeCaptureRequest.lift(try! rustCall() {
-    uniffi_agent_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
+    uniffi_kessel_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func feedWatcherEvent(json: String)throws  {try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_agent_core_fn_method_agent_feed_watcher_event(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_feed_watcher_event(self.uniffiClonePointer(),
         FfiConverterString.lower(json),$0
     )
 }
@@ -629,14 +629,14 @@ open func feedWatcherEvent(json: String)throws  {try rustCallWithError(FfiConver
     
 open func getConversationHistory() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_agent_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
+    uniffi_kessel_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_agent_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
         FfiConverterString.lower(partialInput),
         FfiConverterUInt64.lower(pauseMs),$0
     )
@@ -644,7 +644,7 @@ open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
 }
     
 open func pushSituationMessage(text: String, source: String, sessionId: String) {try! rustCall() {
-    uniffi_agent_core_fn_method_agent_push_situation_message(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_push_situation_message(self.uniffiClonePointer(),
         FfiConverterString.lower(text),
         FfiConverterString.lower(source),
         FfiConverterString.lower(sessionId),$0
@@ -653,13 +653,13 @@ open func pushSituationMessage(text: String, source: String, sessionId: String) 
 }
     
 open func reset() {try! rustCall() {
-    uniffi_agent_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
+    uniffi_kessel_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func setSystemPrompt(prompt: String) {try! rustCall() {
-    uniffi_agent_core_fn_method_agent_set_system_prompt(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_set_system_prompt(self.uniffiClonePointer(),
         FfiConverterString.lower(prompt),$0
     )
 }
@@ -667,7 +667,7 @@ open func setSystemPrompt(prompt: String) {try! rustCall() {
     
 open func step(userInput: String)throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_agent_core_fn_method_agent_step(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_step(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),$0
     )
 })
@@ -675,7 +675,7 @@ open func step(userInput: String)throws  -> AgentResponse {
     
 open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_agent_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),
         FfiConverterSequenceString.lower(allowedTools),$0
     )
@@ -683,7 +683,7 @@ open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws 
 }
     
 open func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) {try! rustCall() {
-    uniffi_agent_core_fn_method_agent_submit_capture_result(self.uniffiClonePointer(),
+    uniffi_kessel_core_fn_method_agent_submit_capture_result(self.uniffiClonePointer(),
         FfiConverterString.lower(id),
         FfiConverterString.lower(imageBase64),
         FfiConverterString.lower(metadataJson),$0
@@ -1500,7 +1500,7 @@ fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuff
 }
 public func agentNew(config: AgentConfig)throws  -> Agent {
     return try  FfiConverterTypeAgent.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_agent_core_fn_func_agent_new(
+    uniffi_kessel_core_fn_func_agent_new(
         FfiConverterTypeAgentConfig.lower(config),$0
     )
 })
@@ -1517,44 +1517,44 @@ private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
-    let scaffolding_contract_version = ffi_agent_core_uniffi_contract_version()
+    let scaffolding_contract_version = ffi_kessel_core_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_agent_core_checksum_func_agent_new() != 12003) {
+    if (uniffi_kessel_core_checksum_func_agent_new() != 12003) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_add_skill() != 41357) {
+    if (uniffi_kessel_core_checksum_method_agent_add_skill() != 41357) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_drain_capture_requests() != 4180) {
+    if (uniffi_kessel_core_checksum_method_agent_drain_capture_requests() != 4180) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_feed_watcher_event() != 59668) {
+    if (uniffi_kessel_core_checksum_method_agent_feed_watcher_event() != 59668) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_get_conversation_history() != 59460) {
+    if (uniffi_kessel_core_checksum_method_agent_get_conversation_history() != 59460) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_process_backchannel() != 8364) {
+    if (uniffi_kessel_core_checksum_method_agent_process_backchannel() != 8364) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_push_situation_message() != 8206) {
+    if (uniffi_kessel_core_checksum_method_agent_push_situation_message() != 8206) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_reset() != 29830) {
+    if (uniffi_kessel_core_checksum_method_agent_reset() != 29830) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_set_system_prompt() != 12711) {
+    if (uniffi_kessel_core_checksum_method_agent_set_system_prompt() != 12711) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_step() != 4924) {
+    if (uniffi_kessel_core_checksum_method_agent_step() != 4924) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_step_with_allowed_tools() != 47034) {
+    if (uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools() != 47034) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_submit_capture_result() != 24243) {
+    if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 24243) {
         return InitializationResult.apiChecksumMismatch
     }
 

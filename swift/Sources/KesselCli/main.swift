@@ -45,7 +45,7 @@ final class VoiceQueue: @unchecked Sendable {
 
 // Run async main
 @main
-struct VoiceAgentCLI {
+struct KesselCli {
     static func main() async {
         await runMain()
     }
@@ -71,9 +71,9 @@ for (index, arg) in arguments.enumerated() {
 
 func printHelp() {
     print("""
-    Voice Agent - Local Voice Assistant
+    Kessel - Local Voice Assistant
 
-    Usage: voice-agent [OPTIONS]
+    Usage: kessel-cli [OPTIONS]
 
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
@@ -81,9 +81,9 @@ func printHelp() {
         --help, -h         Show this help message
 
     Examples:
-        voice-agent
-        voice-agent --config custom.yaml
-        voice-agent --verbose
+        kessel-cli
+        kessel-cli --config custom.yaml
+        kessel-cli --verbose
     """)
 }
 
@@ -288,7 +288,7 @@ func runTextMode() async {
     print("""
 
 ===========================================
-  Voice Agent - Text Mode
+  Kessel - Text Mode
 ===========================================
 
 Model: \(config.llm.model)
@@ -445,7 +445,7 @@ func runContinuousVoiceMode() async {
         print("""
 
 ===========================================
-  Voice Agent - Continuous Voice Mode
+  Kessel - Continuous Voice Mode
 ===========================================
 
 Model: \(config.llm.model)

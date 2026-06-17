@@ -1,10 +1,10 @@
 #!/bin/bash
-# Claude Code hook: sends events to voice-agent via Unix domain socket.
+# Claude Code hook: sends events to kessel-cli via Unix domain socket.
 # Usage: Add to .claude/settings.json hooks configuration.
-# Reads hook JSON from stdin, forwards to voice-agent's Unix socket.
-# Exits silently if voice-agent is not running (socket doesn't exist).
+# Reads hook JSON from stdin, forwards to kessel-cli's Unix socket.
+# Exits silently if kessel-cli is not running (socket doesn't exist).
 
-SOCKET="/tmp/voice-agent-$(id -u).sock"
+SOCKET="/tmp/kessel-cli-$(id -u).sock"
 
 # Check if socket exists
 if [ ! -S "$SOCKET" ]; then

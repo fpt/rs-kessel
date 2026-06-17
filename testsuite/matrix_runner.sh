@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Run every testcase against every backend and print a PASS/FAIL matrix.
-# Usage: CLI=path/to/voice-agent.exe ./testsuite/matrix_runner.sh
+# Usage: CLI=path/to/kessel-cli.exe ./testsuite/matrix_runner.sh
 #
 # Optional comma-separated filters:
 #   TESTS=capital,memory             run only matching testcases
@@ -14,11 +14,11 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 proj_root="$(cd "$script_dir/.." && pwd)"
 
 if [ -z "$CLI" ]; then
-    CLI="$proj_root/win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe"
+    CLI="$proj_root/win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe"
 fi
 if [ ! -f "$CLI" ]; then
     echo "Error: CLI binary '$CLI' not found. Build with:"
-    echo "  dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release"
+    echo "  dotnet build win/KesselCli/KesselCli.csproj -c Release"
     exit 1
 fi
 
@@ -50,7 +50,7 @@ backend_available() {
     return 1
 }
 
-log "=== voice-agent Matrix Test Results ==="
+log "=== kessel-cli Matrix Test Results ==="
 log "Timestamp: $(date)"
 log "Binary: $CLI"
 log "TESTS filter:    ${TESTS:-(all)}"

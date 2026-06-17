@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Generate UniFFI C# bindings for the Windows CLI (win/VoiceAgentCLI).
+# Generate UniFFI C# bindings for the Windows CLI (win/KesselCli).
 #
 # Prereq (install once):
 #   cargo install uniffi-bindgen-cs \
@@ -22,5 +22,5 @@ echo "🔧 Generating UniFFI C# bindings from agent.udl..."
 cd "$ROOT/crates/lib"
 uniffi-bindgen-cs --out-dir "$OUT_DIR" src/agent.udl
 
-echo "✅ Generated $OUT_DIR/agent_core.cs"
-echo "   DllImport target: uniffi_agent_core (agent_core.dll copied at build time)"
+echo "✅ Generated $OUT_DIR/kessel_core.cs"
+echo "   DllImport target: uniffi_kessel_core (kessel_core.dll copied at build time)"

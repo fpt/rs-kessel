@@ -1,8 +1,8 @@
 import Foundation
 
 // Import the generated UniFFI C header
-#if canImport(agent_coreFFI)
-import agent_coreFFI
+#if canImport(kessel_coreFFI)
+import kessel_coreFFI
 #endif
 
 // Include the generated Swift bindings
@@ -10,6 +10,6 @@ import agent_coreFFI
 #if SKIP_UNIFFI_IMPORT
 // For testing without the Rust library
 #else
-// The actual implementation comes from agent_core.swift in vendor/uniffi-swift
+// The actual implementation comes from kessel_core.swift in vendor/uniffi-swift
 // which gets included via the bridging header
 #endif

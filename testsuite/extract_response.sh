@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Extract assistant response text from voice-agent CLI output.
+# Extract assistant response text from kessel-cli CLI output.
 # Usage: extract_response.sh <output_file> [turn_number]
 #
-# The voice-agent REPL prints each reply as a line starting with "Assistant: ",
+# The kessel-cli REPL prints each reply as a line starting with "Assistant: ",
 # optionally followed by continuation lines, ending before the next "You:" prompt.
 #   - No turn number: prints all assistant text.
 #   - Turn N: prints just the Nth assistant response block.

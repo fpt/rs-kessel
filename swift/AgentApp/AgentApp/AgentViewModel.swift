@@ -144,7 +144,7 @@ final class AgentViewModel {
                 }
             }()
 
-            var systemPrompt = "You are a kind voice agent.\nGive clear and concise response."
+            var systemPrompt = "You are a kind kessel.\nGive clear and concise response."
             if !languagePrompt.isEmpty {
                 systemPrompt += "\n\(languagePrompt)"
             }

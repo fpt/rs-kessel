@@ -11,7 +11,7 @@ Implemented environment variable support for passing the OpenAI API key from Swi
 
 ### 1. Swift: Environment Variable Reading
 
-**File**: `swift/Sources/VoiceAgentCLI/main.swift`
+**File**: `swift/Sources/KesselCli/main.swift`
 
 ```swift
 // Check for OPENAI_API_KEY environment variable (takes precedence over config)
@@ -116,12 +116,12 @@ The API key is resolved in this order (highest to lowest priority):
 **Option 1: Export in shell**
 ```bash
 export OPENAI_API_KEY=sk-proj-...your-key...
-swift run voice-agent --config ../configs/openai.yaml
+swift run kessel-cli --config ../configs/openai.yaml
 ```
 
 **Option 2: Inline**
 ```bash
-OPENAI_API_KEY=sk-... swift run voice-agent --config ../configs/openai.yaml
+OPENAI_API_KEY=sk-... swift run kessel-cli --config ../configs/openai.yaml
 ```
 
 **Option 3: Shell profile** (~/.zshrc or ~/.bashrc)
@@ -178,7 +178,7 @@ swift build
 cd ..
 
 # 5. Test
-echo "What is 2+2?" | swift run voice-agent --config ../configs/openai.yaml
+echo "What is 2+2?" | swift run kessel-cli --config ../configs/openai.yaml
 ```
 
 ### Automated Test Script
@@ -287,7 +287,7 @@ When running, you'll see one of these log messages:
 ## Files Modified
 
 1. **Swift CLI** - Environment variable reading:
-   - `swift/Sources/VoiceAgentCLI/main.swift`
+   - `swift/Sources/KesselCli/main.swift`
 
 2. **Rust Core** - Already supported via AgentConfig:
    - `crates/agent-core/src/lib.rs` (no changes needed)
@@ -343,7 +343,7 @@ Not an error for local mode!
 export OPENAI_API_KEY=sk-...
 
 # Run in same shell session
-swift run voice-agent ...
+swift run kessel-cli ...
 
 # Don't run in a new shell without exporting again
 ```

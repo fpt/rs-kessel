@@ -1,15 +1,15 @@
 [package]
-name = "app"
+name = "kessel-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "voice-agent"
+name = "kessel-cli"
 path = "src/main.rs"
 
 [dependencies]
-lib = { path = "../lib" }
+kessel-core = { path = "../lib" }
 atty = "0.2"
 tracing-subscriber = { workspace = true }

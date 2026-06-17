@@ -1,5 +1,5 @@
-module agent_coreFFI [system] {
-    header "agent_coreFFI.h"
-    link "agent_core"
+module kessel_coreFFI [system] {
+    header "kessel_coreFFI.h"
+    link "kessel_core"
     export *
 }

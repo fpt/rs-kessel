@@ -239,8 +239,8 @@ impl ToolSession {
             return Ok(());
         }
 
-        // Non-interactive escape hatch (CI/tests): VOICE_AGENT_AUTO_APPROVE=1.
-        match std::env::var("VOICE_AGENT_AUTO_APPROVE").as_deref() {
+        // Non-interactive escape hatch (CI/tests): KESSEL_AUTO_APPROVE=1.
+        match std::env::var("KESSEL_AUTO_APPROVE").as_deref() {
             Ok("1") | Ok("true") | Ok("all") | Ok("yes") => return Ok(()),
             _ => {}
         }
@@ -249,7 +249,7 @@ impl ToolSession {
         if !std::io::stdin().is_terminal() {
             return Err(AgentError::InternalError(format!(
                 "{action} '{target}' denied: requires permission but no interactive terminal \
-                 (set VOICE_AGENT_AUTO_APPROVE=1 to allow non-interactively)"
+                 (set KESSEL_AUTO_APPROVE=1 to allow non-interactively)"
             )));
         }
 
@@ -1049,7 +1049,7 @@ pub struct BashTool {
     session: Arc<ToolSession>,
 }
 
-/// Commands that run without a permission prompt. Extend via VOICE_AGENT_BASH_ALLOW.
+/// Commands that run without a permission prompt. Extend via KESSEL_BASH_ALLOW.
 const BASH_ALLOWLIST: &[&str] = &[
     "make", "go", "gcc", "g++", "clang", "clang++", "cc", "uv", "cargo", "rustc", "rustup", "ls",
     "ps", "cd", "pwd", "grep", "egrep", "fgrep", "rg", "cat", "echo", "head", "tail", "find",
@@ -1097,7 +1097,7 @@ impl BashTool {
     }
 
     fn is_whitelisted(command: &str) -> bool {
-        let extra: Vec<String> = std::env::var("VOICE_AGENT_BASH_ALLOW")
+        let extra: Vec<String> = std::env::var("KESSEL_BASH_ALLOW")
             .unwrap_or_default()
             .split(',')
             .map(|s| s.trim().to_lowercase())
@@ -1377,7 +1377,7 @@ mod tests {
     #[test]
     fn test_write_requires_read_then_edit() {
         // Auto-approve so the permission prompt doesn't block the test.
-        std::env::set_var("VOICE_AGENT_AUTO_APPROVE", "1");
+        std::env::set_var("KESSEL_AUTO_APPROVE", "1");
         let dir = std::env::temp_dir().join(format!("write_edit_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let session = Arc::new(ToolSession::new());

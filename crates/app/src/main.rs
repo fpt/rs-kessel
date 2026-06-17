@@ -2,16 +2,16 @@
 //!
 //! Usage:
 //!   # With local model (no server needed):
-//!   MODEL_PATH=/path/to/model.gguf cargo run -p app
+//!   MODEL_PATH=/path/to/model.gguf cargo run -p kessel-cli
 //!
 //!   # With OpenAI:
-//!   OPENAI_API_KEY=sk-... cargo run -p app
+//!   OPENAI_API_KEY=sk-... cargo run -p kessel-cli
 //!
 //!   # One-shot mode (for integration tests):
-//!   echo "Read the file configs/default.yaml" | MODEL_PATH=... cargo run -p app
+//!   echo "Read the file configs/default.yaml" | MODEL_PATH=... cargo run -p kessel-cli
 
-use agent_core::{ChatMessage, create_provider};
-use agent_core::tool::ToolAccess;
+use kessel_core::{ChatMessage, create_provider};
+use kessel_core::tool::ToolAccess;
 
 use std::io::{self, BufRead};
 
@@ -59,9 +59,9 @@ fn main() {
     .expect("Failed to create LLM provider");
 
     // Create tool registry
-    let skill_registry = std::sync::Arc::new(agent_core::skill::SkillRegistry::new());
-    let situation = std::sync::Arc::new(agent_core::situation::SituationMessages::default());
-    let mut tool_registry = agent_core::tool::create_default_registry(
+    let skill_registry = std::sync::Arc::new(kessel_core::skill::SkillRegistry::new());
+    let situation = std::sync::Arc::new(kessel_core::situation::SituationMessages::default());
+    let mut tool_registry = kessel_core::tool::create_default_registry(
         std::path::PathBuf::from(&working_dir),
         skill_registry,
         situation,
@@ -72,7 +72,7 @@ fn main() {
         for entry in mcp_spec.split(',') {
             let parts: Vec<&str> = entry.trim().split_whitespace().collect();
             if let Some((cmd, args)) = parts.split_first() {
-                match agent_core::mcp_client::McpClient::connect(cmd, args) {
+                match kessel_core::mcp_client::McpClient::connect(cmd, args) {
                     Ok(client) => {
                         for handler in client.tool_handlers() {
                             tool_registry.register(handler);
@@ -148,7 +148,7 @@ fn main() {
         // Run ReAct loop
         let mut react_messages = messages.clone();
 
-        let result = agent_core::react::run(
+        let result = kessel_core::react::run(
             client.as_ref(),
             &mut react_messages,
             &tool_registry,

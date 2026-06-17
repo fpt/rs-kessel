@@ -1,5 +1,5 @@
 @echo off
-REM Build the Rust agent_core cdylib with CUDA-accelerated llama.cpp on Windows.
+REM Build the Rust kessel_core cdylib with CUDA-accelerated llama.cpp on Windows.
 REM
 REM Requires: VS Build Tools (MSVC + Ninja), an up-to-date rustup MSVC toolchain,
 REM and an NVIDIA CUDA Toolkit. NOTE: CUDA 13+ dropped Pascal (GTX 10xx, sm_61),
@@ -10,7 +10,7 @@ REM   set CUDA_VER=v12.9                  (toolkit folder under the CUDA install
 REM   set CUDA_ARCH=61                    (GPU compute capability; 1060 = 61)
 REM
 REM Usage:  scripts\build-win-cuda.bat
-REM Output: crates\target\release\agent_core.dll (CUDA-enabled)
+REM Output: crates\target\release\kessel_core.dll (CUDA-enabled)
 
 setlocal
 
@@ -48,5 +48,5 @@ set "NVCC_APPEND_FLAGS=-allow-unsupported-compiler"
 
 echo Building with CUDA %CUDA_VER% for sm_%CUDA_ARCH% ...
 cd /d "%~dp0..\crates" || exit /b 1
-cargo build --release -p lib --no-default-features --features cuda
+cargo build --release -p kessel-core --no-default-features --features cuda
 exit /b %ERRORLEVEL%

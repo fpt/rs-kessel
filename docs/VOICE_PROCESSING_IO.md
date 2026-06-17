@@ -2,7 +2,7 @@
 
 ## Overview
 
-VoiceProcessingIO is Apple's built-in Audio Unit (`kAudioUnitSubType_VoiceProcessingIO`) that provides **Acoustic Echo Cancellation (AEC)** on macOS. This allows the voice agent to:
+VoiceProcessingIO is Apple's built-in Audio Unit (`kAudioUnitSubType_VoiceProcessingIO`) that provides **Acoustic Echo Cancellation (AEC)** on macOS. This allows the kessel to:
 
 - **Listen while speaking**: STT can run simultaneously with TTS playback
 - **Interrupt the AI**: Users can speak while the assistant is talking
@@ -300,7 +300,7 @@ Continue your response, addressing the interruption.
 
 2. **Start voice mode**:
    ```bash
-   swift run voice-agent --config configs/openai.yaml
+   swift run kessel-cli --config configs/openai.yaml
    ```
 
 3. **Test interruption**:

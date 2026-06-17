@@ -139,7 +139,7 @@ impl McpHttpClient {
             protocol_version: PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities {},
             client_info: Implementation {
-                name: "voice-agent".to_string(),
+                name: "kessel-cli".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         })

@@ -9,7 +9,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 Voice Agent Development Run${NC}"
+echo -e "${GREEN}🚀 Kessel Development Run${NC}"
 echo ""
 
 # Check if llama.cpp server is running
@@ -33,7 +33,7 @@ cd ..
 
 # Run Swift CLI
 echo ""
-echo -e "${GREEN}🎯 Starting Voice Agent CLI...${NC}"
+echo -e "${GREEN}🎯 Starting Kessel CLI...${NC}"
 echo ""
 cd swift
-swift run voice-agent --config ../configs/default.yaml --verbose
+swift run kessel-cli --config ../configs/default.yaml --verbose

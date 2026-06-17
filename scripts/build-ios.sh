@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build Rust agent_core for iOS (device + simulator).
-# Produces an XCFramework at swift/AgentApp/agent_core.xcframework
+# Build Rust kessel_core for iOS (device + simulator).
+# Produces an XCFramework at swift/AgentApp/kessel_core.xcframework
 #
 # Usage:
 #   bash scripts/build-ios.sh              # OpenAI only (no llama.cpp)
@@ -20,9 +20,9 @@ CARGO_TOML="$CRATES_DIR/lib/Cargo.toml"
 FEATURES_FLAG="--no-default-features"
 if [[ "${1:-}" == "--local" ]]; then
     FEATURES_FLAG=""
-    echo "Building agent_core for iOS WITH llama.cpp..."
+    echo "Building kessel_core for iOS WITH llama.cpp..."
 else
-    echo "Building agent_core for iOS (OpenAI only)..."
+    echo "Building kessel_core for iOS (OpenAI only)..."
 fi
 
 # Temporarily remove cdylib from crate-type (iOS cross-link fails for dylibs
@@ -38,25 +38,25 @@ export IPHONEOS_DEPLOYMENT_TARGET=26.2
 echo "  [1/3] Building for iOS device (aarch64-apple-ios)..."
 cd "$CRATES_DIR"
 SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path) \
-    cargo build -p lib --release $FEATURES_FLAG \
+    cargo build -p kessel-core --release $FEATURES_FLAG \
     --target aarch64-apple-ios 2>&1 | tail -3
 
 # Build for simulator (aarch64-apple-ios-sim)
 echo "  [2/3] Building for iOS simulator (aarch64-apple-ios-sim)..."
 SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path) \
-    cargo build -p lib --release $FEATURES_FLAG \
+    cargo build -p kessel-core --release $FEATURES_FLAG \
     --target aarch64-apple-ios-sim 2>&1 | tail -3
 
 # Create XCFramework
 echo "  [3/3] Creating XCFramework..."
 
-DEVICE_LIB="$CRATES_DIR/target/aarch64-apple-ios/release/libagent_core.a"
-SIM_LIB="$CRATES_DIR/target/aarch64-apple-ios-sim/release/libagent_core.a"
+DEVICE_LIB="$CRATES_DIR/target/aarch64-apple-ios/release/libkessel_core.a"
+SIM_LIB="$CRATES_DIR/target/aarch64-apple-ios-sim/release/libkessel_core.a"
 
 # Use the UniFFI-generated header
 HEADER_DIR="$ROOT_DIR/vendor/uniffi-swift"
-HEADER="$HEADER_DIR/agent_coreFFI.h"
-MODULEMAP="$HEADER_DIR/agent_core.modulemap"
+HEADER="$HEADER_DIR/kessel_coreFFI.h"
+MODULEMAP="$HEADER_DIR/kessel_core.modulemap"
 
 if [ ! -f "$HEADER" ]; then
     echo "Error: $HEADER not found. Run: bash scripts/gen_uniffi.sh"
@@ -73,7 +73,7 @@ cp "$MODULEMAP" "$DEVICE_HEADERS/"
 cp "$HEADER" "$SIM_HEADERS/"
 cp "$MODULEMAP" "$SIM_HEADERS/"
 
-XCFW_PATH="$OUTPUT_DIR/agent_core.xcframework"
+XCFW_PATH="$OUTPUT_DIR/kessel_core.xcframework"
 rm -rf "$XCFW_PATH"
 
 xcodebuild -create-xcframework \

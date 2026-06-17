@@ -1,10 +1,10 @@
-# Using OpenAI API with Voice Agent
+# Using OpenAI API with Kessel
 
 This guide explains how to use OpenAI's cloud API instead of local llama.cpp.
 
 ## Overview
 
-The voice agent supports two LLM backends via Rust feature flags:
+The kessel supports two LLM backends via Rust feature flags:
 - **llamacpp** (default): Local llama.cpp server
 - **openai**: OpenAI cloud API
 
@@ -64,7 +64,7 @@ OPENAI_API_KEY=sk-... make run-text
 
 ```bash
 # Text mode
-OPENAI_API_KEY=sk-... swift run voice-agent --config ../configs/openai.yaml
+OPENAI_API_KEY=sk-... swift run kessel-cli --config ../configs/openai.yaml
 
 # Or use the Makefile target
 OPENAI_API_KEY=sk-... make run-text
@@ -118,7 +118,7 @@ See https://platform.openai.com/docs/models for full list.
 export OPENAI_API_KEY=sk-...
 
 # Run with OpenAI config
-swift run voice-agent --config ../configs/openai.yaml
+swift run kessel-cli --config ../configs/openai.yaml
 
 # Example conversation
 You: What is 2+2?
@@ -139,7 +139,7 @@ agent:
 Then run:
 ```bash
 export OPENAI_API_KEY=sk-...
-swift run voice-agent --config ../configs/openai.yaml
+swift run kessel-cli --config ../configs/openai.yaml
 
 # Now speak naturally
 # Agent will listen -> transcribe -> call OpenAI -> speak response
@@ -190,7 +190,7 @@ OpenAiProvider (llm.rs)
 
 ### Code Flow
 
-**Swift** (`swift/Sources/VoiceAgentCLI/main.swift`):
+**Swift** (`swift/Sources/KesselCli/main.swift`):
 ```swift
 // Check environment variable first
 let apiKey: String? = {
@@ -273,7 +273,7 @@ export OPENAI_API_KEY=sk-...
 3. Rate limit exceeded
 4. Wrong baseURL in config
 
-### "library 'agent_core' not found"
+### "library 'kessel_core' not found"
 
 **Problem**: Swift can't find the Rust library.
 

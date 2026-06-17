@@ -1,4 +1,4 @@
-# Voice Agent
+# Kessel
 
 A voice assistant for macOS that runs locally or with cloud LLMs. Supports continuous voice conversation, tool calling via ReAct loop, and Claude Code activity monitoring.
 
@@ -30,7 +30,7 @@ cd ../swift && swift build
 
 # Run
 export OPENAI_API_KEY=sk-...
-swift run voice-agent --config ../configs/openai.yaml
+swift run kessel-cli --config ../configs/openai.yaml
 ```
 
 ### With local model (Qwen3-8B)
@@ -42,7 +42,7 @@ bash scripts/gen_uniffi.sh
 cd ../swift && swift build
 
 # Run (model auto-downloads on first run)
-swift run voice-agent --config ../configs/qwen3.yaml
+swift run kessel-cli --config ../configs/qwen3.yaml
 ```
 
 ## Configuration
@@ -87,11 +87,11 @@ The watcher monitors Claude Code activity and provides spoken summaries.
 # Install the hook into ~/.claude/settings.json
 bash scripts/install-claude-hook.sh
 
-# Run voice-agent with watcher enabled
-swift run voice-agent --config ../configs/openai.yaml
+# Run kessel-cli with watcher enabled
+swift run kessel-cli --config ../configs/openai.yaml
 ```
 
-When Claude Code edits files, runs tests, or commits code, voice-agent speaks a brief summary.
+When Claude Code edits files, runs tests, or commits code, kessel-cli speaks a brief summary.
 
 ## Skills
 
@@ -144,7 +144,7 @@ cd crates && cargo test
 
 # Regenerate UniFFI bindings (after .udl changes)
 bash scripts/gen_uniffi.sh
-cp vendor/uniffi-swift/agent_core.swift swift/Sources/AgentBridge/
+cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/
 
 # Build Swift
 cd swift && swift build

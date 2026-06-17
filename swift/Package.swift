@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "VoiceAgent",
+    name: "Kessel",
     platforms: [.macOS("26.0")],
     products: [
-        .executable(name: "voice-agent", targets: ["VoiceAgentCLI"]),
+        .executable(name: "kessel-cli", targets: ["KesselCli"]),
     ],
     dependencies: [
         // YAML parsing
@@ -18,7 +18,7 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "VoiceAgentCLI",
+            name: "KesselCli",
             dependencies: [
                 "AgentKit",
                 "Util",
@@ -75,7 +75,7 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "-L../crates/target/release",
-                    "-lagent_core",
+                    "-lkessel_core",
                 ])
             ]
         ),

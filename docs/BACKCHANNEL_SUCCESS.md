@@ -244,7 +244,7 @@ private func quickTranscribe() async throws -> String? {
 
 ### 6. Voice Mode Integration (Swift)
 
-**File**: `swift/Sources/VoiceAgentCLI/main.swift`
+**File**: `swift/Sources/KesselCli/main.swift`
 
 Backchannel integrated into main voice loop:
 

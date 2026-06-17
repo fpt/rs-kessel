@@ -93,7 +93,7 @@ fn fetch_meta(repo: &str, revision: &str, file: &str) -> Result<FileMeta> {
     // Don't follow redirects: the 302 carries X-Repo-Commit / X-Linked-Etag and
     // the CDN Location, which we'd otherwise lose.
     let agent = ureq::AgentBuilder::new().redirects(0).build();
-    let mut req = agent.head(&resolve_url).set("User-Agent", "voice-agent");
+    let mut req = agent.head(&resolve_url).set("User-Agent", "kessel-cli");
     if let Some(token) = hf_token() {
         req = req.set("Authorization", &format!("Bearer {token}"));
     }
@@ -185,7 +185,7 @@ fn download_blob(meta: &FileMeta, blob_path: &Path, display_name: &str) -> Resul
     }
 
     let agent = ureq::agent(); // follows redirects (CDN may redirect again)
-    let mut req = agent.get(&meta.url).set("User-Agent", "voice-agent");
+    let mut req = agent.get(&meta.url).set("User-Agent", "kessel-cli");
     if let Some(token) = hf_token() {
         req = req.set("Authorization", &format!("Bearer {token}"));
     }

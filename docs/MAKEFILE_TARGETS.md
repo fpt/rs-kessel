@@ -2,7 +2,7 @@
 
 ## Overview
 
-The project includes a comprehensive Makefile with targets for building, running, and testing the voice agent with different LLM providers.
+The project includes a comprehensive Makefile with targets for building, running, and testing the kessel with different LLM providers.
 
 ## Available Targets
 
@@ -120,9 +120,9 @@ make gen-uniffi
 - After modifying Rust structs exposed to Swift
 
 **Output:** `vendor/uniffi-swift/`
-- `agent_core.swift` - Swift bindings
-- `agent_coreFFI.h` - C header
-- `agent_core.modulemap` - Module map
+- `kessel_core.swift` - Swift bindings
+- `kessel_coreFFI.h` - C header
+- `kessel_core.modulemap` - Module map
 
 #### `make install-deps`
 Install development dependencies.
@@ -329,17 +329,17 @@ make build-openai && OPENAI_API_KEY=sk-... make run-openai
 
 # Build llamacpp version
 make build
-cp crates/target/release/libagent_core.dylib /tmp/libagent_core_llama.dylib
+cp crates/target/release/libkessel_core.dylib /tmp/libkessel_core_llama.dylib
 
 # Build OpenAI version
 make build-openai
-cp crates/target/release/libagent_core.dylib /tmp/libagent_core_openai.dylib
+cp crates/target/release/libkessel_core.dylib /tmp/libkessel_core_openai.dylib
 
 # Switch versions
-cp /tmp/libagent_core_llama.dylib crates/target/release/libagent_core.dylib
+cp /tmp/libkessel_core_llama.dylib crates/target/release/libkessel_core.dylib
 make run
 
-cp /tmp/libagent_core_openai.dylib crates/target/release/libagent_core.dylib
+cp /tmp/libkessel_core_openai.dylib crates/target/release/libkessel_core.dylib
 OPENAI_API_KEY=sk-... make run-openai
 ```
 
@@ -358,7 +358,7 @@ make -n run
 
 ## Troubleshooting
 
-### "library 'agent_core' not found"
+### "library 'kessel_core' not found"
 
 **Solution:** Run `make build` or `make build-openai`
 

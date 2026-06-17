@@ -1,8 +1,8 @@
 using YamlDotNet.Serialization;
 
-namespace VoiceAgentCLI;
+namespace KesselCli;
 
-/// Mirror of the voice-agent YAML config (configs/*.yaml). Only the fields the
+/// Mirror of the kessel-cli YAML config (configs/*.yaml). Only the fields the
 /// Windows CLI needs are mapped; unknown keys are ignored.
 public sealed class AppConfig
 {
@@ -88,7 +88,7 @@ public sealed class AppConfig
         var candidates = new[]
         {
             explicitPath,
-            Environment.GetEnvironmentVariable("VOICE_AGENT_CONFIG"),
+            Environment.GetEnvironmentVariable("KESSEL_CONFIG"),
             Path.Combine(Directory.GetCurrentDirectory(), "configs", "default.yaml"),
             FindInAncestors(AppContext.BaseDirectory, Path.Combine("configs", "default.yaml")),
         };

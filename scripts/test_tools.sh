@@ -25,10 +25,10 @@ FAIL=0
 SKIP=0
 
 # Build the text agent
-echo "Building voice-agent..."
+echo "Building kessel-cli..."
 cd "$CRATES_DIR"
-cargo build -p app --release 2>/dev/null
-TEXT_AGENT="$CRATES_DIR/target/release/voice-agent"
+cargo build -p kessel-cli --release 2>/dev/null
+TEXT_AGENT="$CRATES_DIR/target/release/kessel-cli"
 
 # Set working dir to project root for tool operations
 export WORKING_DIR="$PROJECT_DIR"

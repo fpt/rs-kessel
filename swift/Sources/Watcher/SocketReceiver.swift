@@ -39,10 +39,10 @@ public class SocketReceiver {
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var clientBuffers: [Int32: Data] = [:]
     private var continuation: AsyncStream<HookEvent>.Continuation?
-    private let queue = DispatchQueue(label: "voice-agent.socket-receiver", qos: .utility)
+    private let queue = DispatchQueue(label: "kessel-cli.socket-receiver", qos: .utility)
 
     public init(socketPath: String? = nil) {
-        self.socketPath = socketPath ?? "/tmp/voice-agent-\(getuid()).sock"
+        self.socketPath = socketPath ?? "/tmp/kessel-cli-\(getuid()).sock"
     }
 
     /// The path the socket is listening on

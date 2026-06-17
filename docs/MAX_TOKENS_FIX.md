@@ -75,7 +75,7 @@ llama-server -m model.gguf -c 16384  # Increase context window
 Test with a complex question that requires analysis:
 
 ```bash
-swift run voice-agent --config ../configs/default.yaml
+swift run kessel-cli --config ../configs/default.yaml
 
 You: Explain the differences between various sorting algorithms and when to use each one.
 

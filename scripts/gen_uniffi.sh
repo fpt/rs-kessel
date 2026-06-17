@@ -10,7 +10,7 @@ cargo build --release
 echo "🔧 Generating UniFFI Swift bindings..."
 cd lib
 
-LIBRARY_PATH="../target/release/libagent_core.dylib"
+LIBRARY_PATH="../target/release/libkessel_core.dylib"
 OUT_DIR="../../vendor/uniffi-swift"
 
 mkdir -p $OUT_DIR
@@ -32,6 +32,6 @@ ls -lh ../../vendor/uniffi-swift/
 echo ""
 echo "📝 Next steps:"
 echo "  1. Review generated files in vendor/uniffi-swift/"
-echo "  2. Copy agent_core.swift to swift/Sources/AgentBridge/"
+echo "  2. Copy kessel_core.swift to swift/Sources/AgentBridge/"
 echo "  3. Update Package.swift to link the dylib"
 echo "  4. Remove the mock implementation from AgentFFI.swift"

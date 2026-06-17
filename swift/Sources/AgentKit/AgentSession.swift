@@ -214,7 +214,7 @@ public class AgentSession: @unchecked Sendable {
         }
 
         // Socket receiver
-        let sockPath = wc.socketPath ?? "/tmp/voice-agent-\(getuid()).sock"
+        let sockPath = wc.socketPath ?? "/tmp/kessel-cli-\(getuid()).sock"
         let receiver = SocketReceiver(socketPath: sockPath)
         socketReceiver = receiver
         do {

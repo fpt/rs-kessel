@@ -4,12 +4,12 @@
     <OutputType>Exe</OutputType>
     <!-- net8.0-windows so we can use System.Speech (Windows-only) for /listen. -->
     <TargetFramework>net8.0-windows</TargetFramework>
-    <RootNamespace>VoiceAgentCLI</RootNamespace>
-    <AssemblyName>voice-agent</AssemblyName>
+    <RootNamespace>KesselCli</RootNamespace>
+    <AssemblyName>kessel-cli</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- The uniffi P/Invoke targets the native x64 agent_core.dll. -->
+    <!-- The uniffi P/Invoke targets the native x64 kessel_core.dll. -->
     <PlatformTarget>x64</PlatformTarget>
     <!-- Full globalization (ICU) is required: CultureInfo("en-US") for picking
          the speech recognizer/voice fails under invariant mode. -->
@@ -28,11 +28,11 @@
   </ItemGroup>
 
   <!-- Copy the Rust cdylib next to the exe.
-       The uniffi-generated P/Invoke uses DllImport("uniffi_agent_core"), so we
-       copy agent_core.dll under that name rather than renaming the Rust crate. -->
-  <Target Name="CopyAgentCoreDll" AfterTargets="Build">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\crates\target\release\agent_core.dll"
-          DestinationFiles="$(OutputPath)uniffi_agent_core.dll"
+       The uniffi-generated P/Invoke uses DllImport("uniffi_kessel_core"), so we
+       copy kessel_core.dll under that name rather than renaming the Rust crate. -->
+  <Target Name="CopyKesselCoreDll" AfterTargets="Build">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\crates\target\release\kessel_core.dll"
+          DestinationFiles="$(OutputPath)uniffi_kessel_core.dll"
           SkipUnchangedFiles="true"
           ContinueOnError="true" />
   </Target>

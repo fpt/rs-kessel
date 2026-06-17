@@ -1,4 +1,4 @@
-# Voice Agent - Developer Guide
+# Kessel - Developer Guide
 
 ## Overview
 
@@ -41,7 +41,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 
 | Package | Purpose |
 |---------|---------|
-| `VoiceAgentCLI` | Main entry point, text/voice mode, watcher integration |
+| `KesselCli` | Main entry point, text/voice mode, watcher integration |
 | `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
 | `TTS` | AVSpeechSynthesizer wrapper |
 | `Watcher` | SessionJSONLWatcher, SocketReceiver, EventPipeline |
@@ -58,7 +58,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 - Local LLM tool calling: `apply_chat_template_oaicompat()` -> grammar-constrained generation -> `parse_response_oaicompat()`
 - `ToolAccess` trait abstracts `ToolRegistry` and `FilteredToolRegistry` for restricted tool access
 - Built-in tools (`create_default_registry`): `read`, `glob`, `grep`, `write`, `edit`, `bash`, `tasks`, `lookup_skill`, `read_situation_messages` (+ `capture_screen`/`find_window`/`apply_ocr` from `lib.rs`, + MCP tools)
-- **Mutation safety** (`ToolSession`, shared per-agent): `edit` and overwriting `write` require the file to have been `read` first (read-first, like klein-cli). `write`/`edit` and non-whitelisted `bash` commands prompt on the terminal (`1` yes / `2` yes-to-all (remembered for the session) / `3` no). `bash` runs a default allowlist (make, go, gcc, uv, cargo, ls, ps, cd, pwd, grep, …; extend via `VOICE_AGENT_BASH_ALLOW`) without prompting. Non-interactive contexts (no TTY) deny mutations unless `VOICE_AGENT_AUTO_APPROVE=1`.
+- **Mutation safety** (`ToolSession`, shared per-agent): `edit` and overwriting `write` require the file to have been `read` first (read-first, like klein-cli). `write`/`edit` and non-whitelisted `bash` commands prompt on the terminal (`1` yes / `2` yes-to-all (remembered for the session) / `3` no). `bash` runs a default allowlist (make, go, gcc, uv, cargo, ls, ps, cd, pwd, grep, …; extend via `KESSEL_BASH_ALLOW`) without prompting. Non-interactive contexts (no TTY) deny mutations unless `KESSEL_AUTO_APPROVE=1`.
 - Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback
 
 ## Configuration
@@ -134,28 +134,28 @@ cd crates && cargo test
 
 # UniFFI (after .udl changes)
 bash scripts/gen_uniffi.sh
-cp vendor/uniffi-swift/agent_core.swift swift/Sources/AgentBridge/
+cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/
 
 # Swift
 cd swift && swift build
 
 # Run
-cd swift && swift run voice-agent --config ../configs/openai.yaml
-cd swift && swift run voice-agent --config ../configs/qwen3.yaml
+cd swift && swift run kessel-cli --config ../configs/openai.yaml
+cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 # Local model standalone (Rust only, no Swift)
-MODEL_PATH=../models/Qwen3-8B-Q4_K_M.gguf cargo run -p app
+MODEL_PATH=../models/Qwen3-8B-Q4_K_M.gguf cargo run -p kessel-cli
 ```
 
 ## Windows CLI (`win/`)
 
-A C# console frontend (text REPL) that consumes the same Rust `agent_core`
+A C# console frontend (text REPL) that consumes the same Rust `kessel_core`
 library through **UniFFI C# bindings** — the Windows analogue of the Swift CLI.
 Mirrors the `../rs-gallium` approach (cdylib + `uniffi-bindgen-cs` + .NET).
 
 ```bash
 # 1a. Cloud-only cdylib (no llama.cpp; uses whatever cargo is on PATH):
-cd crates && cargo build --release --no-default-features   # -> crates/target/release/agent_core.dll
+cd crates && cargo build --release --no-default-features   # -> crates/target/release/kessel_core.dll
 
 # 1b. With in-process llama.cpp (local GGUF models): use the helper script.
 #     It enters the MSVC dev env (vcvars64), forces cmake's Ninja generator, and
@@ -173,31 +173,31 @@ scripts/build-win-cuda.bat   # CUDA build; pins a Pascal-capable toolkit + sm_61
 #     CUDA_ARCH=61 (GTX 1060); override for other GPUs, e.g.:
 #       set CUDA_VER=v12.9 & set CUDA_ARCH=86 & scripts\build-win-cuda.bat
 #     The provider offloads all layers by default; cap it for small VRAM via
-#     VOICE_AGENT_GPU_LAYERS=N (e.g. 20 on a 6 GB card with a big model).
+#     KESSEL_GPU_LAYERS=N (e.g. 20 on a 6 GB card with a big model).
 
 # 2. Generate C# bindings into win/vendor/ (install once:
 #    cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3)
 bash scripts/gen_uniffi_cs.sh
 
-# 3. Build & run the CLI (net8.0, x64). The build copies agent_core.dll next to
-#    the exe as uniffi_agent_core.dll (the DllImport name the bindings expect).
-dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release
-win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe --config configs/default.yaml
+# 3. Build & run the CLI (net8.0, x64). The build copies kessel_core.dll next to
+#    the exe as uniffi_kessel_core.dll (the DllImport name the bindings expect).
+dotnet build win/KesselCli/KesselCli.csproj -c Release
+win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe --config configs/default.yaml
 ```
 
-- `win/VoiceAgentCLI/Program.cs` — REPL with two modes toggled by **Shift+Tab** (like Claude Code's plan/auto cycle): `text` (type → printed reply) ⇄ `listen` (speak → reply printed **and** spoken). Interactive terminals use a key-level loop (`ReadLineOrToggle`/`TogglePressed`); piped stdin (the testsuite) uses a plain line loop with no mode switching. Commands: `/listen` (one-shot), `/reset`, `/history`, `/help`, `/quit`.
-- `win/VoiceAgentCLI/SpeechInput.cs` — STT via `System.Speech` (Windows desktop recognizer). `RecognizeOnce()` for the `/listen` command; `Listen(toggleRequested)` for continuous listen mode (async recognition + key polling so Shift+Tab stays responsive; mic released during TTS = half-duplex). Requires `net8.0-windows`.
-- `win/VoiceAgentCLI/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`; strips `<think>` blocks and markdown before speaking.
-- `win/VoiceAgentCLI/AppConfig.cs` — YAML loader (YamlDotNet) for the same `configs/*.yaml` schema; API key falls back to `OPENAI_API_KEY`
-- `win/vendor/agent_core.cs` — generated bindings (gitignored; namespace `uniffi.agent_core`, `DllImport("uniffi_agent_core")`)
+- `win/KesselCli/Program.cs` — REPL with two modes toggled by **Shift+Tab** (like Claude Code's plan/auto cycle): `text` (type → printed reply) ⇄ `listen` (speak → reply printed **and** spoken). Interactive terminals use a key-level loop (`ReadLineOrToggle`/`TogglePressed`); piped stdin (the testsuite) uses a plain line loop with no mode switching. Commands: `/listen` (one-shot), `/reset`, `/history`, `/help`, `/quit`.
+- `win/KesselCli/SpeechInput.cs` — STT via `System.Speech` (Windows desktop recognizer). `RecognizeOnce()` for the `/listen` command; `Listen(toggleRequested)` for continuous listen mode (async recognition + key polling so Shift+Tab stays responsive; mic released during TTS = half-duplex). Requires `net8.0-windows`.
+- `win/KesselCli/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`; strips `<think>` blocks and markdown before speaking.
+- `win/KesselCli/AppConfig.cs` — YAML loader (YamlDotNet) for the same `configs/*.yaml` schema; API key falls back to `OPENAI_API_KEY`
+- `win/vendor/kessel_core.cs` — generated bindings (gitignored; namespace `uniffi.kessel_core`, `DllImport("uniffi_kessel_core")`)
 - No watcher integration yet.
 
 ## Claude Code Watcher
 
 Monitors Claude Code via hooks (PostToolUse, Stop events) sent over a Unix domain socket.
 
-- **Hook script**: `scripts/voice-agent-hook.sh` forwards stdin JSON to `/tmp/voice-agent-<uid>.sock`
-- **Install**: `bash scripts/install-voice-agent-hook.sh` copies hook and updates `~/.claude/settings.json`
+- **Hook script**: `scripts/kessel-cli-hook.sh` forwards stdin JSON to `/tmp/kessel-cli-<uid>.sock`
+- **Install**: `bash scripts/install-kessel-cli-hook.sh` copies hook and updates `~/.claude/settings.json`
 - **SocketReceiver** (`swift/Sources/Watcher/`): listens on the socket, parses ndjson
 - **EventPipeline**: debounces events, summarizes via `EventSummarizer`, calls `agent.chatOnce()` with the `claude-activity-report` skill
 - **SessionJSONLWatcher**: also watches Claude Code's session JSONL file for events
@@ -205,7 +205,7 @@ Monitors Claude Code via hooks (PostToolUse, Stop events) sent over a Unix domai
 ## Project Structure
 
 ```
-voice-agent/
+kessel-cli/
 ├── configs/                    # YAML configurations
 │   ├── default.yaml            # Default (OpenAI, English)
 │   ├── openai.yaml             # OpenAI with watcher
@@ -215,11 +215,11 @@ voice-agent/
 ├── skills/                     # Project-local skills
 │   └── claude-activity-report/SKILL.md
 ├── crates/                     # Rust workspace
-│   ├── lib/src/                # Agent core library (agent_core)
+│   ├── lib/src/                # Agent core library (kessel_core)
 │   └── app/src/                # Standalone Rust CLI
 ├── swift/                      # Swift package
 │   └── Sources/
-│       ├── VoiceAgentCLI/      # Main entry point
+│       ├── KesselCli/      # Main entry point
 │       ├── Audio/              # SpeechTranscriber, AudioCapture
 │       ├── TTS/                # AVSpeechSynthesizer
 │       ├── Watcher/            # Claude Code monitoring
@@ -228,8 +228,8 @@ voice-agent/
 │       └── AgentBridgeFFI/     # C module map
 ├── scripts/
 │   ├── gen_uniffi.sh           # Generate UniFFI bindings
-│   ├── install-voice-agent-hook.sh  # Install Claude Code hook
-│   ├── voice-agent-hook.sh          # Hook script (stdin -> socket)
+│   ├── install-kessel-cli-hook.sh  # Install Claude Code hook
+│   ├── kessel-cli-hook.sh          # Hook script (stdin -> socket)
 │   └── ...
 ├── vendor/uniffi-swift/        # Generated UniFFI outputs
 └── models/                     # GGUF models (gitignored)
@@ -237,10 +237,10 @@ voice-agent/
 
 ## Troubleshooting
 
-**"library 'agent_core' not found"**: `cd crates && cargo build --release`
+**"library 'kessel_core' not found"**: `cd crates && cargo build --release`
 
-**"no such module 'agent_coreFFI'"**: `bash scripts/gen_uniffi.sh`
+**"no such module 'kessel_coreFFI'"**: `bash scripts/gen_uniffi.sh`
 
-**UniFFI checksum mismatch**: Regenerate bindings and copy: `bash scripts/gen_uniffi.sh && cp vendor/uniffi-swift/agent_core.swift swift/Sources/AgentBridge/`
+**UniFFI checksum mismatch**: Regenerate bindings and copy: `bash scripts/gen_uniffi.sh && cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/`
 
 **Local model OOM**: Use a smaller quantization or model. Qwen3-8B Q4_K_M (5GB) works on M3 16GB.

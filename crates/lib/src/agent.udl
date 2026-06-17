@@ -1,4 +1,4 @@
-namespace agent_core {
+namespace kessel_core {
     [Throws=AgentError]
     Agent agent_new(AgentConfig config);
 };

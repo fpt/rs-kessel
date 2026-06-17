@@ -1,5 +1,5 @@
-using uniffi.agent_core;
-using VoiceAgentCLI;
+using uniffi.kessel_core;
+using KesselCli;
 
 // Render Unicode (Japanese, emoji, …) instead of '?'. The default console code
 // page can't represent non-ASCII; UTF-8 (no BOM) fixes both input and output.
@@ -54,7 +54,7 @@ var agentConfig = new AgentConfig(
 Agent agent;
 try
 {
-    agent = AgentCoreMethods.AgentNew(agentConfig);
+    agent = KesselCoreMethods.AgentNew(agentConfig);
 }
 catch (Exception ex)
 {
@@ -95,7 +95,7 @@ var (modelLine, endpointLine) = string.IsNullOrEmpty(cfg.Llm.ModelPath)
 Console.WriteLine($"""
 
 ===========================================
-  Voice Agent - Windows CLI
+  Kessel - Windows CLI
 ===========================================
 
 {modelLine}
@@ -296,9 +296,9 @@ CommandResult HandleCommand(string input, bool speak)
 static void PrintHelp()
 {
     Console.WriteLine("""
-    Voice Agent - Windows CLI
+    Kessel - Windows CLI
 
-    Usage: voice-agent [OPTIONS]
+    Usage: kessel-cli [OPTIONS]
 
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)

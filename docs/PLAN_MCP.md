@@ -2,7 +2,7 @@
 
 ## Context
 
-The voice agent needs to connect to external MCP (Model Context Protocol) servers to extend its tool capabilities. The user has `godevmcp serve` — an MCP server providing dev tools (code search, file reading, Go/Rust/Python docs, etc.). Swift will call `add_mcp_server(name, command, args)` on the Rust agent via FFI. Rust spawns the MCP server as a child process, connects via stdio JSON-RPC, lists its tools, and makes them available in the ReAct loop.
+The kessel needs to connect to external MCP (Model Context Protocol) servers to extend its tool capabilities. The user has `godevmcp serve` — an MCP server providing dev tools (code search, file reading, Go/Rust/Python docs, etc.). Swift will call `add_mcp_server(name, command, args)` on the Rust agent via FFI. Rust spawns the MCP server as a child process, connects via stdio JSON-RPC, lists its tools, and makes them available in the ReAct loop.
 
 ## Design
 
@@ -106,10 +106,10 @@ No functional change needed — `create_default_registry()` signature unchanged,
 
 ```bash
 bash scripts/gen_uniffi.sh
-cp vendor/uniffi-swift/agent_core.swift swift/Sources/AgentBridge/
+cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/
 ```
 
-### 9. `swift/Sources/VoiceAgentCLI/main.swift` — Add MCP server
+### 9. `swift/Sources/KesselCli/main.swift` — Add MCP server
 
 After agent init, before the mode selection:
 ```swift

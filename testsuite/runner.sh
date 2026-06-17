@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Single test runner for the voice-agent Windows CLI.
-# Usage: CLI=path/to/voice-agent.exe ./testsuite/runner.sh <testcase> <backend>
+# Single test runner for the kessel-cli Windows CLI.
+# Usage: CLI=path/to/kessel-cli.exe ./testsuite/runner.sh <testcase> <backend>
 # Example: ./testsuite/runner.sh capital gemma4
 #
-# Unlike klein, the voice-agent CLI takes a YAML --config and reads prompts from
+# Unlike klein, the kessel-cli CLI takes a YAML --config and reads prompts from
 # stdin (a REPL, one line per turn). Each non-empty line of prompt.txt becomes a
 # user turn; "/quit" is appended to end the session. The test runs with its cwd
 # set to an isolated temp dir so the read/glob tools see only the testcase files.
@@ -19,14 +19,14 @@ proj_root="$(cd "$script_dir/.." && pwd)"
 
 # Default to the Release build of the Windows CLI if CLI is unset.
 if [ -z "$CLI" ]; then
-    CLI="$proj_root/win/VoiceAgentCLI/bin/Release/net8.0-windows/voice-agent.exe"
+    CLI="$proj_root/win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe"
 fi
 # Resolve to an absolute path (we cd into a temp dir before running).
 CLI="$(cd "$(dirname "$CLI")" && pwd)/$(basename "$CLI")"
 
 if [ ! -f "$CLI" ]; then
     echo -e "${RED}Error: CLI binary '$CLI' not found${NC}"
-    echo "Build it: dotnet build win/VoiceAgentCLI/VoiceAgentCLI.csproj -c Release"
+    echo "Build it: dotnet build win/KesselCli/KesselCli.csproj -c Release"
     exit 1
 fi
 
@@ -46,7 +46,7 @@ if [ $# -eq 0 ]; then
         echo "  • $(basename "$f" .yaml)"
     done
     echo ""
-    echo "Usage: CLI=path/to/voice-agent.exe ./runner.sh <testcase> <backend>"
+    echo "Usage: CLI=path/to/kessel-cli.exe ./runner.sh <testcase> <backend>"
     exit 0
 fi
 

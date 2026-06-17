@@ -1,4 +1,4 @@
-module agent_coreFFI {
-    header "agent_coreFFI.h"
+module kessel_coreFFI {
+    header "kessel_coreFFI.h"
     export *
 }

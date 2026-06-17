@@ -1,5 +1,5 @@
 [package]
-name = "lib"
+name = "kessel-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ authors.workspace = true
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
-name = "agent_core"
+name = "kessel_core"
 
 [features]
 default = ["local"]

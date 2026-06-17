@@ -1,10 +1,10 @@
 @echo off
-REM Build the Rust agent_core cdylib with the `local` (in-process llama.cpp)
+REM Build the Rust kessel_core cdylib with the `local` (in-process llama.cpp)
 REM feature on Windows. Must run inside the MSVC environment so cmake/cc use
 REM cl.exe + the Windows SDK instead of LLVM clang.
 REM
 REM Usage:  scripts\build-win-local.bat
-REM Output: crates\target\release\agent_core.dll
+REM Output: crates\target\release\kessel_core.dll
 
 setlocal
 
@@ -33,5 +33,5 @@ REM x86_64-pc-windows-msvc), plus VS's bundled ninja.
 set "PATH=%USERPROFILE%\.cargo\bin;%VSINSTALL%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
 
 cd /d "%~dp0..\crates" || exit /b 1
-cargo build --release -p lib --features local
+cargo build --release -p kessel-core --features local
 exit /b %ERRORLEVEL%

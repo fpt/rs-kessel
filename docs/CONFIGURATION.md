@@ -1,13 +1,13 @@
 # Configuration Guide
 
-This guide explains all configuration options for the Voice Agent.
+This guide explains all configuration options for the Kessel.
 
 ## Configuration File
 
 The main configuration file is `configs/default.yaml`. You can create custom configs and load them with:
 
 ```bash
-swift run voice-agent --config path/to/config.yaml
+swift run kessel-cli --config path/to/config.yaml
 ```
 
 ## LLM Configuration

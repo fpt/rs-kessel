@@ -37,7 +37,7 @@ impl HarmonyTemplate {
         ChatMessage::system(content)
     }
 
-    /// Default system prompt for the voice agent
+    /// Default system prompt for the kessel
     pub fn default_system_prompt() -> String {
         "You are a helpful voice assistant running locally in a car. \
          Be concise and natural in your responses, as they will be spoken aloud. \
