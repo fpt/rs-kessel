@@ -1,9 +1,16 @@
 //! In-process llama.cpp provider via FFI (llama-cpp-2 crate).
 //!
 //! Loads a GGUF model directly — no server needed.
+//!
+//! Tool calling: llama-cpp-2 0.1.150 removed the OAI-compat chat layer
+//! (`apply_chat_template_oaicompat` / `ChatTemplateResult` / `parse_response_oaicompat`),
+//! so we implement tool calling ourselves: the available tools are injected into
+//! the system prompt with a JSON output protocol, and the model's reply is parsed
+//! leniently for a tool-call object. The model's own jinja chat template (from the
+//! GGUF) is still used to format the conversation via `apply_chat_template`, which
+//! only accepts role+content messages.
 
 use anyhow::Result;
-use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::path::Path;
 
@@ -11,18 +18,21 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{
-    AddBos, ChatTemplateResult, GrammarTriggerType, LlamaChatTemplate, LlamaModel,
-};
-use llama_cpp_2::openai::OpenAIChatTemplateParams;
+use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use serde_json::Value;
 
 use crate::llm::{ChatMessage, ChatRole, LlmProvider, LlmResponse, TokenUsage, ToolCallInfo, ToolDefinition};
 
 pub struct LlamaLocalProvider {
     backend: LlamaBackend,
     model: LlamaModel,
-    template: LlamaChatTemplate,
+    /// The model's embedded jinja chat template (rendered via minijinja). None if
+    /// the GGUF has no template — then we fall back to a manual ChatML format.
+    template_src: Option<String>,
+    /// Literal BOS/EOS token text (e.g. "<bos>", "<eos>"), fed to the template.
+    bos: String,
+    eos: String,
     temperature: f32,
     max_tokens: u32,
     n_ctx: u32,
@@ -85,80 +95,198 @@ impl LlamaLocalProvider {
         tracing::info!("  Model loaded: {} params", model.n_params());
         tracing::info!("  Context train: {}", model.n_ctx_train());
 
-        let template = model
-            .chat_template(None)
-            .unwrap_or_else(|_| {
-                tracing::warn!("No chat template in model, using chatml fallback");
-                LlamaChatTemplate::new("chatml").expect("chatml is a valid template")
-            });
+        let template_src = match model.chat_template(None).and_then(|t| Ok(t.to_string()?)) {
+            Ok(src) => Some(strip_unsupported_jinja(&src)),
+            Err(_) => {
+                tracing::warn!("No chat template in model, using ChatML fallback");
+                None
+            }
+        };
+
+        // Literal BOS/EOS strings (e.g. "<bos>"/"<eos>") so the jinja template's
+        // `{{ bos_token }}`/`{{ eos_token }}` render to real special tokens.
+        let mut dec = encoding_rs::UTF_8.new_decoder();
+        let bos = model
+            .token_to_piece(model.token_bos(), &mut dec, true, None)
+            .unwrap_or_default();
+        let mut dec = encoding_rs::UTF_8.new_decoder();
+        let eos = model
+            .token_to_piece(model.token_eos(), &mut dec, true, None)
+            .unwrap_or_default();
 
         Ok(Self {
             backend,
             model,
-            template,
+            template_src,
+            bos,
+            eos,
             temperature,
             max_tokens,
             n_ctx,
         })
     }
 
-    /// Serialize ChatMessages to OpenAI-compatible JSON array string.
-    fn messages_to_json(messages: &[ChatMessage]) -> String {
-        let json_messages: Vec<serde_json::Value> = messages
-            .iter()
-            .flat_map(|msg| {
-                let role = match msg.role {
-                    ChatRole::System => "system",
-                    ChatRole::User => "user",
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::Tool => "tool",
-                };
+    /// Render the conversation through the model's chat template, injecting tool
+    /// definitions into the system message when tools are available.
+    fn build_prompt(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[ToolDefinition]>,
+    ) -> Result<String> {
+        // (role, content) pairs using only system/user/assistant roles, which
+        // every chat template supports (a "tool" role is not universal).
+        let mut pairs: Vec<(&'static str, String)> =
+            messages.iter().map(Self::render_message).collect();
 
-                // Assistant with tool calls
-                if let Some(ref calls) = msg.tool_calls {
-                    let tool_calls: Vec<serde_json::Value> = calls
-                        .iter()
-                        .map(|c| {
-                            serde_json::json!({
-                                "id": c.id,
-                                "type": "function",
-                                "function": {
-                                    "name": c.name,
-                                    "arguments": serde_json::to_string(&c.arguments).unwrap_or_default()
-                                }
-                            })
-                        })
-                        .collect();
-                    return vec![serde_json::json!({
-                        "role": role,
-                        "content": if msg.content.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(msg.content.clone()) },
-                        "tool_calls": tool_calls
-                    })];
-                }
+        if let Some(tools) = tools {
+            let instr = Self::tool_instructions(tools);
+            if let Some(sys) = pairs.iter_mut().find(|(role, _)| *role == "system") {
+                sys.1 = format!("{}\n\n{}", sys.1, instr);
+            } else {
+                pairs.insert(0, ("system", instr));
+            }
+        }
 
-                // Tool result
-                if let Some(ref call_id) = msg.tool_call_id {
-                    return vec![serde_json::json!({
-                        "role": "tool",
-                        "content": msg.content,
-                        "tool_call_id": call_id
-                    })];
-                }
+        // No embedded template: go straight to the manual ChatML fallback.
+        if self.template_src.is_none() {
+            return Ok(self.chatml_fallback(&Self::fold_system(pairs)));
+        }
 
-                // Regular message
-                vec![serde_json::json!({
-                    "role": role,
-                    "content": msg.content
-                })]
-            })
-            .collect();
-
-        serde_json::to_string(&json_messages).unwrap_or_else(|_| "[]".to_string())
+        // Render the model's own jinja template. If it rejects the system role
+        // (e.g. gemma calls raise_exception), fold system into the first user
+        // turn and retry; if it still fails, fall back to manual ChatML.
+        match self.render_template(&pairs) {
+            Ok(prompt) => return Ok(prompt),
+            Err(e) => tracing::debug!("template render failed ({e}); folding system and retrying"),
+        }
+        let folded = Self::fold_system(pairs);
+        match self.render_template(&folded) {
+            Ok(prompt) => Ok(prompt),
+            Err(e) => {
+                tracing::warn!("template render failed after system-fold ({e}); using ChatML fallback");
+                Ok(self.chatml_fallback(&folded))
+            }
+        }
     }
 
-    /// Serialize ToolDefinitions to OpenAI-compatible tools JSON array string.
+    /// Render the model's embedded jinja chat template with minijinja.
+    fn render_template(
+        &self,
+        pairs: &[(&'static str, String)],
+    ) -> std::result::Result<String, minijinja::Error> {
+        let src = self.template_src.as_deref().ok_or_else(|| {
+            minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, "no chat template")
+        })?;
+
+        let mut env = minijinja::Environment::new();
+        // Support Python-ish str methods (.strip/.startswith/...) some templates use.
+        env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+        // Templates call raise_exception(...) to reject unsupported inputs.
+        env.add_function(
+            "raise_exception",
+            |msg: String| -> std::result::Result<minijinja::Value, minijinja::Error> {
+                Err(minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, msg))
+            },
+        );
+        // Some newer templates call strftime_now(fmt); a stub is sufficient here.
+        env.add_function(
+            "strftime_now",
+            |_fmt: String| -> std::result::Result<String, minijinja::Error> { Ok(String::new()) },
+        );
+        env.add_template_owned("chat", src.to_string())?;
+
+        let messages: Vec<Value> = pairs
+            .iter()
+            .map(|(role, content)| serde_json::json!({"role": role, "content": content}))
+            .collect();
+
+        let tmpl = env.get_template("chat")?;
+        tmpl.render(minijinja::context! {
+            messages => messages,
+            add_generation_prompt => true,
+            bos_token => self.bos,
+            eos_token => self.eos,
+        })
+    }
+
+    /// Last-resort manual ChatML layout when the embedded template is missing or
+    /// won't render.
+    fn chatml_fallback(&self, pairs: &[(&'static str, String)]) -> String {
+        let mut out = String::new();
+        out.push_str(&self.bos);
+        for (role, content) in pairs {
+            out.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
+        }
+        out.push_str("<|im_start|>assistant\n");
+        out
+    }
+
+    /// Fold all system messages into the first user turn, for templates that
+    /// don't support a system role (e.g. gemma).
+    fn fold_system(pairs: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
+        let mut system = String::new();
+        let mut rest: Vec<(&'static str, String)> = Vec::new();
+        for (role, content) in pairs {
+            if role == "system" {
+                if !system.is_empty() {
+                    system.push_str("\n\n");
+                }
+                system.push_str(&content);
+            } else {
+                rest.push((role, content));
+            }
+        }
+        if system.is_empty() {
+            return rest;
+        }
+        if let Some(first_user) = rest.iter_mut().find(|(role, _)| *role == "user") {
+            first_user.1 = format!("{}\n\n{}", system, first_user.1);
+        } else {
+            rest.insert(0, ("user", system));
+        }
+        rest
+    }
+
+    /// Map a ChatMessage to a (role, content) pair. Assistant tool calls and tool
+    /// results are folded into text so the model sees prior turns in the same
+    /// protocol format we ask it to emit.
+    fn render_message(msg: &ChatMessage) -> (&'static str, String) {
+        match msg.role {
+            ChatRole::System => ("system", msg.content.clone()),
+            ChatRole::User => ("user", msg.content.clone()),
+            ChatRole::Assistant => {
+                if let Some(ref calls) = msg.tool_calls {
+                    let json = Self::serialize_tool_calls(calls);
+                    let content = if msg.content.is_empty() {
+                        json
+                    } else {
+                        format!("{}\n{}", msg.content, json)
+                    };
+                    ("assistant", content)
+                } else {
+                    ("assistant", msg.content.clone())
+                }
+            }
+            ChatRole::Tool => ("user", format!("Tool result: {}", msg.content)),
+        }
+    }
+
+    /// The tool-use instruction block appended to the system prompt.
+    fn tool_instructions(tools: &[ToolDefinition]) -> String {
+        let list = Self::tools_to_json(tools);
+        format!(
+            "You have access to the following tools (described as JSON Schema):\n\
+             {list}\n\n\
+             To call a tool, respond with ONLY a single JSON object and nothing else:\n\
+             {{\"name\": \"<tool_name>\", \"arguments\": {{ ...json args... }}}}\n\
+             To call several tools at once, respond with a JSON array of such objects.\n\
+             If no tool is needed, reply normally in plain text (do not output JSON)."
+        )
+    }
+
+    /// Serialize ToolDefinitions to an OpenAI-style tools JSON array string.
     fn tools_to_json(tools: &[ToolDefinition]) -> String {
-        let json_tools: Vec<serde_json::Value> = tools
+        let json_tools: Vec<Value> = tools
             .iter()
             .map(|t| {
                 serde_json::json!({
@@ -175,43 +303,32 @@ impl LlamaLocalProvider {
         serde_json::to_string(&json_tools).unwrap_or_else(|_| "[]".to_string())
     }
 
-    /// Apply chat template with optional tools, returning ChatTemplateResult.
-    fn apply_template(
-        &self,
-        messages: &[ChatMessage],
-        tools: Option<&[ToolDefinition]>,
-    ) -> Result<ChatTemplateResult> {
-        let messages_json = Self::messages_to_json(messages);
-        let tools_json = tools.map(Self::tools_to_json);
-
-        let params = OpenAIChatTemplateParams {
-            messages_json: &messages_json,
-            tools_json: tools_json.as_deref(),
-            tool_choice: None,
-            json_schema: None,
-            grammar: None,
-            reasoning_format: None,
-            chat_template_kwargs: None,
-            add_generation_prompt: true,
-            use_jinja: true,
-            parallel_tool_calls: false,
-            enable_thinking: false,
-            add_bos: true,
-            add_eos: false,
-            parse_tool_calls: tools.is_some(),
-        };
-
-        self.model
-            .apply_chat_template_oaicompat(&self.template, &params)
-            .map_err(|e| anyhow::anyhow!("Failed to apply chat template: {}", e))
+    /// Serialize prior assistant tool calls into the protocol JSON.
+    fn serialize_tool_calls(calls: &[ToolCallInfo]) -> String {
+        let arr: Vec<Value> = calls
+            .iter()
+            .map(|c| serde_json::json!({"name": c.name, "arguments": c.arguments}))
+            .collect();
+        if arr.len() == 1 {
+            arr[0].to_string()
+        } else {
+            Value::Array(arr).to_string()
+        }
     }
 
-    /// Core generation loop. Tokenize, decode, sample until done.
+    /// Core generation loop. Tokenize, decode, sample until EOG or max tokens.
     /// Returns (generated_text, token_usage).
-    fn generate(&self, template_result: &ChatTemplateResult) -> Result<(String, TokenUsage)> {
+    fn generate(&self, prompt: &str) -> Result<(String, TokenUsage)> {
+        // The template usually emits {{ bos_token }} already; only add a BOS at
+        // tokenization time if the prompt doesn't already start with it.
+        let add_bos = if !self.bos.is_empty() && prompt.starts_with(self.bos.as_str()) {
+            AddBos::Never
+        } else {
+            AddBos::Always
+        };
         let tokens = self
             .model
-            .str_to_token(&template_result.prompt, AddBos::Never)
+            .str_to_token(prompt, add_bos)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let n_prompt = tokens.len() as u32;
@@ -238,18 +355,10 @@ impl LlamaLocalProvider {
         ctx.decode(&mut batch)
             .map_err(|e| anyhow::anyhow!("Initial decode failed: {}", e))?;
 
-        // Build preserved token set
-        let mut preserved = HashSet::new();
-        for token_str in &template_result.preserved_tokens {
-            if let Ok(toks) = self.model.str_to_token(token_str, AddBos::Never) {
-                if toks.len() == 1 {
-                    preserved.insert(toks[0]);
-                }
-            }
-        }
-
-        // Build sampler
-        let mut sampler = self.build_sampler(template_result, &preserved)?;
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::temp(self.temperature),
+            LlamaSampler::dist(1234),
+        ]);
 
         // Generate tokens
         let mut n_cur = batch.n_tokens();
@@ -265,24 +374,19 @@ impl LlamaLocalProvider {
                 break;
             }
 
-            let special = preserved.contains(&token);
-            let output_bytes = self
+            // A single token that can't be decoded (e.g. an unused/control id)
+            // shouldn't abort the whole generation — skip it and keep going.
+            match self
                 .model
-                .token_to_piece_bytes(token, 8, special, None)
-                .or_else(|_| self.model.token_to_piece_bytes(token, 256, special, None))
-                .map_err(|e| anyhow::anyhow!("Token decode failed: {}", e))?;
-
-            let mut output_string = String::with_capacity(32);
-            let _ = decoder.decode_to_string(&output_bytes, &mut output_string, false);
-            generated_text.push_str(&output_string);
-
-            // Check additional stop sequences
-            if template_result
-                .additional_stops
-                .iter()
-                .any(|stop| !stop.is_empty() && generated_text.ends_with(stop))
+                .token_to_piece_bytes(token, 8, false, None)
+                .or_else(|_| self.model.token_to_piece_bytes(token, 256, false, None))
             {
-                break;
+                Ok(output_bytes) => {
+                    let mut output_string = String::with_capacity(32);
+                    let _ = decoder.decode_to_string(&output_bytes, &mut output_string, false);
+                    generated_text.push_str(&output_string);
+                }
+                Err(e) => tracing::debug!("skipping undecodable token {token:?}: {e}"),
             }
 
             batch.clear();
@@ -293,15 +397,6 @@ impl LlamaLocalProvider {
 
             ctx.decode(&mut batch)
                 .map_err(|e| anyhow::anyhow!("Decode failed: {}", e))?;
-        }
-
-        // Trim stop sequences from end
-        for stop in &template_result.additional_stops {
-            if !stop.is_empty() && generated_text.ends_with(stop) {
-                let new_len = generated_text.len().saturating_sub(stop.len());
-                generated_text.truncate(new_len);
-                break;
-            }
         }
 
         let n_output = (n_cur - batch_start) as u64;
@@ -318,151 +413,97 @@ impl LlamaLocalProvider {
         Ok((generated_text, usage))
     }
 
-    /// Build appropriate sampler chain based on template result.
-    fn build_sampler(
-        &self,
-        template_result: &ChatTemplateResult,
-        preserved: &HashSet<llama_cpp_2::token::LlamaToken>,
-    ) -> Result<LlamaSampler> {
-        if let Some(ref grammar) = template_result.grammar {
-            if template_result.grammar_lazy && !template_result.grammar_triggers.is_empty() {
-                // Lazy grammar: only activates when triggered
-                let mut trigger_patterns = Vec::new();
-                let mut trigger_tokens = Vec::new();
+    /// Leniently extract tool calls from the model's reply. Accepts the whole
+    /// reply as JSON, or the first balanced `{...}`/`[...]` block (handles models
+    /// that wrap JSON in prose or ``` fences). Returns empty if none found.
+    fn parse_tool_calls(text: &str) -> Vec<ToolCallInfo> {
+        // Reasoning models emit <think>…</think> first; drop it so the JSON scan
+        // doesn't latch onto braces inside the chain-of-thought.
+        let cleaned = strip_think_blocks(text);
+        let text = cleaned.as_str();
 
-                for trigger in &template_result.grammar_triggers {
-                    match trigger.trigger_type {
-                        GrammarTriggerType::Token => {
-                            if let Some(token) = trigger.token {
-                                trigger_tokens.push(token);
-                            }
-                        }
-                        GrammarTriggerType::Word => {
-                            if let Ok(toks) =
-                                self.model.str_to_token(&trigger.value, AddBos::Never)
-                            {
-                                if toks.len() == 1 && preserved.contains(&toks[0]) {
-                                    trigger_tokens.push(toks[0]);
-                                } else {
-                                    trigger_patterns.push(regex_escape(&trigger.value));
-                                }
-                            }
-                        }
-                        GrammarTriggerType::Pattern => {
-                            trigger_patterns.push(trigger.value.clone());
-                        }
-                        GrammarTriggerType::PatternFull => {
-                            trigger_patterns.push(anchor_pattern(&trigger.value));
-                        }
-                    }
-                }
+        let mut candidates: Vec<String> = Vec::new();
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            candidates.push(trimmed.to_string());
+        }
+        if let Some(block) = first_balanced_json(text) {
+            if candidates.first().map(|c| c != &block).unwrap_or(true) {
+                candidates.push(block);
+            }
+        }
 
-                match LlamaSampler::grammar_lazy_patterns(
-                    &self.model,
-                    grammar,
-                    "root",
-                    &trigger_patterns,
-                    &trigger_tokens,
-                ) {
-                    Ok(grammar_sampler) => {
-                        tracing::debug!("Using lazy grammar sampler");
-                        return Ok(LlamaSampler::chain_simple([
-                            grammar_sampler,
-                            LlamaSampler::temp(self.temperature),
-                            LlamaSampler::dist(1234),
-                        ]));
-                    }
-                    Err(e) => {
-                        tracing::warn!("Lazy grammar sampler failed, falling back: {}", e);
-                    }
-                }
-            } else {
-                // Strict grammar
-                match LlamaSampler::grammar(&self.model, grammar, "root") {
-                    Ok(grammar_sampler) => {
-                        tracing::debug!("Using strict grammar sampler");
-                        return Ok(LlamaSampler::chain_simple([
-                            grammar_sampler,
-                            LlamaSampler::temp(self.temperature),
-                            LlamaSampler::dist(1234),
-                        ]));
-                    }
-                    Err(e) => {
-                        tracing::warn!("Grammar sampler failed, falling back: {}", e);
-                    }
+        for candidate in candidates {
+            if let Ok(val) = serde_json::from_str::<Value>(&candidate) {
+                let mut calls = Self::extract_calls(&val);
+                if !calls.is_empty() {
+                    Self::number_ids(&mut calls);
+                    return calls;
                 }
             }
         }
 
-        // Fallback: no grammar
-        Ok(LlamaSampler::chain_simple([
-            LlamaSampler::temp(self.temperature),
-            LlamaSampler::dist(1234),
-        ]))
+        // Python/Llama-style calls some models prefer: `[name(arg=val, ...)]` or a
+        // bare `name(arg=val)`. Gate on the whole reply looking like a call list
+        // to avoid matching function names mentioned in prose.
+        let t = text.trim();
+        let looks_like_calls = (t.starts_with('[') && t.ends_with(']')) || is_single_call(t);
+        if looks_like_calls {
+            let mut calls = parse_python_calls(t);
+            if !calls.is_empty() {
+                Self::number_ids(&mut calls);
+                return calls;
+            }
+        }
+
+        Vec::new()
     }
 
-    /// Parse the OpenAI-compatible JSON from parse_response_oaicompat into LlmResponse.
-    fn parse_oai_response_with_usage(json_str: &str, usage: TokenUsage) -> Result<LlmResponse> {
-        let parsed: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| anyhow::anyhow!("Failed to parse OAI response JSON: {}", e))?;
+    fn number_ids(calls: &mut [ToolCallInfo]) {
+        for (i, call) in calls.iter_mut().enumerate() {
+            call.id = format!("call_{i}");
+        }
+    }
 
-        // Check for tool_calls
-        if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
-            if !tool_calls.is_empty() {
-                let calls: Vec<ToolCallInfo> = tool_calls
-                    .iter()
-                    .filter_map(|tc| {
-                        let id = tc
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("call_0")
-                            .to_string();
-                        let func = tc.get("function")?;
-                        let name = func.get("name")?.as_str()?.to_string();
-                        let args_str = func.get("arguments").and_then(|v| v.as_str())?;
-                        let arguments: serde_json::Value =
-                            serde_json::from_str(args_str).unwrap_or_default();
-                        Some(ToolCallInfo {
-                            id,
-                            name,
-                            arguments,
-                        })
-                    })
-                    .collect();
-
-                if !calls.is_empty() {
-                    tracing::info!("Local LLM returned {} tool calls", calls.len());
-                    return Ok(LlmResponse::ToolCalls(calls, Some(usage)));
-                }
-            }
+    /// Pull ToolCallInfo out of a parsed JSON value in any of the shapes a model
+    /// might emit: a bare object, an array of objects, `{"tool_calls": [...]}`,
+    /// and either `{name, arguments}` or `{function: {name, arguments}}`.
+    fn extract_calls(val: &Value) -> Vec<ToolCallInfo> {
+        fn one(v: &Value) -> Option<ToolCallInfo> {
+            let obj = v.as_object()?;
+            let (name, raw_args) = if let Some(f) = obj.get("function").and_then(|f| f.as_object()) {
+                (f.get("name")?.as_str()?.to_string(), f.get("arguments").cloned())
+            } else {
+                (obj.get("name")?.as_str()?.to_string(), obj.get("arguments").cloned())
+            };
+            let arguments = match raw_args {
+                // OpenAI serializes arguments as a JSON string; accept that too.
+                Some(Value::String(s)) => serde_json::from_str(&s).unwrap_or(Value::Object(Default::default())),
+                Some(v) => v,
+                None => Value::Object(Default::default()),
+            };
+            Some(ToolCallInfo { id: "call_0".to_string(), name, arguments })
         }
 
-        // Text response
-        let content = parsed
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        Ok(LlmResponse::Text {
-            content,
-            reasoning: None,
-            usage: Some(usage),
-        })
+        match val {
+            Value::Array(arr) => arr.iter().filter_map(one).collect(),
+            Value::Object(o) if o.contains_key("tool_calls") => o
+                .get("tool_calls")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(one).collect())
+                .unwrap_or_default(),
+            Value::Object(_) => one(val).into_iter().collect(),
+            _ => Vec::new(),
+        }
     }
 }
 
 impl LlmProvider for LlamaLocalProvider {
     fn chat(&self, messages: &[ChatMessage]) -> Result<String> {
-        let template_result = self.apply_template(messages, None)?;
+        let prompt = self.build_prompt(messages, None)?;
+        tracing::debug!("Prompt length: {} chars", prompt.len());
 
-        tracing::debug!(
-            "Prompt length: {} chars, {} tokens (approx)",
-            template_result.prompt.len(),
-            template_result.prompt.len() / 4
-        );
-
-        let (text, _usage) = self.generate(&template_result)?;
+        let (text, _usage) = self.generate(&prompt)?;
 
         tracing::debug!("Generated: {}", text);
         Ok(text)
@@ -477,30 +518,16 @@ impl LlmProvider for LlamaLocalProvider {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> Result<LlmResponse> {
-        let template_result = self.apply_template(messages, Some(tools))?;
+        let prompt = self.build_prompt(messages, Some(tools))?;
+        tracing::debug!("Prompt: {} chars, {} tools", prompt.len(), tools.len());
 
-        tracing::debug!(
-            "Prompt: {} chars, grammar: {}, lazy: {}",
-            template_result.prompt.len(),
-            template_result.grammar.is_some(),
-            template_result.grammar_lazy,
-        );
-
-        let (generated, usage) = self.generate(&template_result)?;
-
+        let (generated, usage) = self.generate(&prompt)?;
         tracing::debug!("Raw generated: {}", generated);
 
-        // Parse response using llama.cpp's built-in parser
-        if template_result.parse_tool_calls {
-            match template_result.parse_response_oaicompat(&generated, false) {
-                Ok(parsed_json) => {
-                    tracing::debug!("Parsed OAI response: {}", parsed_json);
-                    return Self::parse_oai_response_with_usage(&parsed_json, usage);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse tool calls, returning as text: {}", e);
-                }
-            }
+        let calls = Self::parse_tool_calls(&generated);
+        if !calls.is_empty() {
+            tracing::info!("Local LLM returned {} tool call(s)", calls.len());
+            return Ok(LlmResponse::ToolCalls(calls, Some(usage)));
         }
 
         Ok(LlmResponse::Text {
@@ -511,31 +538,235 @@ impl LlmProvider for LlamaLocalProvider {
     }
 }
 
-fn regex_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '.' | '^' | '$' | '|' | '(' | ')' | '*' | '+' | '?' | '[' | ']' | '{' | '}' | '\\' => {
-                escaped.push('\\');
-                escaped.push(ch);
-            }
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
+/// True if the whole string is a single `name(args)` call.
+fn is_single_call(s: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z_]\w*\s*\(.*\)$").unwrap());
+    re.is_match(s.trim())
 }
 
-fn anchor_pattern(pattern: &str) -> String {
-    if pattern.is_empty() {
-        return "^$".to_string();
+/// Parse Python/Llama-style tool calls: `[name(k=v, ...), ...]` or `name(k=v)`.
+/// Values are parsed as quoted strings, numbers, booleans, or JSON.
+fn parse_python_calls(text: &str) -> Vec<ToolCallInfo> {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"([A-Za-z_]\w*)\s*\(([^)]*)\)").unwrap());
+
+    let mut calls = Vec::new();
+    for cap in re.captures_iter(text) {
+        let name = cap[1].to_string();
+        let mut args = serde_json::Map::new();
+        for part in split_top_commas(&cap[2]) {
+            if let Some((k, v)) = part.split_once('=') {
+                args.insert(k.trim().to_string(), parse_py_value(v.trim()));
+            }
+        }
+        calls.push(ToolCallInfo {
+            id: "call_0".to_string(),
+            name,
+            arguments: Value::Object(args),
+        });
     }
-    let mut anchored = String::new();
-    if !pattern.starts_with('^') {
-        anchored.push('^');
+    calls
+}
+
+/// Split argument text on top-level commas, ignoring commas inside quotes.
+fn split_top_commas(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for c in s.chars() {
+        match c {
+            '"' | '\'' if quote.is_none() => {
+                quote = Some(c);
+                cur.push(c);
+            }
+            c if Some(c) == quote => {
+                quote = None;
+                cur.push(c);
+            }
+            ',' if quote.is_none() => {
+                if !cur.trim().is_empty() {
+                    out.push(cur.trim().to_string());
+                }
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
     }
-    anchored.push_str(pattern);
-    if !pattern.ends_with('$') {
-        anchored.push('$');
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
     }
-    anchored
+    out
+}
+
+/// Parse a Python-literal-ish value into JSON.
+fn parse_py_value(v: &str) -> Value {
+    let v = v.trim();
+    if v.len() >= 2
+        && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')))
+    {
+        return Value::String(v[1..v.len() - 1].to_string());
+    }
+    match v {
+        "true" | "True" => return Value::Bool(true),
+        "false" | "False" => return Value::Bool(false),
+        "null" | "None" => return Value::Null,
+        _ => {}
+    }
+    if let Ok(n) = v.parse::<i64>() {
+        return Value::from(n);
+    }
+    if let Ok(f) = v.parse::<f64>() {
+        return Value::from(f);
+    }
+    serde_json::from_str::<Value>(v).unwrap_or_else(|_| Value::String(v.to_string()))
+}
+
+/// Strip HF chat-template extensions minijinja can't parse. The `{% generation %}`
+/// / `{% endgeneration %}` markers only tag assistant tokens for training masks
+/// and are no-ops at inference time.
+fn strip_unsupported_jinja(src: &str) -> String {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\{%-?\s*(end)?generation\s*-?%\}").unwrap());
+    re.replace_all(src, "").into_owned()
+}
+
+/// Remove well-formed `<think>...</think>` blocks (case-insensitive). An unclosed
+/// `<think>` (model still reasoning, no answer yet) is left as-is.
+fn strip_think_blocks(text: &str) -> String {
+    let mut s = text.to_string();
+    loop {
+        let lower = s.to_lowercase();
+        let Some(start) = lower.find("<think>") else { break };
+        let Some(end_rel) = lower[start..].find("</think>") else { break };
+        let end = start + end_rel + "</think>".len();
+        s.replace_range(start..end, "");
+    }
+    s
+}
+
+/// Find the first balanced `{...}` or `[...]` span in `text`, respecting JSON
+/// string literals (so braces inside strings don't unbalance it). Returns the
+/// substring including the brackets, or None.
+fn first_balanced_json(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{' || b == b'[')?;
+    let open = bytes[start];
+    let close = if open == b'{' { b'}' } else { b']' };
+
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    for i in start..bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+        } else if c == b'"' {
+            in_str = true;
+        } else if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(text[start..=i].to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_bare_object() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            r#"{"name": "read", "arguments": {"path": "a.txt"}}"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].arguments["path"], "a.txt");
+    }
+
+    #[test]
+    fn parses_object_wrapped_in_prose_and_fences() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            "Sure, I'll do that.\n```json\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"*.rs\"}}\n```",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "glob");
+    }
+
+    #[test]
+    fn parses_array_of_calls_with_unique_ids() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            r#"[{"name": "a", "arguments": {}}, {"name": "b", "arguments": {}}]"#,
+        );
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_0");
+        assert_eq!(calls[1].id, "call_1");
+    }
+
+    #[test]
+    fn parses_openai_shape_with_stringified_args() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            r#"{"tool_calls": [{"function": {"name": "read", "arguments": "{\"path\": \"x\"}"}}]}"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].arguments["path"], "x");
+    }
+
+    #[test]
+    fn parses_call_after_think_block() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            "<think>The user wants me to read a file. I should use {read}.</think>\n{\"name\": \"read\", \"arguments\": {\"path\": \"a.txt\"}}",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].arguments["path"], "a.txt");
+    }
+
+    #[test]
+    fn parses_python_style_bracket_call() {
+        let calls = LlamaLocalProvider::parse_tool_calls(r#"[read(file_path="codeword.txt")]"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].arguments["file_path"], "codeword.txt");
+    }
+
+    #[test]
+    fn parses_multiple_python_calls() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            r#"[glob(pattern="*.rs"), grep(pattern="fn main", path="src")]"#,
+        );
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "glob");
+        assert_eq!(calls[1].id, "call_1");
+        assert_eq!(calls[1].arguments["path"], "src");
+    }
+
+    #[test]
+    fn prose_mentioning_a_function_is_not_a_call() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            "You can use the read() function to open files.",
+        );
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn plain_text_yields_no_calls() {
+        let calls = LlamaLocalProvider::parse_tool_calls("The capital of France is Paris.");
+        assert!(calls.is_empty());
+    }
 }
