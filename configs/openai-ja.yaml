@@ -23,6 +23,7 @@ agent:
   systemPromptPath: "system-prompt.md"                # Path to system prompt file (relative to config dir)
   maxTurns: 50                          # Maximum conversation turns before exit
   language: "ja"                        # Language: "en" or "ja" (affects STT, TTS voice selection)
+  skillPaths: ["../skills"]             # SKILL.md dirs (relative to this config's dir)
 
 tts:
   enabled: true

@@ -63,3 +63,59 @@ public func formatOCRResults(_ entries: [OCREntry]) -> String {
     }
     return lines.joined(separator: "\n")
 }
+
+/// Format OCR entries into spatially-grouped text blocks, the way a person
+/// reads a window: lines that are close together vertically are merged into a
+/// block, and lines on the same row are ordered left-to-right. This is far more
+/// legible to an LLM than the flat per-line list from `formatOCRResults` — use
+/// this for "what does this window say"; use `formatOCRResults` when you need
+/// per-line bounding boxes (e.g. to drive a follow-up crop).
+///
+/// Ported from m6o-deskcat's `groupIntoBlocks`, adapted for `OCREntry`'s
+/// top-left origin (deskcat used Vision's bottom-left origin).
+public func formatOCRResultsGrouped(_ entries: [OCREntry]) -> String {
+    if entries.isEmpty {
+        return "No text detected."
+    }
+
+    // Sort top-to-bottom. Top-left origin: a smaller y is higher on screen.
+    let sorted = entries.sorted { $0.y < $1.y }
+
+    var blocks: [[OCREntry]] = []
+    var current: [OCREntry] = [sorted[0]]
+
+    for i in 1..<sorted.count {
+        let prev = current.last!
+        let curr = sorted[i]
+        // Vertical gap between the bottom of the previous line (y + height) and
+        // the top of the current line (y).
+        let gap = curr.y - (prev.y + prev.height)
+        // Adaptive threshold: lines within ~1.5 line-heights belong together.
+        let lineHeight = max(prev.height, curr.height)
+        if gap < lineHeight * 1.5 {
+            current.append(curr)
+        } else {
+            blocks.append(current)
+            current = [curr]
+        }
+    }
+    blocks.append(current)
+
+    // Within each block, order lines on the same row left-to-right, otherwise
+    // top-to-bottom; then join with spaces.
+    let rendered = blocks.map { block -> String in
+        let rowSorted = block.sorted { a, b in
+            let aMidY = a.y + a.height / 2
+            let bMidY = b.y + b.height / 2
+            if abs(aMidY - bMidY) < a.height * 0.5 {
+                return a.x < b.x            // same row → left-to-right
+            }
+            return aMidY < bMidY            // otherwise → top-to-bottom
+        }
+        return rowSorted.map(\.text).joined(separator: " ")
+    }
+
+    var out = ["OCR (\(blocks.count) block(s)):"]
+    out.append(contentsOf: rendered.map { "  • \($0)" })
+    return out.joined(separator: "\n")
+}

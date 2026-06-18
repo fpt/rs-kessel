@@ -43,10 +43,13 @@ public class AgentSession: @unchecked Sendable {
             return nil
         }()
 
-        // Resolve model path (relative to config dir or absolute)
+        // Resolve model path. `hf:ORG/REPO[@REV]/file.gguf` specs and absolute
+        // paths pass through untouched (the Rust model downloader resolves `hf:`
+        // and downloads into the HF cache); only bare relative paths are resolved
+        // against the config dir.
         var modelPath: String? = nil
         if let cfgModelPath = config.llm.modelPath {
-            if cfgModelPath.hasPrefix("/") {
+            if cfgModelPath.hasPrefix("hf:") || cfgModelPath.hasPrefix("/") {
                 modelPath = cfgModelPath
             } else {
                 let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent()
@@ -66,8 +69,8 @@ public class AgentSession: @unchecked Sendable {
         let contextWindow = config.llm.contextWindow.map { UInt32($0) } ?? 128_000
         let agentConfig = AgentConfig(
             modelPath: modelPath,
-            baseUrl: config.llm.baseURL,
-            model: config.llm.model,
+            baseUrl: config.llm.baseURL ?? "",
+            model: config.llm.model ?? "",
             apiKey: apiKey,
             useHarmonyTemplate: config.llm.harmonyTemplate,
             temperature: config.llm.temperature,
@@ -159,6 +162,12 @@ public class AgentSession: @unchecked Sendable {
     /// Run one conversation turn.
     public func step(_ text: String) throws -> AgentResponse {
         try agent.step(userInput: text)
+    }
+
+    /// Run a non-persisting, read-only observation turn (ambient `/loop`).
+    /// Does not touch conversation memory; scoped to `allowedTools`.
+    public func observe(_ prompt: String, allowedTools: [String]) throws -> AgentResponse {
+        try agent.observe(prompt: prompt, allowedTools: allowedTools)
     }
 
     /// Reset conversation history.

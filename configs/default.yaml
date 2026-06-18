@@ -11,6 +11,7 @@ agent:
   systemPromptPath: "default-prompt.md"                # Path to system prompt file (relative to config dir)
   maxTurns: 50                          # Maximum conversation turns before exit
   language: "en"                        # Language: "en" or "ja" (affects STT, TTS voice selection)
+  skillPaths: ["../skills"]             # SKILL.md dirs to load (relative to this config's dir)
 
 tts:
   enabled: false                         # Enable text-to-speech
@@ -33,3 +34,9 @@ watcher:
 mcpServers:
   - command: "godevmcp"
     args: ["serve"]
+
+ambient:                                     # Ambient /loop mode (periodic desktop check)
+  enabled: false                             # Autostart the loop on launch
+  intervalSeconds: 300                       # Fixed cadence; omit/null for self-paced
+  prompt: null                               # Override the observation prompt (null = default desk-activity check)
+  speak: true                                # Speak summaries via TTS (when tts.enabled)

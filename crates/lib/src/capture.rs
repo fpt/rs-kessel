@@ -49,6 +49,9 @@ pub struct CaptureBridge {
     // apply_ocr result channel
     pub ocr_result_tx: Sender<CaptureResult>,
     pub ocr_result_rx: Receiver<CaptureResult>,
+    // list_windows result channel
+    pub list_result_tx: Sender<CaptureResult>,
+    pub list_result_rx: Receiver<CaptureResult>,
 }
 
 impl CaptureBridge {
@@ -57,6 +60,7 @@ impl CaptureBridge {
         let (capture_result_tx, capture_result_rx) = channel::unbounded();
         let (find_result_tx, find_result_rx) = channel::unbounded();
         let (ocr_result_tx, ocr_result_rx) = channel::unbounded();
+        let (list_result_tx, list_result_rx) = channel::unbounded();
         Self {
             request_tx,
             request_rx,
@@ -66,6 +70,8 @@ impl CaptureBridge {
             find_result_rx,
             ocr_result_tx,
             ocr_result_rx,
+            list_result_tx,
+            list_result_rx,
         }
     }
 }
@@ -270,6 +276,75 @@ impl ToolHandler for FindWindowTool {
             .recv_timeout(std::time::Duration::from_secs(10))
             .map_err(|e| {
                 AgentError::InternalError(format!("find_window timeout or error: {}", e))
+            })?;
+
+        Ok(ToolResult::text(result.metadata_json))
+    }
+}
+
+/// Tool that lists the user's open windows (filtered to real app windows).
+/// Shares the request channel; signals "list mode" to Swift with empty
+/// `search_keywords`, and routes its result via the `list_` id prefix.
+pub struct ListWindowsTool {
+    request_tx: Sender<CaptureRequest>,
+    result_rx: Receiver<CaptureResult>,
+    next_id: AtomicU64,
+}
+
+impl ListWindowsTool {
+    pub fn new(request_tx: Sender<CaptureRequest>, result_rx: Receiver<CaptureResult>) -> Self {
+        Self {
+            request_tx,
+            result_rx,
+            next_id: AtomicU64::new(1),
+        }
+    }
+}
+
+impl ToolHandler for ListWindowsTool {
+    fn name(&self) -> &str {
+        "list_windows"
+    }
+
+    fn description(&self) -> &str {
+        "List the user's currently open windows (window id, title, app, size), \
+         excluding system UI, tiny widgets, and incognito browser windows. Use this \
+         to survey what the user is working on across the desktop before zooming in \
+         with capture_screen on a specific window id."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    fn call(&self, _args: serde_json::Value) -> Result<ToolResult, AgentError> {
+        let id = format!("list_{}", self.next_id.fetch_add(1, Ordering::SeqCst));
+
+        // Empty search_keywords is the "list all (filtered)" sentinel for Swift.
+        let request = CaptureRequest {
+            id: id.clone(),
+            window_id: None,
+            crop_x: None,
+            crop_y: None,
+            crop_w: None,
+            crop_h: None,
+            detect: None,
+            apply_ocr: None,
+            search_keywords: Some(String::new()),
+        };
+
+        self.request_tx.send(request).map_err(|e| {
+            AgentError::InternalError(format!("Failed to send list_windows request: {}", e))
+        })?;
+
+        let result = self
+            .result_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| {
+                AgentError::InternalError(format!("list_windows timeout or error: {}", e))
             })?;
 
         Ok(ToolResult::text(result.metadata_json))
@@ -526,6 +601,33 @@ mod tests {
 
         let err = tool.call(serde_json::json!({"keywords": "  "})).unwrap_err();
         assert!(err.to_string().contains("must not be empty"));
+    }
+
+    // ---- ListWindowsTool tests ----
+
+    #[test]
+    fn test_list_windows_round_trip() {
+        let bridge = CaptureBridge::new();
+        let tool = ListWindowsTool::new(bridge.request_tx.clone(), bridge.list_result_rx.clone());
+
+        let rx = bridge.request_rx.clone();
+        let tx = bridge.list_result_tx.clone();
+        std::thread::spawn(move || {
+            let req = rx.recv().unwrap();
+            // list mode: list_ id prefix and the empty-keyword sentinel.
+            assert!(req.id.starts_with("list_"));
+            assert_eq!(req.search_keywords.as_deref(), Some(""));
+            assert!(req.window_id.is_none());
+            tx.send(CaptureResult {
+                id: req.id,
+                image_base64: String::new(),
+                metadata_json: "Open windows (2):\n  id: 1 | \"VS Code\" | app: Code | 1440x900".to_string(),
+            }).unwrap();
+        });
+
+        let result = tool.call(serde_json::json!({})).unwrap();
+        assert!(result.text.contains("Open windows (2)"));
+        assert!(result.images.is_empty());
     }
 
     // ---- ApplyOcrTool tests ----

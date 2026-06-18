@@ -41,6 +41,7 @@ dictionary AgentResponse {
     u64 output_tokens;
     u64 total_tokens;
     f32 context_percent;
+    u32? suggested_next_check_seconds;
 };
 
 dictionary CaptureRequest {
@@ -71,6 +72,9 @@ interface Agent {
 
     [Throws=AgentError]
     AgentResponse step_with_allowed_tools(string user_input, sequence<string> allowed_tools);
+
+    [Throws=AgentError]
+    AgentResponse observe(string prompt, sequence<string> allowed_tools);
 
     [Throws=AgentError]
     void feed_watcher_event(string json);

@@ -18,15 +18,54 @@ public class WindowManager {
 
     // MARK: - Window Listing
 
-    /// List all on-screen windows with their metadata
-    public func listWindows() async throws -> [WindowInfo] {
+    /// Bundle id prefixes for system UI that's never a "thing the user is doing".
+    private static let excludedBundlePrefixes = [
+        "com.apple.dock",
+        "com.apple.controlcenter",
+        "com.apple.notificationcenterui",
+        "com.apple.Spotlight",
+        "com.apple.WindowManager",
+        "com.apple.ActivityMonitor",
+        "com.apple.systempreferences",
+        "com.apple.SystemSettings",
+    ]
+
+    /// List on-screen windows with their metadata.
+    ///
+    /// With `excludeNoise: false` (default) this returns essentially everything
+    /// over 50×50 — used by keyword search and the ambient title poller.
+    ///
+    /// With `excludeNoise: true` it returns the "what is the user actually doing"
+    /// set: drops system UI (Dock, Control Center, Spotlight, …), untitled or
+    /// tiny (<100×100) windows, and Chrome incognito windows (a privacy guard).
+    public func listWindows(excludeNoise: Bool = false) async throws -> [WindowInfo] {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
 
+        let incognitoTitles = excludeNoise ? await Self.chromeIncognitoTitles() : []
+
         return content.windows.compactMap { window in
-            // Skip very small windows (menu bar items, etc.)
-            guard window.frame.width > 50, window.frame.height > 50 else { return nil }
+            if excludeNoise {
+                let title = window.title ?? ""
+                let bundle = window.owningApplication?.bundleIdentifier ?? ""
+                let appName = window.owningApplication?.applicationName ?? ""
+                if title.isEmpty { return nil }
+                if window.frame.width < 100 || window.frame.height < 100 { return nil }
+                // Drop windows with no owning application — desktop/system chrome
+                // like the wallpaper "Backstop" layers and menu-bar strips (these
+                // surface with an empty app name).
+                if window.owningApplication == nil || appName.isEmpty { return nil }
+                if Self.excludedBundlePrefixes.contains(where: { bundle == $0 || bundle.hasPrefix($0 + ".") }) {
+                    return nil
+                }
+                if bundle == "com.google.Chrome" && incognitoTitles.contains(title) { return nil }
+                // Drop the terminal window hosting kessel itself.
+                if title.lowercased().contains("kessel-cli") { return nil }
+            } else {
+                // Skip very small windows (menu bar items, etc.)
+                guard window.frame.width > 50, window.frame.height > 50 else { return nil }
+            }
 
             return WindowInfo(
                 windowID: window.windowID,
@@ -36,6 +75,58 @@ public class WindowManager {
                 frame: window.frame
             )
         }
+    }
+
+    /// Titles of Chrome windows currently in incognito mode, via AppleScript.
+    ///
+    /// Runs `osascript` on a background thread (NOT the MainActor — this is called
+    /// from the @MainActor capture poller) with a hard 2s deadline. On the first
+    /// run macOS shows an Automation-permission prompt that blocks osascript until
+    /// answered; the deadline ensures we still respond within the tool's timeout.
+    /// Returns an empty set on timeout, denial, or no Chrome — i.e. fail open:
+    /// nothing is filtered, the tool never hangs.
+    private static func chromeIncognitoTitles() async -> Set<String> {
+        await Task.detached(priority: .utility) { () -> Set<String> in
+            let script = """
+            tell application "System Events"
+                if not (exists process "Google Chrome") then return ""
+            end tell
+            tell application "Google Chrome"
+                set output to ""
+                repeat with w in every window
+                    if mode of w is "incognito" then
+                        set output to output & (name of w) & linefeed
+                    end if
+                end repeat
+                return output
+            end tell
+            """
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return [] }
+
+            // Hard deadline: don't let a permission prompt or a slow Chrome hang us.
+            let deadline = Date().addingTimeInterval(2.0)
+            while process.isRunning && Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            if process.isRunning {
+                process.terminate()
+                return []
+            }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let out = String(data: data, encoding: .utf8) ?? ""
+            return Set(
+                out.split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            )
+        }.value
     }
 
     // MARK: - Window Capture

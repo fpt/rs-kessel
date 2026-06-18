@@ -1,10 +1,16 @@
-.PHONY: help build run run-text run-openai run-openai-text run-ministral3 run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
+.PHONY: help build install uninstall run run-text run-openai run-openai-text run-ministral3 run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
+
+# Install location (override with: make install PREFIX=/usr/local)
+PREFIX ?= $(HOME)
+BINDIR := $(PREFIX)/bin
 
 help:
 	@echo "Kessel - Makefile"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make build           - Build Rust and Swift"
+	@echo "  make install         - Build (release) and install kessel-cli to \$$PREFIX/bin (default ~/bin)"
+	@echo "  make uninstall       - Remove the installed kessel-cli"
 	@echo "  make run             - Run in Auto-Listen Voice Mode (local)"
 	@echo "  make run-text        - Run in Text Mode (local)"
 	@echo "  make run-openai      - Run with OpenAI in voice mode (set OPENAI_API_KEY)"
@@ -41,6 +47,21 @@ build:
 	@echo "Building Swift CLI..."
 	@cd swift && swift build -c release
 	@echo "Build complete!"
+
+# Install the release binary to $(BINDIR). The executable links
+# libkessel_core.dylib by absolute path inside this repo's
+# crates/target/release, so keep the repo in place after installing (and re-run
+# `make install` after pulling/rebuilding so $(BINDIR) tracks the latest code).
+install: build
+	@mkdir -p "$(BINDIR)"
+	@cp swift/.build/release/kessel-cli "$(BINDIR)/kessel-cli"
+	@echo "✅ Installed: $(BINDIR)/kessel-cli"
+	@echo "   Links dylib from: $(CURDIR)/crates/target/release (keep this repo in place)"
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "   ⚠️  $(BINDIR) is not on your PATH — add it to use 'kessel-cli' directly." ;; esac
+
+uninstall:
+	@rm -f "$(BINDIR)/kessel-cli"
+	@echo "Removed $(BINDIR)/kessel-cli"
 
 run:
 	@echo "Running Kessel in Default Mode..."

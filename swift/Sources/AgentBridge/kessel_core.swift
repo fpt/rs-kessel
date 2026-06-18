@@ -538,6 +538,8 @@ public protocol AgentProtocol : AnyObject {
     
     func getConversationHistory()  -> String
     
+    func observe(prompt: String, allowedTools: [String]) throws  -> AgentResponse
+    
     func processBackchannel(partialInput: String, pauseMs: UInt64)  -> String?
     
     func pushSituationMessage(text: String, source: String, sessionId: String) 
@@ -630,6 +632,15 @@ open func feedWatcherEvent(json: String)throws  {try rustCallWithError(FfiConver
 open func getConversationHistory() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kessel_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func observe(prompt: String, allowedTools: [String])throws  -> AgentResponse {
+    return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
+    uniffi_kessel_core_fn_method_agent_observe(self.uniffiClonePointer(),
+        FfiConverterString.lower(prompt),
+        FfiConverterSequenceString.lower(allowedTools),$0
     )
 })
 }
@@ -902,10 +913,11 @@ public struct AgentResponse {
     public var outputTokens: UInt64
     public var totalTokens: UInt64
     public var contextPercent: Float
+    public var suggestedNextCheckSeconds: UInt32?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(content: String, role: String, isFinal: Bool, keywords: [String]?, reasoning: String?, inputTokens: UInt64, outputTokens: UInt64, totalTokens: UInt64, contextPercent: Float) {
+    public init(content: String, role: String, isFinal: Bool, keywords: [String]?, reasoning: String?, inputTokens: UInt64, outputTokens: UInt64, totalTokens: UInt64, contextPercent: Float, suggestedNextCheckSeconds: UInt32?) {
         self.content = content
         self.role = role
         self.isFinal = isFinal
@@ -915,6 +927,7 @@ public struct AgentResponse {
         self.outputTokens = outputTokens
         self.totalTokens = totalTokens
         self.contextPercent = contextPercent
+        self.suggestedNextCheckSeconds = suggestedNextCheckSeconds
     }
 }
 
@@ -949,6 +962,9 @@ extension AgentResponse: Equatable, Hashable {
         if lhs.contextPercent != rhs.contextPercent {
             return false
         }
+        if lhs.suggestedNextCheckSeconds != rhs.suggestedNextCheckSeconds {
+            return false
+        }
         return true
     }
 
@@ -962,6 +978,7 @@ extension AgentResponse: Equatable, Hashable {
         hasher.combine(outputTokens)
         hasher.combine(totalTokens)
         hasher.combine(contextPercent)
+        hasher.combine(suggestedNextCheckSeconds)
     }
 }
 
@@ -981,7 +998,8 @@ public struct FfiConverterTypeAgentResponse: FfiConverterRustBuffer {
                 inputTokens: FfiConverterUInt64.read(from: &buf), 
                 outputTokens: FfiConverterUInt64.read(from: &buf), 
                 totalTokens: FfiConverterUInt64.read(from: &buf), 
-                contextPercent: FfiConverterFloat.read(from: &buf)
+                contextPercent: FfiConverterFloat.read(from: &buf), 
+                suggestedNextCheckSeconds: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
@@ -995,6 +1013,7 @@ public struct FfiConverterTypeAgentResponse: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.outputTokens, into: &buf)
         FfiConverterUInt64.write(value.totalTokens, into: &buf)
         FfiConverterFloat.write(value.contextPercent, into: &buf)
+        FfiConverterOptionUInt32.write(value.suggestedNextCheckSeconds, into: &buf)
     }
 }
 
@@ -1521,40 +1540,43 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kessel_core_checksum_func_agent_new() != 12003) {
+    if (uniffi_kessel_core_checksum_func_agent_new() != 49581) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_add_skill() != 41357) {
+    if (uniffi_kessel_core_checksum_method_agent_add_skill() != 48534) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_drain_capture_requests() != 4180) {
+    if (uniffi_kessel_core_checksum_method_agent_drain_capture_requests() != 12576) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_feed_watcher_event() != 59668) {
+    if (uniffi_kessel_core_checksum_method_agent_feed_watcher_event() != 25035) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_get_conversation_history() != 59460) {
+    if (uniffi_kessel_core_checksum_method_agent_get_conversation_history() != 51486) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_process_backchannel() != 8364) {
+    if (uniffi_kessel_core_checksum_method_agent_observe() != 40372) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_push_situation_message() != 8206) {
+    if (uniffi_kessel_core_checksum_method_agent_process_backchannel() != 1602) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_reset() != 29830) {
+    if (uniffi_kessel_core_checksum_method_agent_push_situation_message() != 46180) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_set_system_prompt() != 12711) {
+    if (uniffi_kessel_core_checksum_method_agent_reset() != 23598) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_step() != 4924) {
+    if (uniffi_kessel_core_checksum_method_agent_set_system_prompt() != 21644) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools() != 47034) {
+    if (uniffi_kessel_core_checksum_method_agent_step() != 42753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 24243) {
+    if (uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools() != 6850) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 47839) {
         return InitializationResult.apiChecksumMismatch
     }
 

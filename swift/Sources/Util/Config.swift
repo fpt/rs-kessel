@@ -9,15 +9,37 @@ public struct Config: Codable {
     public let stt: STTConfig?
     public let watcher: WatcherConfig?
     public let mcpServers: [McpServer]?
+    public let ambient: AmbientConfig?
 
     public struct McpServer: Codable {
         public let command: String
         public let args: [String]
     }
 
+    /// Ambient `/loop` mode: periodic background observation of desktop activity.
+    public struct AmbientConfig: Codable {
+        /// Autostart the loop on launch.
+        public let enabled: Bool?
+        /// Fixed interval in seconds; omit (null) for self-paced cadence.
+        public let intervalSeconds: Int?
+        /// Override the observation prompt (defaults to the desk-activity check).
+        public let prompt: String?
+        /// Speak the summary via TTS in addition to printing (default true).
+        public let speak: Bool?
+
+        public init(enabled: Bool?, intervalSeconds: Int?, prompt: String?, speak: Bool?) {
+            self.enabled = enabled
+            self.intervalSeconds = intervalSeconds
+            self.prompt = prompt
+            self.speak = speak
+        }
+    }
+
     public struct LLMConfig: Codable {
-        public let baseURL: String
-        public let model: String
+        // Optional: a local-model config (modelPath set) needs neither — the Rust
+        // provider selects LlamaLocalProvider on modelPath and ignores these.
+        public let baseURL: String?
+        public let model: String?
         public let apiKey: String?
         public let harmonyTemplate: Bool
         public let temperature: Float?
@@ -151,7 +173,8 @@ public struct Config: Codable {
                 enabled: false
             ),
             watcher: nil,
-            mcpServers: nil
+            mcpServers: nil,
+            ambient: nil
         )
     }
 }

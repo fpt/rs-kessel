@@ -12,6 +12,7 @@ agent:
   systemPromptPath: null
   maxTurns: 50
   language: "en"
+  skillPaths: ["../skills"]   # SKILL.md dirs (relative to this config's dir)
 
 tts:
   enabled: true

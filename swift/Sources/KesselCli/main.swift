@@ -43,6 +43,15 @@ final class VoiceQueue: @unchecked Sendable {
     }
 }
 
+/// Read a line of stdin WITHOUT blocking the MainActor. `readLine()` is a
+/// blocking syscall; calling it directly from the @MainActor text loop pins the
+/// main thread while waiting for input, which starves the @MainActor ambient
+/// loop and capture poller. Running it on a detached thread lets the `await`
+/// free the MainActor so those background tasks keep ticking.
+func readLineAsync() async -> String? {
+    await Task.detached { readLine() }.value
+}
+
 // Run async main
 @main
 struct KesselCli {
@@ -172,22 +181,36 @@ let capturePoller = Task { @MainActor in
         try? await Task.sleep(for: .milliseconds(100))
         let requests = session.agent.drainCaptureRequests()
         for req in requests {
-            // find_window: keyword search, return matching windows as text
-            if let keywords = req.searchKeywords, !keywords.isEmpty {
+            // Window query. searchKeywords present = find_window/list_windows.
+            // Empty keywords is the list_windows sentinel (list filtered windows);
+            // non-empty does keyword matching.
+            if let keywords = req.searchKeywords {
                 do {
-                    let allWindows = try await wm.listWindows()
-                    let kws = keywords.lowercased().split(separator: " ").map(String.init)
-                    let matched = allWindows.filter { win in
-                        let haystack = "\(win.title ?? "") \(win.appName ?? "")".lowercased()
-                        return kws.allSatisfy { haystack.contains($0) }
-                    }
                     let text: String
-                    if matched.isEmpty {
-                        let all = allWindows.map { $0.findWindowDescription }.joined(separator: "\n  ")
-                        text = "No windows matched keywords: \(keywords)\n\nAll windows:\n  \(all)"
+                    if keywords.isEmpty {
+                        // list_windows: the "what am I doing" set (noise filtered out).
+                        let windows = try await wm.listWindows(excludeNoise: true)
+                        if windows.isEmpty {
+                            text = "No user windows found."
+                        } else {
+                            let lines = windows.map { $0.findWindowDescription }.joined(separator: "\n  ")
+                            text = "Open windows (\(windows.count)):\n  \(lines)"
+                        }
                     } else {
-                        let lines = matched.map { $0.findWindowDescription }.joined(separator: "\n  ")
-                        text = "Found \(matched.count) window(s):\n  \(lines)"
+                        // find_window: keyword search across all windows.
+                        let allWindows = try await wm.listWindows()
+                        let kws = keywords.lowercased().split(separator: " ").map(String.init)
+                        let matched = allWindows.filter { win in
+                            let haystack = "\(win.title ?? "") \(win.appName ?? "")".lowercased()
+                            return kws.allSatisfy { haystack.contains($0) }
+                        }
+                        if matched.isEmpty {
+                            let all = allWindows.map { $0.findWindowDescription }.joined(separator: "\n  ")
+                            text = "No windows matched keywords: \(keywords)\n\nAll windows:\n  \(all)"
+                        } else {
+                            let lines = matched.map { $0.findWindowDescription }.joined(separator: "\n  ")
+                            text = "Found \(matched.count) window(s):\n  \(lines)"
+                        }
                     }
                     session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: text)
                 } catch {
@@ -224,7 +247,9 @@ let capturePoller = Task { @MainActor in
                     }
                     let entries = try performOCR(on: image)
                     let header = "Window: \(cachedInfo.title ?? "?"), App: \(cachedInfo.appName ?? "?")\(cropLabel)"
-                    let metadata = header + "\n" + formatOCRResults(entries)
+                    // Grouped blocks read like a human sees the window — far more
+                    // legible to the model than a flat per-line bbox list.
+                    let metadata = header + "\n" + formatOCRResultsGrouped(entries)
                     session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
                 } catch {
                     session.agent.submitCaptureResult(
@@ -267,6 +292,22 @@ let capturePoller = Task { @MainActor in
     }
 }
 
+// Ambient /loop coordination: one agent turn at a time. Ambient ticks run a
+// read-only observation OFF the MainActor and skip if a user turn is active.
+let turnGate = TurnGate()
+let ambientLoop = AmbientLoop(
+    session: session,
+    gate: turnGate,
+    defaultDelay: TimeInterval(config.ambient?.intervalSeconds ?? 300),
+    emit: { summary in
+        print("\n\u{1F50D} \(summary)\n", terminator: "")
+        fflush(stdout)
+        if ttsEnabled {
+            await session.tts.speakAsync(summary)
+        }
+    }
+)
+
 // Route to voice or text mode
 if sttConfig.enabled {
     await runContinuousVoiceMode()
@@ -291,8 +332,8 @@ func runTextMode() async {
   Kessel - Text Mode
 ===========================================
 
-Model: \(config.llm.model)
-Endpoint: \(config.llm.baseURL)
+Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
+Endpoint: \(config.llm.baseURL ?? "in-process llama.cpp")
 
 Type your messages below. Commands:
   /reset    - Clear conversation history
@@ -301,10 +342,19 @@ Type your messages below. Commands:
   /history  - Show conversation history
   /voices   - List available TTS voices
   /stop     - Stop current TTS playback
+  /loop     - Ambient desktop check: /loop <interval> [prompt] (e.g. /loop 5m);
+              /loop alone = self-paced; also /loop now | stop | status
 
 ===========================================
 
 """)
+
+    if config.ambient?.enabled == true {
+        ambientLoop.start(
+            intervalSeconds: config.ambient?.intervalSeconds.map(TimeInterval.init),
+            prompt: config.ambient?.prompt
+        )
+    }
 
     var turnCount = 0
     let maxTurns = config.agent.maxTurns
@@ -313,7 +363,7 @@ Type your messages below. Commands:
         print("You: ", terminator: "")
         fflush(stdout)
 
-        guard let line = readLine() else {
+        guard let line = await readLineAsync() else {
             logger.info("EOF reached, exiting")
             break
         }
@@ -327,7 +377,21 @@ Type your messages below. Commands:
         }
 
         do {
-            let response = try session.step(userInput)
+            // Run the agent OFF the MainActor so the @MainActor capture poller
+            // can service screen-capture tool requests (find_window / list_windows
+            // / capture_screen / apply_ocr) while the ReAct loop runs. Calling
+            // step() directly here would block the MainActor for the whole loop
+            // and those tools would time out. Voice mode does the same via detach.
+            // The turn gate serializes against ambient observation ticks.
+            await turnGate.lock()
+            let response: AgentResponse
+            do {
+                response = try await Task.detached { try session.step(userInput) }.value
+            } catch {
+                await turnGate.unlock()
+                throw error
+            }
+            await turnGate.unlock()
             let finalResponse = session.formatResponse(response.content)
 
             if let reasoning = response.reasoning {
@@ -349,6 +413,11 @@ Type your messages below. Commands:
 }
 
 func handleCommand(_ command: String) {
+    // /loop takes arguments, so handle it by prefix before the exact-match switch.
+    if command == "/loop" || command.hasPrefix("/loop ") {
+        handleLoopCommand(String(command.dropFirst("/loop".count)).trimmingCharacters(in: .whitespaces))
+        return
+    }
     switch command {
     case "/quit", "/exit":
         session.tts.stop()
@@ -373,6 +442,44 @@ func handleCommand(_ command: String) {
             print("Unknown command: \(command)")
             print("Type /help for available commands.\n")
         }
+    }
+}
+
+/// Handle `/loop` subcommands:
+///   /loop                  → start self-paced with the default desk-activity check
+///   /loop <interval> [...]  → start fixed-interval (e.g. 5m, 30s, 300), optional prompt
+///   /loop <prompt...>       → start self-paced with a custom prompt
+///   /loop now | stop | status
+func handleLoopCommand(_ args: String) {
+    let parts = args.split(separator: " ", maxSplits: 1).map(String.init)
+    switch parts.first ?? "" {
+    case "":
+        ambientLoop.start(intervalSeconds: nil, prompt: nil)
+    case "stop", "off":
+        ambientLoop.stop()
+    case "now":
+        ambientLoop.triggerNow()
+    case "status":
+        ambientLoop.status()
+    case let head:
+        if let secs = parseDuration(head) {
+            ambientLoop.start(intervalSeconds: secs, prompt: parts.count > 1 ? parts[1] : nil)
+        } else {
+            // No leading duration → self-paced with the whole argument as the prompt.
+            ambientLoop.start(intervalSeconds: nil, prompt: args)
+        }
+    }
+}
+
+/// Parse a duration like "300", "30s", "5m", "2h" into seconds.
+func parseDuration(_ s: String) -> TimeInterval? {
+    if let plain = Double(s) { return plain }
+    guard let unit = s.last, let value = Double(s.dropLast()) else { return nil }
+    switch unit {
+    case "s": return value
+    case "m": return value * 60
+    case "h": return value * 3600
+    default: return nil
     }
 }
 
@@ -406,8 +513,10 @@ func runContinuousVoiceMode() async {
         let combined = parts.joined(separator: "\n")
         guard !combined.isEmpty else { return }
         Task.detached {
+            await turnGate.lock()
             do {
                 let response = try session.step(combined)
+                await turnGate.unlock()
                 let text = session.formatResponse(response.content)
                 await MainActor.run {
                     if let reasoning = response.reasoning {
@@ -422,9 +531,27 @@ func runContinuousVoiceMode() async {
                     await MainActor.run { audioCapture.unmute() }
                 }
             } catch {
+                await turnGate.unlock()
                 await MainActor.run { logger.error("Agent error: \(error)") }
             }
         }
+    }
+
+    // Ambient summaries in voice mode mute the mic while speaking (half-duplex).
+    ambientLoop.emit = { summary in
+        print("\n\u{1F50D} \(summary)\n", terminator: "")
+        fflush(stdout)
+        if ttsEnabled {
+            audioCapture.mute()
+            await session.tts.speakAsync(summary)
+            audioCapture.unmute()
+        }
+    }
+    if config.ambient?.enabled == true {
+        ambientLoop.start(
+            intervalSeconds: config.ambient?.intervalSeconds.map(TimeInterval.init),
+            prompt: config.ambient?.prompt
+        )
     }
 
     audioCapture.onVolatileResult = { text in
@@ -448,8 +575,8 @@ func runContinuousVoiceMode() async {
   Kessel - Continuous Voice Mode
 ===========================================
 
-Model: \(config.llm.model)
-Endpoint: \(config.llm.baseURL)
+Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
+Endpoint: \(config.llm.baseURL ?? "in-process llama.cpp")
 STT: Apple SpeechTranscriber (\(locale.identifier))
 
 Start speaking or type below. Press Ctrl+C to exit.

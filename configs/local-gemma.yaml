@@ -8,3 +8,4 @@ llm:
 agent:
   language: "en"
   maxTurns: 50
+  skillPaths: ["../skills"]   # SKILL.md dirs (relative to this config's dir)

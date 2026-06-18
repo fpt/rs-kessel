@@ -1,5 +1,6 @@
 pub mod capture;
 pub mod event_router;
+pub mod github;
 mod harmony;
 mod llm;
 #[cfg(feature = "local")]
@@ -130,6 +131,9 @@ pub struct AgentResponse {
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub context_percent: f32,
+    /// Self-paced cadence hint from `observe()` (seconds until next check), set
+    /// when the agent calls the `suggest_next_check` tool. `None` for `step()`.
+    pub suggested_next_check_seconds: Option<u32>,
 }
 
 /// Error types for the agent
@@ -160,6 +164,10 @@ pub struct Agent {
     capture_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
     find_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
     ocr_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
+    list_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
+    /// Self-paced cadence hint set by the `suggest_next_check` tool (0 = unset),
+    /// read by `observe()`. Shared with the tool handler.
+    next_check: Arc<AtomicU64>,
 }
 
 // Top-level constructor function for UniFFI
@@ -233,6 +241,30 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         capture_bridge.request_tx.clone(),
         capture_bridge.ocr_result_rx.clone(),
     )));
+    tool_registry.register(Box::new(capture::ListWindowsTool::new(
+        capture_bridge.request_tx.clone(),
+        capture_bridge.list_result_rx.clone(),
+    )));
+
+    // Self-pacing hint tool for the ambient loop, sharing the next_check cell.
+    let next_check = Arc::new(AtomicU64::new(0));
+    tool_registry.register(Box::new(tool::SuggestNextCheckTool::new(next_check.clone())));
+
+    // Register GitHub Projects tools when configured (KESSEL_GH_ORG/PROJECT).
+    // These are pure `gh` subprocess calls — no platform dependency — so they
+    // live in Rust and work from every frontend (Swift, Windows C#, Rust CLI).
+    if let Some(gh) = github::GithubClient::from_env() {
+        let gh = Arc::new(gh);
+        // Shared session so a "yes to all" grant persists across the GitHub
+        // tools (and stays separate from file-write/exec grants).
+        let gh_session = Arc::new(tool::ToolSession::new());
+        tool_registry.register(Box::new(github::GithubListTasksTool::new(gh.clone())));
+        tool_registry.register(Box::new(github::GithubCreateDraftTool::new(gh.clone(), gh_session.clone())));
+        tool_registry.register(Box::new(github::GithubPromoteDraftTool::new(gh.clone(), gh_session.clone())));
+        tool_registry.register(Box::new(github::GithubSetStatusTool::new(gh.clone(), gh_session.clone())));
+        tool_registry.register(Box::new(github::GithubLogActivityTool::new(gh, gh_session)));
+        tracing::info!("Registered GitHub Projects tools");
+    }
 
     Ok(Arc::new(Agent {
         config,
@@ -248,6 +280,8 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         capture_result_tx: capture_bridge.capture_result_tx,
         find_result_tx: capture_bridge.find_result_tx,
         ocr_result_tx: capture_bridge.ocr_result_tx,
+        list_result_tx: capture_bridge.list_result_tx,
+        next_check,
     }))
 }
 
@@ -337,6 +371,7 @@ impl Agent {
             output_tokens: usage.output_tokens,
             total_tokens: usage.total_tokens,
             context_percent,
+            suggested_next_check_seconds: None,
         })
     }
 
@@ -464,6 +499,77 @@ impl Agent {
             output_tokens: usage.output_tokens,
             total_tokens: usage.total_tokens,
             context_percent,
+            suggested_next_check_seconds: None,
+        })
+    }
+
+    /// Run a one-shot, **non-persisting** turn for ambient/background observation
+    /// (the `/loop` ambient mode). Unlike `step`, this does NOT read or write the
+    /// conversation memory — it builds an ephemeral message list so periodic
+    /// checks don't pollute the chat. Scope it to read-only tools via
+    /// `allowed_tools` so it can observe and report but never mutate anything.
+    ///
+    /// If the agent calls `suggest_next_check`, the suggested cadence is returned
+    /// in `AgentResponse.suggested_next_check_seconds`.
+    pub fn observe(
+        &self,
+        prompt: String,
+        allowed_tools: Vec<String>,
+    ) -> Result<AgentResponse, AgentError> {
+        // Clear any stale cadence hint from a previous turn.
+        self.next_check.store(0, Ordering::SeqCst);
+
+        // Ephemeral context — independent of the persistent conversation memory.
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        if let Some(prompt_s) = self.system_prompt.lock().clone() {
+            messages.push(ChatMessage::system(prompt_s));
+        }
+        if let Some(catalog) = self.skill_registry.catalog() {
+            messages.push(ChatMessage::system(catalog));
+        }
+        messages.push(ChatMessage::user(prompt));
+
+        let formatted = if self.config.use_harmony_template {
+            HarmonyTemplate::format_messages(&messages)
+        } else {
+            messages
+        };
+
+        let filtered = self.tool_registry.filtered(&allowed_tools);
+        let (response_text, reasoning, usage) = if self.client.supports_tools() && !filtered.is_empty()
+        {
+            let mut react_messages = formatted;
+            react::run(self.client.as_ref(), &mut react_messages, &filtered, None)?
+        } else {
+            let response = self
+                .client
+                .chat(&formatted)
+                .map_err(|e| AgentError::NetworkError(e.to_string()))?;
+            (response, None, TokenUsage::default())
+        };
+
+        let suggested_next_check_seconds = match self.next_check.load(Ordering::SeqCst) {
+            0 => None,
+            n => Some(n.min(u32::MAX as u64) as u32),
+        };
+
+        let context_percent = if self.config.context_window > 0 {
+            (usage.input_tokens as f64 / self.config.context_window as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
+
+        Ok(AgentResponse {
+            content: response_text,
+            role: "assistant".to_string(),
+            is_final: true,
+            keywords: None,
+            reasoning,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+            context_percent,
+            suggested_next_check_seconds,
         })
     }
 
@@ -504,6 +610,8 @@ impl Agent {
             let _ = self.find_result_tx.send(result);
         } else if id.starts_with("ocr_") {
             let _ = self.ocr_result_tx.send(result);
+        } else if id.starts_with("list_") {
+            let _ = self.list_result_tx.send(result);
         } else {
             let _ = self.capture_result_tx.send(result);
         }

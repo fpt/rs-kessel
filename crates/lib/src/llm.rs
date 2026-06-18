@@ -408,24 +408,7 @@ impl OpenAiProvider {
         tracing::info!("  Model: {}", model);
         tracing::info!("  Reasoning effort: {:?}", reasoning_effort);
 
-        let http_agent = if let Ok(cert_file) = std::env::var("SSL_CERT_FILE") {
-            tracing::info!("Loading custom CA certificates from: {}", cert_file);
-            match Self::build_tls_with_custom_ca(&cert_file) {
-                Ok(tls) => {
-                    tracing::info!("Custom CA certificates loaded successfully");
-                    ureq::AgentBuilder::new()
-                        .tls_connector(std::sync::Arc::new(tls))
-                        .build()
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load custom CA certificates: {}", e);
-                    tracing::warn!("Falling back to default TLS configuration");
-                    ureq::agent()
-                }
-            }
-        } else {
-            ureq::agent()
-        };
+        let http_agent = http_agent_with_ca(None);
 
         Self {
             api_key,
@@ -813,6 +796,32 @@ impl LlmProvider for OpenAiProvider {
 /// 1. If model_path is provided → local FFI (in-process llama.cpp)
 /// 2. If api_key is provided → OpenAI (cloud)
 /// 3. Otherwise → error
+/// Build a ureq agent that honors `SSL_CERT_FILE` — a custom CA bundle, e.g. a
+/// corporate TLS-intercepting proxy like Zscaler. Used by every outbound HTTPS
+/// client (the LLM provider and the model downloader) so they all trust the
+/// same roots. `redirects` overrides the redirect limit (None = ureq default).
+/// Falls back to default TLS if the cert file is unset or unreadable.
+pub(crate) fn http_agent_with_ca(redirects: Option<u32>) -> ureq::Agent {
+    let mut builder = ureq::AgentBuilder::new();
+    if let Some(r) = redirects {
+        builder = builder.redirects(r);
+    }
+    if let Ok(cert_file) = std::env::var("SSL_CERT_FILE") {
+        tracing::info!("Loading custom CA certificates from: {}", cert_file);
+        match OpenAiProvider::build_tls_with_custom_ca(&cert_file) {
+            Ok(tls) => {
+                tracing::info!("Custom CA certificates loaded successfully");
+                builder = builder.tls_connector(std::sync::Arc::new(tls));
+            }
+            Err(e) => {
+                tracing::error!("Failed to load custom CA certificates: {}", e);
+                tracing::warn!("Falling back to default TLS configuration");
+            }
+        }
+    }
+    builder.build()
+}
+
 pub fn create_provider(
     model_path: Option<String>,
     _base_url: String,
