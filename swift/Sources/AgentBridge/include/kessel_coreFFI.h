@@ -261,9 +261,54 @@ void*_Nonnull uniffi_kessel_core_fn_clone_agent(void*_Nonnull ptr, RustCallStatu
 void uniffi_kessel_core_fn_free_agent(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_ADD_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_ADD_SKILL
+void uniffi_kessel_core_fn_method_agent_add_skill(void*_Nonnull ptr, RustBuffer name, RustBuffer description, RustBuffer prompt, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_CLEAR_GOAL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_CLEAR_GOAL
+void uniffi_kessel_core_fn_method_agent_clear_goal(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_DRAIN_CAPTURE_REQUESTS
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_DRAIN_CAPTURE_REQUESTS
+RustBuffer uniffi_kessel_core_fn_method_agent_drain_capture_requests(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_EVALUATE_GOAL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_EVALUATE_GOAL
+RustBuffer uniffi_kessel_core_fn_method_agent_evaluate_goal(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_FEED_WATCHER_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_FEED_WATCHER_EVENT
+void uniffi_kessel_core_fn_method_agent_feed_watcher_event(void*_Nonnull ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_GET_CONVERSATION_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_GET_CONVERSATION_HISTORY
 RustBuffer uniffi_kessel_core_fn_method_agent_get_conversation_history(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_GOAL_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_GOAL_STATUS
+RustBuffer uniffi_kessel_core_fn_method_agent_goal_status(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_OBSERVE
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_OBSERVE
+RustBuffer uniffi_kessel_core_fn_method_agent_observe(void*_Nonnull ptr, RustBuffer prompt, RustBuffer allowed_tools, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_PROCESS_BACKCHANNEL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_PROCESS_BACKCHANNEL
+RustBuffer uniffi_kessel_core_fn_method_agent_process_backchannel(void*_Nonnull ptr, RustBuffer partial_input, uint64_t pause_ms, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_PUSH_SITUATION_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_PUSH_SITUATION_MESSAGE
+void uniffi_kessel_core_fn_method_agent_push_situation_message(void*_Nonnull ptr, RustBuffer text, RustBuffer source, RustBuffer session_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_RESET
@@ -271,9 +316,29 @@ RustBuffer uniffi_kessel_core_fn_method_agent_get_conversation_history(void*_Non
 void uniffi_kessel_core_fn_method_agent_reset(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_SET_GOAL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_SET_GOAL
+void uniffi_kessel_core_fn_method_agent_set_goal(void*_Nonnull ptr, RustBuffer condition, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_SET_SYSTEM_PROMPT
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_SET_SYSTEM_PROMPT
+void uniffi_kessel_core_fn_method_agent_set_system_prompt(void*_Nonnull ptr, RustBuffer prompt, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_STEP
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_STEP
 RustBuffer uniffi_kessel_core_fn_method_agent_step(void*_Nonnull ptr, RustBuffer user_input, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
+RustBuffer uniffi_kessel_core_fn_method_agent_step_with_allowed_tools(void*_Nonnull ptr, RustBuffer user_input, RustBuffer allowed_tools, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
+void uniffi_kessel_core_fn_method_agent_submit_capture_result(void*_Nonnull ptr, RustBuffer id, RustBuffer image_base64, RustBuffer metadata_json, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FUNC_AGENT_NEW
@@ -567,9 +632,63 @@ uint16_t uniffi_kessel_core_checksum_func_agent_new(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_ADD_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_ADD_SKILL
+uint16_t uniffi_kessel_core_checksum_method_agent_add_skill(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_CLEAR_GOAL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_CLEAR_GOAL
+uint16_t uniffi_kessel_core_checksum_method_agent_clear_goal(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_DRAIN_CAPTURE_REQUESTS
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_DRAIN_CAPTURE_REQUESTS
+uint16_t uniffi_kessel_core_checksum_method_agent_drain_capture_requests(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_EVALUATE_GOAL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_EVALUATE_GOAL
+uint16_t uniffi_kessel_core_checksum_method_agent_evaluate_goal(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_FEED_WATCHER_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_FEED_WATCHER_EVENT
+uint16_t uniffi_kessel_core_checksum_method_agent_feed_watcher_event(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_GET_CONVERSATION_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_GET_CONVERSATION_HISTORY
 uint16_t uniffi_kessel_core_checksum_method_agent_get_conversation_history(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_GOAL_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_GOAL_STATUS
+uint16_t uniffi_kessel_core_checksum_method_agent_goal_status(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_OBSERVE
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_OBSERVE
+uint16_t uniffi_kessel_core_checksum_method_agent_observe(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_PROCESS_BACKCHANNEL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_PROCESS_BACKCHANNEL
+uint16_t uniffi_kessel_core_checksum_method_agent_process_backchannel(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_PUSH_SITUATION_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_PUSH_SITUATION_MESSAGE
+uint16_t uniffi_kessel_core_checksum_method_agent_push_situation_message(void
     
 );
 #endif
@@ -579,9 +698,33 @@ uint16_t uniffi_kessel_core_checksum_method_agent_reset(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SET_GOAL
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SET_GOAL
+uint16_t uniffi_kessel_core_checksum_method_agent_set_goal(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SET_SYSTEM_PROMPT
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SET_SYSTEM_PROMPT
+uint16_t uniffi_kessel_core_checksum_method_agent_set_system_prompt(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_STEP
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_STEP
 uint16_t uniffi_kessel_core_checksum_method_agent_step(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
+uint16_t uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
+uint16_t uniffi_kessel_core_checksum_method_agent_submit_capture_result(void
     
 );
 #endif

@@ -44,6 +44,18 @@ dictionary AgentResponse {
     u32? suggested_next_check_seconds;
 };
 
+dictionary GoalStatus {
+    string condition;
+    u64 elapsed_seconds;
+    u32 turns_evaluated;
+    string? last_reason;
+};
+
+dictionary GoalEvaluation {
+    boolean met;
+    string reason;
+};
+
 dictionary CaptureRequest {
     string id;
     u32? window_id;
@@ -84,4 +96,13 @@ interface Agent {
     void submit_capture_result(string id, string image_base64, string metadata_json);
 
     void push_situation_message(string text, string source, string session_id);
+
+    void set_goal(string condition);
+
+    void clear_goal();
+
+    GoalStatus? goal_status();
+
+    [Throws=AgentError]
+    GoalEvaluation evaluate_goal();
 };

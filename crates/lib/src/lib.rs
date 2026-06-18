@@ -1,6 +1,7 @@
 pub mod capture;
 pub mod event_router;
 pub mod github;
+pub mod goal;
 mod harmony;
 mod llm;
 #[cfg(feature = "local")]
@@ -136,6 +137,20 @@ pub struct AgentResponse {
     pub suggested_next_check_seconds: Option<u32>,
 }
 
+/// Status of the active goal (for the `/goal` status view).
+pub struct GoalStatus {
+    pub condition: String,
+    pub elapsed_seconds: u64,
+    pub turns_evaluated: u32,
+    pub last_reason: Option<String>,
+}
+
+/// Result of evaluating the active goal against the conversation.
+pub struct GoalEvaluation {
+    pub met: bool,
+    pub reason: String,
+}
+
 /// Error types for the agent
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -168,6 +183,8 @@ pub struct Agent {
     /// Self-paced cadence hint set by the `suggest_next_check` tool (0 = unset),
     /// read by `observe()`. Shared with the tool handler.
     next_check: Arc<AtomicU64>,
+    /// Active `/goal` completion condition, or `None`. Session-scoped.
+    goal: Mutex<Option<goal::GoalState>>,
 }
 
 // Top-level constructor function for UniFFI
@@ -282,12 +299,17 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         ocr_result_tx: capture_bridge.ocr_result_tx,
         list_result_tx: capture_bridge.list_result_tx,
         next_check,
+        goal: Mutex::new(None),
     }))
 }
 
 impl Agent {
     /// Process a user input and return the agent's response
     pub fn step(&self, user_input: String) -> Result<AgentResponse, AgentError> {
+        // Clear any stale cadence hint; the turn may set a fresh one via the
+        // `suggest_next_check` tool (used by the self-paced ambient `/loop`).
+        self.next_check.store(0, Ordering::SeqCst);
+
         let mut memory = self.memory.lock();
 
         // Compact if last turn approached context window limit (>= 90%)
@@ -361,6 +383,13 @@ impl Agent {
             0.0
         };
 
+        // Surface a self-pacing hint if the turn called `suggest_next_check`
+        // (the self-paced ambient `/loop` reads this to set its next delay).
+        let suggested_next_check_seconds = match self.next_check.load(Ordering::SeqCst) {
+            0 => None,
+            n => Some(n.min(u32::MAX as u64) as u32),
+        };
+
         Ok(AgentResponse {
             content: response_text,
             role: "assistant".to_string(),
@@ -371,7 +400,7 @@ impl Agent {
             output_tokens: usage.output_tokens,
             total_tokens: usage.total_tokens,
             context_percent,
-            suggested_next_check_seconds: None,
+            suggested_next_check_seconds,
         })
     }
 
@@ -642,6 +671,71 @@ impl Agent {
     /// Push a situation message from Swift (e.g. periodic window list).
     pub fn push_situation_message(&self, text: String, source: String, session_id: String) {
         self.situation.push(text, source, session_id);
+    }
+
+    /// Set (or replace) the active goal — a completion condition the agent works
+    /// toward across turns until `evaluate_goal` reports it met. Session-scoped.
+    pub fn set_goal(&self, condition: String) {
+        *self.goal.lock() = Some(goal::GoalState::new(condition));
+        tracing::info!("Goal set");
+    }
+
+    /// Clear the active goal, if any.
+    pub fn clear_goal(&self) {
+        *self.goal.lock() = None;
+        tracing::info!("Goal cleared");
+    }
+
+    /// Snapshot the active goal for the status view, or `None` if no goal is set.
+    pub fn goal_status(&self) -> Option<GoalStatus> {
+        self.goal.lock().as_ref().map(|g| GoalStatus {
+            condition: g.condition.clone(),
+            elapsed_seconds: g.started_at.elapsed().as_secs(),
+            turns_evaluated: g.turns_evaluated,
+            last_reason: g.last_reason.clone(),
+        })
+    }
+
+    /// Evaluate the active goal against the recent conversation with a plain,
+    /// tool-less LLM call. Records the reason, bumps the turn counter, and clears
+    /// the goal when met. Returns `met=false` with a note if no goal is active.
+    pub fn evaluate_goal(&self) -> Result<GoalEvaluation, AgentError> {
+        let condition = match self.goal.lock().as_ref() {
+            Some(g) => g.condition.clone(),
+            None => {
+                return Ok(GoalEvaluation {
+                    met: false,
+                    reason: "No active goal.".to_string(),
+                })
+            }
+        };
+
+        let recent = {
+            let memory = self.memory.lock();
+            memory.get_last_messages(goal::EVAL_CONTEXT_MESSAGES)
+        };
+        let transcript = goal::format_transcript(&recent);
+        let eval_messages = goal::build_eval_messages(&condition, &transcript);
+
+        let raw = self
+            .client
+            .chat(&eval_messages)
+            .map_err(|e| AgentError::NetworkError(e.to_string()))?;
+        let (met, reason) = goal::parse_evaluation(&raw);
+
+        {
+            let mut g = self.goal.lock();
+            if let Some(state) = g.as_mut() {
+                state.turns_evaluated += 1;
+                state.last_reason = Some(reason.clone());
+            }
+            if met {
+                *g = None; // achieved → clear
+            }
+        }
+
+        tracing::info!("Goal evaluation: met={} reason={}", met, reason);
+        Ok(GoalEvaluation { met, reason })
     }
 }
 

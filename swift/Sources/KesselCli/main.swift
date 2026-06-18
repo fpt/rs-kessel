@@ -8,7 +8,9 @@ import TTS
 import Audio
 import ScreenCapture
 
-let logger = Logger("Main")
+// Nonisolated so the @Sendable watcher/detached closures can log. As top-level
+// code (main.swift), an unannotated global would be inferred @MainActor.
+nonisolated(unsafe) let logger = Logger("Main")
 
 // readline (libedit) callback globals — C callback can't capture Swift context
 nonisolated(unsafe) var _rlCompletedLine: UnsafeMutablePointer<CChar>? = nil
@@ -52,13 +54,10 @@ func readLineAsync() async -> String? {
     await Task.detached { readLine() }.value
 }
 
-// Run async main
-@main
-struct KesselCli {
-    static func main() async {
-        await runMain()
-    }
-}
+// Run async main. This file is named `main.swift`, so Swift treats it as
+// top-level code and the entry point is the top-level statement below; `@main`
+// can't be used here (it conflicts with top-level code).
+await runMain()
 
 @MainActor
 func runMain() async {
@@ -292,21 +291,30 @@ let capturePoller = Task { @MainActor in
     }
 }
 
-// Ambient /loop coordination: one agent turn at a time. Ambient ticks run a
-// read-only observation OFF the MainActor and skip if a user turn is active.
+// /loop coordination: one agent turn at a time. Loop ticks run a full turn OFF
+// the MainActor and skip if a user turn is active. The text-mode `runTurn` below
+// is reused by voice mode with mic-muting wrapped around TTS.
 let turnGate = TurnGate()
+// Both loops are constructed with placeholder handlers; the real `runTurn`
+// closures are assigned below, once both exist — they call `runLoopTurn`, which
+// transitively captures both `ambientLoop` and `goalDriver` (via handleCommand).
 let ambientLoop = AmbientLoop(
-    session: session,
     gate: turnGate,
     defaultDelay: TimeInterval(config.ambient?.intervalSeconds ?? 300),
-    emit: { summary in
-        print("\n\u{1F50D} \(summary)\n", terminator: "")
-        fflush(stdout)
-        if ttsEnabled {
-            await session.tts.speakAsync(summary)
-        }
-    }
+    runTurn: { _ in nil }
 )
+// /goal driver: keeps running turns until an evaluator confirms the condition
+// (or the maxTurns cap is hit). Shares the turn gate and the runTurn path.
+let goalDriver = GoalDriver(
+    agent: session.agent,
+    gate: turnGate,
+    maxTurns: config.agent.maxTurns,
+    runTurn: { _ in nil }
+)
+// Text-mode default: run each turn fully (no mic muting). Voice mode reassigns
+// these with mic-muting around TTS.
+ambientLoop.runTurn = { prompt in await runLoopTurn(prompt, muteMic: false) }
+goalDriver.runTurn = { prompt in await runLoopTurn(prompt, muteMic: false) }
 
 // Route to voice or text mode
 if sttConfig.enabled {
@@ -342,8 +350,11 @@ Type your messages below. Commands:
   /history  - Show conversation history
   /voices   - List available TTS voices
   /stop     - Stop current TTS playback
-  /loop     - Ambient desktop check: /loop <interval> [prompt] (e.g. /loop 5m);
-              /loop alone = self-paced; also /loop now | stop | status
+  /loop     - Run a prompt/command on a recurring cadence as a full turn:
+              /loop [interval] <prompt> (e.g. /loop 5m /reset, /loop check email
+              every 30m); /loop alone = self-paced desk check; /loop now|stop|status
+  /goal     - Keep working until a condition is met: /goal <condition>
+              (e.g. /goal all tests pass); /goal = status; /goal clear = stop
 
 ===========================================
 
@@ -413,9 +424,13 @@ Type your messages below. Commands:
 }
 
 func handleCommand(_ command: String) {
-    // /loop takes arguments, so handle it by prefix before the exact-match switch.
+    // /loop and /goal take arguments, so handle them by prefix before the switch.
     if command == "/loop" || command.hasPrefix("/loop ") {
         handleLoopCommand(String(command.dropFirst("/loop".count)).trimmingCharacters(in: .whitespaces))
+        return
+    }
+    if command == "/goal" || command.hasPrefix("/goal ") {
+        handleGoalCommand(String(command.dropFirst("/goal".count)).trimmingCharacters(in: .whitespaces))
         return
     }
     switch command {
@@ -445,40 +460,126 @@ func handleCommand(_ command: String) {
     }
 }
 
-/// Handle `/loop` subcommands:
-///   /loop                  → start self-paced with the default desk-activity check
-///   /loop <interval> [...]  → start fixed-interval (e.g. 5m, 30s, 300), optional prompt
-///   /loop <prompt...>       → start self-paced with a custom prompt
+/// Run one `/loop` turn exactly like a typed line: a slash command is dispatched
+/// via handleCommand; anything else runs as a full agent turn (off the MainActor
+/// so the capture poller keeps servicing screen tools). `muteMic` brackets TTS
+/// with mic muting for half-duplex in voice mode. The caller (AmbientLoop) holds
+/// the turn gate, so this must not touch it.
+@MainActor
+func runLoopTurn(_ prompt: String, muteMic: Bool) async -> AgentResponse? {
+    if prompt.hasPrefix("/") {
+        handleCommand(prompt)
+        return nil
+    }
+    let response: AgentResponse
+    do {
+        response = try await Task.detached { try session.step(prompt) }.value
+    } catch {
+        logger.error("Loop turn error: \(error)")
+        print("\u{1B}[90m[loop] turn failed: \(error)\u{1B}[0m")
+        return nil
+    }
+    let text = session.formatResponse(response.content)
+    if let reasoning = response.reasoning {
+        print("\n\u{1B}[90m💭 \(reasoning)\u{1B}[0m")
+    }
+    print("\n\u{1F501} \(text)")
+    print("\u{1B}[90m[\(Int(response.contextPercent))% context]\u{1B}[0m\n")
+    fflush(stdout)
+    if ttsEnabled {
+        if muteMic { audioCapture.mute() }
+        await session.tts.speakAsync(text)
+        if muteMic { audioCapture.unmute() }
+    }
+    return response
+}
+
+/// Handle `/loop`, modelled on Claude Code's `/loop`. Subcommands first, then
+/// parse `[interval] <prompt>`:
+///   /loop                          → self-paced, default desk-activity check
+///   /loop <interval> <prompt>       → fixed interval (e.g. /loop 5m /babysit-prs)
+///   /loop <prompt> every <N><unit>  → fixed interval from a trailing "every" clause
+///   /loop <prompt>                  → self-paced with a custom prompt
 ///   /loop now | stop | status
 func handleLoopCommand(_ args: String) {
-    let parts = args.split(separator: " ", maxSplits: 1).map(String.init)
-    switch parts.first ?? "" {
+    let trimmed = args.trimmingCharacters(in: .whitespaces)
+    switch trimmed {
     case "":
         ambientLoop.start(intervalSeconds: nil, prompt: nil)
+        return
     case "stop", "off":
         ambientLoop.stop()
+        return
     case "now":
         ambientLoop.triggerNow()
+        return
     case "status":
         ambientLoop.status()
-    case let head:
-        if let secs = parseDuration(head) {
-            ambientLoop.start(intervalSeconds: secs, prompt: parts.count > 1 ? parts[1] : nil)
-        } else {
-            // No leading duration → self-paced with the whole argument as the prompt.
-            ambientLoop.start(intervalSeconds: nil, prompt: args)
-        }
+        return
+    default:
+        break
+    }
+    let (interval, prompt) = parseLoopArgs(trimmed)
+    ambientLoop.start(intervalSeconds: interval, prompt: prompt.isEmpty ? nil : prompt)
+}
+
+/// Handle `/goal`, modelled on Claude Code's `/goal`:
+///   /goal <condition>  → set a completion condition and work toward it
+///   /goal              → show status of the active goal
+///   /goal clear        → clear it early (aliases: stop, off, reset, none, cancel)
+func handleGoalCommand(_ args: String) {
+    let trimmed = args.trimmingCharacters(in: .whitespaces)
+    switch trimmed.lowercased() {
+    case "":
+        goalDriver.status()
+    case "clear", "stop", "off", "reset", "none", "cancel":
+        goalDriver.clear()
+    default:
+        goalDriver.set(trimmed)
     }
 }
 
-/// Parse a duration like "300", "30s", "5m", "2h" into seconds.
+/// Parse `[interval] <prompt>` like Claude Code's /loop:
+/// 1. leading interval token (`5m`, `2h`, `1d`) → interval + rest as prompt
+/// 2. trailing `every <N><unit>` / `every <N> <word>` → interval, stripped prompt
+/// 3. otherwise → no interval (self-paced), whole input is the prompt
+func parseLoopArgs(_ input: String) -> (TimeInterval?, String) {
+    let parts = input.split(separator: " ", maxSplits: 1).map(String.init)
+    if let head = parts.first, let secs = parseDuration(head) {
+        return (secs, parts.count > 1 ? parts[1] : "")
+    }
+    if let (secs, stripped) = parseTrailingEvery(input) {
+        return (secs, stripped)
+    }
+    return (nil, input)
+}
+
+/// Match a trailing `every <N><unit>` / `every <N> <unit-word>` clause — but only
+/// when "every" is followed by a time expression (`check every PR` has none).
+func parseTrailingEvery(_ input: String) -> (TimeInterval, String)? {
+    let pattern = #"(?i)\bevery\s+(\d+)\s*([a-z]+)\s*$"#
+    guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let ns = input as NSString
+    guard let m = re.firstMatch(in: input, range: NSRange(location: 0, length: ns.length)),
+          let value = Double(ns.substring(with: m.range(at: 1))),
+          let secs = durationUnitToSeconds(value, ns.substring(with: m.range(at: 2))) else { return nil }
+    let stripped = ns.substring(to: m.range.location).trimmingCharacters(in: .whitespaces)
+    return (secs, stripped)
+}
+
+/// Parse a duration token like "30s", "5m", "2h", "1d" (a unit is required) into seconds.
 func parseDuration(_ s: String) -> TimeInterval? {
-    if let plain = Double(s) { return plain }
-    guard let unit = s.last, let value = Double(s.dropLast()) else { return nil }
-    switch unit {
-    case "s": return value
-    case "m": return value * 60
-    case "h": return value * 3600
+    guard let unit = s.last, let value = Double(s.dropLast()), value > 0 else { return nil }
+    return durationUnitToSeconds(value, String(unit))
+}
+
+/// Map a numeric value + unit word to seconds. Accepts short and long forms.
+func durationUnitToSeconds(_ value: Double, _ unit: String) -> TimeInterval? {
+    switch unit.lowercased() {
+    case "s", "sec", "secs", "second", "seconds": return value
+    case "m", "min", "mins", "minute", "minutes": return value * 60
+    case "h", "hr", "hrs", "hour", "hours": return value * 3600
+    case "d", "day", "days": return value * 86400
     default: return nil
     }
 }
@@ -537,16 +638,9 @@ func runContinuousVoiceMode() async {
         }
     }
 
-    // Ambient summaries in voice mode mute the mic while speaking (half-duplex).
-    ambientLoop.emit = { summary in
-        print("\n\u{1F50D} \(summary)\n", terminator: "")
-        fflush(stdout)
-        if ttsEnabled {
-            audioCapture.mute()
-            await session.tts.speakAsync(summary)
-            audioCapture.unmute()
-        }
-    }
+    // In voice mode, loop and goal turns mute the mic while speaking (half-duplex).
+    ambientLoop.runTurn = { prompt in await runLoopTurn(prompt, muteMic: true) }
+    goalDriver.runTurn = { prompt in await runLoopTurn(prompt, muteMic: true) }
     if config.ambient?.enabled == true {
         ambientLoop.start(
             intervalSeconds: config.ambient?.intervalSeconds.map(TimeInterval.init),
@@ -580,7 +674,7 @@ Endpoint: \(config.llm.baseURL ?? "in-process llama.cpp")
 STT: Apple SpeechTranscriber (\(locale.identifier))
 
 Start speaking or type below. Press Ctrl+C to exit.
-Commands: /reset /quit /help /history /voices /stop
+Commands: /reset /quit /help /history /voices /stop /loop /goal
 
 ===========================================
 
