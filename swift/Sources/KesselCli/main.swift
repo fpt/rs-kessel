@@ -120,7 +120,9 @@ do {
     exit(1)
 }
 
-let ttsEnabled = config.tts?.enabled ?? false
+// Mutable: `/listen` turns on spoken replies when switching into voice mode, so
+// voice mode always speaks even if the config started with TTS off.
+var ttsEnabled = config.tts?.enabled ?? false
 
 // Initialize STT with SpeechTranscriber
 let sttConfig = config.stt ?? Config.STTConfig(enabled: false)
@@ -132,16 +134,24 @@ let locale: Locale = {
     return Locale.current
 }()
 
+// Always STT-capable so voice can be entered at runtime via `/listen` even when
+// starting in text mode. Initialization (and the mic-permission prompt it leads
+// to) is deferred until we actually enter voice mode.
 let audioCapture = AudioCapture(config: AudioCapture.Config(
-    enabled: sttConfig.enabled,
+    enabled: true,
     locale: locale,
     censor: sttConfig.censor ?? false
 ))
+
+// Voice-mode state, shared by the text loop, `/listen`, and the routing below.
+var voiceInitialized = false
+var switchToVoice = false
 
 if sttConfig.enabled {
     logger.info("Initializing SpeechTranscriber...")
     do {
         try await audioCapture.initialize()
+        voiceInitialized = true
         logger.info("SpeechTranscriber initialized successfully")
     } catch {
         logger.error("Failed to initialize SpeechTranscriber: \(error)")
@@ -316,11 +326,15 @@ let goalDriver = GoalDriver(
 ambientLoop.runTurn = { prompt in await runLoopTurn(prompt, muteMic: false) }
 goalDriver.runTurn = { prompt in await runLoopTurn(prompt, muteMic: false) }
 
-// Route to voice or text mode
+// Route to voice or text mode. From text mode, `/listen` sets `switchToVoice`
+// and breaks the loop, then we hand off to continuous voice mode.
 if sttConfig.enabled {
     await runContinuousVoiceMode()
 } else {
     await runTextMode()
+    if switchToVoice {
+        await runContinuousVoiceMode()
+    }
 }
 
 // Cleanup
@@ -332,6 +346,31 @@ capturePoller.cancel()
 _exit(0)
 
 // MARK: - Text Mode
+
+/// Lazily initialize the speech transcriber for voice mode. Returns true if voice
+/// is ready (already initialized, or initialized successfully now). On failure
+/// (e.g. SpeechTranscriber unavailable) it prints why and returns false so the
+/// caller stays in text mode.
+func prepareVoiceMode() async -> Bool {
+    // Voice mode speaks responses: turn on TTS even if the config started with it
+    // off (e.g. a text-first config). The configured/default voice still applies.
+    if !ttsEnabled {
+        ttsEnabled = true
+        session.tts.setEnabled(true)
+        print("\u{1B}[90m[voice] enabling spoken replies (TTS)\u{1B}[0m")
+    }
+    if voiceInitialized { return true }
+    print("Initializing voice mode…")
+    do {
+        try await audioCapture.initialize()
+        voiceInitialized = true
+        return true
+    } catch {
+        logger.error("Cannot start voice mode: \(error)")
+        print("Cannot start voice mode: \(error)\n")
+        return false
+    }
+}
 
 func runTextMode() async {
     print("""
@@ -355,6 +394,7 @@ Type your messages below. Commands:
               every 30m); /loop alone = self-paced desk check; /loop now|stop|status
   /goal     - Keep working until a condition is met: /goal <condition>
               (e.g. /goal all tests pass); /goal = status; /goal clear = stop
+  /listen   - Switch to continuous voice mode (speak instead of type)
 
 ===========================================
 
@@ -383,6 +423,14 @@ Type your messages below. Commands:
         if userInput.isEmpty { continue }
 
         if userInput.hasPrefix("/") {
+            // `/listen` switches into continuous voice mode (init on demand).
+            if userInput == "/listen" {
+                if await prepareVoiceMode() {
+                    switchToVoice = true
+                    break
+                }
+                continue
+            }
             handleCommand(userInput)
             continue
         }

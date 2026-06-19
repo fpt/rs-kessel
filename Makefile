@@ -87,6 +87,10 @@ run-openai:
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
 	@cd swift && swift run kessel-cli --config ../configs/openai.yaml
 
+run-lfm2:
+	@echo "Running Kessel with LFM2 (local)..."
+	@cd swift && swift run kessel-cli --config ../configs/lfm2.yaml
+
 run-qwen3:
 	@echo "Running Kessel with Qwen3 (local)..."
 	@cd swift && swift run kessel-cli --config ../configs/qwen3.yaml

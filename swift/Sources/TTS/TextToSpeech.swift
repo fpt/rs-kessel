@@ -8,6 +8,13 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
     private let logger = Logger("TTS")
     private var isSpeaking = false
     private var completion: (() -> Void)?
+    /// Whether speech is on. Initialized from config; can be toggled at runtime
+    /// (e.g. `/listen` enables it when switching into voice mode).
+    private var _enabled: Bool
+
+    /// Enable/disable spoken output at runtime.
+    public func setEnabled(_ on: Bool) { _enabled = on }
+    public var enabled: Bool { _enabled }
 
     /// Configuration for TTS
     public struct Config {
@@ -37,19 +44,24 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
 
     public init(config: Config) {
         self.config = config
+        self._enabled = config.enabled
         self.synthesizer = AVSpeechSynthesizer()
 
-        // Validate voice at init time
-        if let id = config.voice {
-            if let voice = AVSpeechSynthesisVoice(identifier: id) {
-                self.resolvedVoice = voice
-            } else {
-                self.resolvedVoice = nil
-                // Can't use logger before super.init, print directly
-                print("[TTS] ERROR: Voice '\(id)' not found on this system. Run /voices to list available voices.")
-            }
+        // Resolve the voice at init time. If the configured identifier isn't
+        // installed (e.g. an *enhanced* voice that hasn't been downloaded), fall
+        // back to a default voice rather than going silent.
+        if let id = config.voice, let voice = AVSpeechSynthesisVoice(identifier: id) {
+            self.resolvedVoice = voice
         } else {
+            if let id = config.voice {
+                // Can't use logger before super.init, print directly.
+                print("[TTS] WARNING: Voice '\(id)' is not installed on this system — "
+                    + "falling back to a default voice. Install it in System Settings ▸ "
+                    + "Accessibility ▸ Spoken Content ▸ System Voice ▸ Manage Voices, or "
+                    + "run /voices to pick one that's available.")
+            }
             self.resolvedVoice = AVSpeechSynthesisVoice(language: "en-US")
+                ?? AVSpeechSynthesisVoice.speechVoices().first
         }
 
         super.init()
@@ -60,16 +72,32 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Remove `<think>…</think>` reasoning blocks so the synthesizer reads the
+    /// answer aloud, not the model's chain-of-thought. Local models (e.g. LFM2.5)
+    /// emit these inline in the reply text when no Harmony template is applied.
+    /// The full text is still printed by the caller; only speech is sanitized.
+    static func sanitizeForSpeech(_ text: String) -> String {
+        var s = text
+        // Complete blocks (dotall + case-insensitive via inline flags).
+        s = s.replacingOccurrences(
+            of: "(?is)<think>.*?</think>", with: " ", options: .regularExpression)
+        // A dangling/unterminated <think> with no closing tag → drop to end.
+        s = s.replacingOccurrences(
+            of: "(?is)<think>.*", with: " ", options: .regularExpression)
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Speak the given text asynchronously
     /// - Parameter text: The text to speak
     public func speakAsync(_ text: String) async {
-        guard config.enabled else {
+        guard _enabled else {
             logger.debug("TTS disabled, skipping speech")
             return
         }
 
-        guard !text.isEmpty else {
-            logger.debug("Empty text, skipping speech")
+        let spoken = Self.sanitizeForSpeech(text)
+        guard !spoken.isEmpty else {
+            logger.debug("Empty text (after stripping reasoning), skipping speech")
             return
         }
 
@@ -93,13 +121,13 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
                 return
             }
 
-            let utterance = AVSpeechUtterance(string: text)
+            let utterance = AVSpeechUtterance(string: spoken)
             utterance.voice = voice
             utterance.rate = self.config.rate
             utterance.pitchMultiplier = self.config.pitchMultiplier
             utterance.volume = self.config.volume
 
-            self.logger.info("Speaking: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+            self.logger.info("Speaking: \"\(spoken.prefix(50))\(spoken.count > 50 ? "..." : "")\"")
             self.synthesizer.speak(utterance)
         }
     }
@@ -109,14 +137,15 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
     ///   - text: The text to speak
     ///   - completion: Called when speech completes
     public func speak(_ text: String, completion: (() -> Void)? = nil) {
-        guard config.enabled else {
+        guard _enabled else {
             logger.debug("TTS disabled, skipping speech")
             completion?()
             return
         }
 
-        guard !text.isEmpty else {
-            logger.debug("Empty text, skipping speech")
+        let spoken = Self.sanitizeForSpeech(text)
+        guard !spoken.isEmpty else {
+            logger.debug("Empty text (after stripping reasoning), skipping speech")
             completion?()
             return
         }
@@ -136,13 +165,13 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
         self.completion = completion
         isSpeaking = true
 
-        let utterance = AVSpeechUtterance(string: text)
+        let utterance = AVSpeechUtterance(string: spoken)
         utterance.voice = voice
         utterance.rate = config.rate
         utterance.pitchMultiplier = config.pitchMultiplier
         utterance.volume = config.volume
 
-        logger.info("Speaking: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
+        logger.info("Speaking: \"\(spoken.prefix(50))\(spoken.count > 50 ? "..." : "")\"")
         synthesizer.speak(utterance)
     }
 

@@ -420,11 +420,13 @@ impl OpenAiProvider {
         }
     }
 
-    /// Build reasoning param if configured
+    /// Build reasoning param if configured. Uses `summary: "detailed"` so the
+    /// Responses API reliably returns a reasoning summary (with "auto" the model
+    /// often omits it on simpler prompts, so nothing prints to the console).
     fn reasoning_param(&self) -> Option<ReasoningParam> {
         self.reasoning_effort.as_ref().map(|effort| ReasoningParam {
             effort: effort.clone(),
-            summary: "auto".to_string(),
+            summary: "detailed".to_string(),
         })
     }
 
