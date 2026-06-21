@@ -27,14 +27,19 @@
     <Compile Include="..\vendor\*.cs" Condition="Exists('..\vendor\')" />
   </ItemGroup>
 
-  <!-- Copy the Rust cdylib next to the exe.
-       The uniffi-generated P/Invoke uses DllImport("uniffi_kessel_core"), so we
-       copy kessel_core.dll under that name rather than renaming the Rust crate. -->
-  <Target Name="CopyKesselCoreDll" AfterTargets="Build">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\crates\target\release\kessel_core.dll"
-          DestinationFiles="$(OutputPath)uniffi_kessel_core.dll"
-          SkipUnchangedFiles="true"
-          ContinueOnError="true" />
-  </Target>
+  <!-- Copy the Rust cdylib next to the exe. The uniffi-generated P/Invoke uses
+       DllImport("uniffi_kessel_core"), so we copy kessel_core.dll under that name
+       (via Link) rather than renaming the Rust crate.
+       Tracking it as Content (not a custom Copy target) makes MSBuild treat the
+       DLL as a build input: it's re-copied when newer AND a Rust-only rebuild no
+       longer leaves a stale copy because the project isn't considered up-to-date.
+       Condition tolerates a not-yet-built DLL (e.g. cloud-only first build). -->
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)..\..\crates\target\release\kessel_core.dll"
+             Condition="Exists('$(MSBuildThisFileDirectory)..\..\crates\target\release\kessel_core.dll')"
+             Link="uniffi_kessel_core.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             Visible="false" />
+  </ItemGroup>
 
 </Project>

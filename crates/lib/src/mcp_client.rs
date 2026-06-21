@@ -46,7 +46,7 @@ impl McpClient {
     ) -> Result<Arc<Self>, AgentError> {
         tracing::info!("Spawning MCP server: {} {:?}", command, args);
 
-        let mut cmd = Command::new(command);
+        let mut cmd = build_command(command);
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -104,33 +104,49 @@ impl McpClient {
             .flush()
             .map_err(|e| AgentError::InternalError(format!("Flush to MCP server failed: {}", e)))?;
 
-        // Read response
-        let mut line = String::new();
-        transport
-            .reader
-            .read_line(&mut line)
-            .map_err(|e| AgentError::InternalError(format!("Read from MCP server failed: {}", e)))?;
+        // Read until the response matching our request id arrives. Servers may
+        // interleave notifications (no `id`), server-initiated requests, or plain
+        // log lines on stdout; skip anything that isn't our response.
+        loop {
+            let mut line = String::new();
+            let n = transport.reader.read_line(&mut line).map_err(|e| {
+                AgentError::InternalError(format!("Read from MCP server failed: {}", e))
+            })?;
+            if n == 0 {
+                return Err(AgentError::InternalError(
+                    "MCP server closed stdout unexpectedly".to_string(),
+                ));
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Non-JSON output (e.g. server logging to stdout) — ignore.
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            // Only our response carries our id; notifications/other ids are skipped.
+            if value.get("id").and_then(serde_json::Value::as_u64) != Some(id) {
+                continue;
+            }
 
-        if line.is_empty() {
-            return Err(AgentError::InternalError(
-                "MCP server closed stdout unexpectedly".to_string(),
-            ));
+            if let Some(err) = value.get("error") {
+                let code = err.get("code").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let message = err
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown error");
+                return Err(AgentError::InternalError(format!(
+                    "MCP error ({}): {}",
+                    code, message
+                )));
+            }
+
+            return value
+                .get("result")
+                .cloned()
+                .ok_or_else(|| AgentError::InternalError("Empty result from MCP server".to_string()));
         }
-
-        let response: JsonRpcResponse = serde_json::from_str(line.trim()).map_err(|e| {
-            AgentError::ParseError(format!("Invalid JSON-RPC response from MCP server: {}", e))
-        })?;
-
-        if let Some(err) = response.error {
-            return Err(AgentError::InternalError(format!(
-                "MCP error ({}): {}",
-                err.code, err.message
-            )));
-        }
-
-        response
-            .result
-            .ok_or_else(|| AgentError::InternalError("Empty result from MCP server".to_string()))
     }
 
     /// Send a notification (no response expected).
@@ -186,9 +202,11 @@ impl McpClient {
         let list_result: ToolsListResult = serde_json::from_value(result)
             .map_err(|e| AgentError::ParseError(format!("Invalid tools/list result: {}", e)))?;
 
-        tracing::info!("Discovered {} MCP tools:", list_result.tools.len());
+        tracing::info!("Discovered {} MCP tools", list_result.tools.len());
+        // Tool descriptions are written for models, not humans — keep them out of
+        // the normal log; available with RUST_LOG=debug.
         for tool in &list_result.tools {
-            tracing::info!("  - {}: {}", tool.name, tool.description);
+            tracing::debug!("  - {}: {}", tool.name, tool.description);
         }
 
         *self.tools.lock() = list_result.tools;
@@ -286,6 +304,59 @@ impl ToolHandler for McpRemoteTool {
 // McpRemoteTool is Send + Sync because McpClient uses Mutex internally
 unsafe impl Send for McpRemoteTool {}
 unsafe impl Sync for McpRemoteTool {}
+
+/// Build a `Command` for an MCP server program. On Windows, many MCP servers are
+/// launched via `npx`/`pnpm`/etc., which are `.cmd`/`.bat` shims that
+/// `Command::new` can't find (it doesn't apply PATHEXT). Resolve the program
+/// against PATH + PATHEXT so those work; Rust (>=1.77) runs `.cmd`/`.bat` safely.
+fn build_command(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        if let Some(resolved) = resolve_windows_exe(command) {
+            return Command::new(resolved);
+        }
+    }
+    Command::new(command)
+}
+
+/// Resolve a bare command name to a concrete executable path using PATH and
+/// PATHEXT (Windows). Returns None if it's already a path or can't be resolved
+/// (caller falls back to spawning the name as-is).
+#[cfg(windows)]
+fn resolve_windows_exe(command: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+
+    let p = Path::new(command);
+    // Already a usable path (has an extension and exists): use as-is.
+    if p.extension().is_some() && p.is_file() {
+        return Some(p.to_path_buf());
+    }
+
+    let exts: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    // If the command names a directory, search only there; else search PATH.
+    let dirs: Vec<PathBuf> = if p.components().count() > 1 {
+        vec![p.parent().map(Path::to_path_buf).unwrap_or_default()]
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect()
+    };
+    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or(command);
+
+    for dir in dirs {
+        for ext in &exts {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests {

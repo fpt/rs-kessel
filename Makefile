@@ -1,4 +1,4 @@
-.PHONY: help build install uninstall run run-text run-openai run-openai-text run-ministral3 run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
+.PHONY: help build install uninstall run run-text run-openai run-openai-text run-ministral3 build-win run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
 
 # Install location (override with: make install PREFIX=/usr/local)
 PREFIX ?= $(HOME)
@@ -18,7 +18,8 @@ help:
 	@echo "  make run-ministral3  - Run with local Ministral-3B (auto-downloads model)"
 	@echo "  make run-verbose     - Run in Voice Mode (verbose)"
 	@echo "  make run-text-verbose- Run in Text Mode (verbose)"
-	@echo "  make run-win         - Build & run the Windows C# CLI (CONFIG=configs/foo.yaml)"
+	@echo "  make build-win       - Build the Windows C# CLI (Rust cdylib + .NET)"
+	@echo "  make run-win         - Build & run the Windows C# CLI (WIN_CONFIG=configs/foo.yaml)"
 	@echo ""
 	@echo "  make clean           - Clean build artifacts"
 	@echo "  make test            - Run tests"
@@ -111,14 +112,23 @@ run-openai-ja:
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
 	@cd swift && swift run kessel-cli --config ../configs/openai-ja.yaml
 
-# Windows C# CLI: build then run. Override the config with CONFIG=...
-# e.g. make run-win CONFIG=configs/local-lfm2.yaml
-WIN_CLI := win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
-CONFIG  ?= configs/default.yaml
+# Windows C# CLI. WIN_CONFIG selects the config (Windows-only; independent of the
+# other run targets). e.g. make run-win WIN_CONFIG=configs/local-lfm2.yaml
+WIN_CLI    := win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
+WIN_CONFIG ?= configs/default.yaml
+
+# Full Windows build: Rust cdylib (local llama.cpp, via the MSVC build script) +
+# the .NET CLI. For a CUDA build, run scripts\build-win-cuda.bat instead.
+build-win:
+	@cmd //C "scripts\\build-win-local.bat"
+	@dotnet build win/KesselCli/KesselCli.csproj -c Release --nologo
+	@echo "Built $(WIN_CLI)"
+
+# Build the .NET CLI (copies the latest Rust cdylib) then run it.
 run-win:
 	@dotnet build win/KesselCli/KesselCli.csproj -c Release --nologo
-	@echo "Running Windows CLI with $(CONFIG)..."
-	@"$(WIN_CLI)" --config "$(CONFIG)"
+	@echo "Running Windows CLI with $(WIN_CONFIG)..."
+	@"$(WIN_CLI)" --config "$(WIN_CONFIG)"
 
 clean:
 	@echo "Cleaning build artifacts..."

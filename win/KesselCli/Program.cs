@@ -6,6 +6,12 @@ using KesselCli;
 try { Console.OutputEncoding = new System.Text.UTF8Encoding(false); } catch { /* redirected */ }
 try { Console.InputEncoding = new System.Text.UTF8Encoding(false); } catch { /* redirected input */ }
 
+// Load a local .env (project root / exe dir / ~/.cache/kessel) so keys like
+// OPENAI_API_KEY can live in a file. Real env vars are not overridden. Done
+// before config load so .env may also supply KESSEL_CONFIG.
+foreach (var envFile in DotEnv.Load())
+    Console.Error.WriteLine($"[info] Loaded environment from {envFile}");
+
 // ── Parse arguments ───────────────────────────────────────────────────────────
 string? configPath = null;
 for (int i = 0; i < args.Length; i++)
@@ -34,7 +40,7 @@ if (string.IsNullOrWhiteSpace(apiKey))
     apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
 
 var mcpServers = (cfg.McpServers ?? [])
-    .Select(s => new McpServerConfig(s.Command, s.Args))
+    .Select(s => new McpServerConfig(s.Command, s.Args, s.Url))
     .ToList();
 
 var agentConfig = new AgentConfig(

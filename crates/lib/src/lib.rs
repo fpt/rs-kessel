@@ -83,6 +83,9 @@ fn parse_structured_response(json_str: &str) -> Result<(String, Vec<String>), Ag
 pub struct McpServerConfig {
     pub command: String,
     pub args: Vec<String>,
+    /// If set, connect over Streamable HTTP to this URL instead of spawning
+    /// `command`. (stdio uses command/args; HTTP uses url.)
+    pub url: Option<String>,
 }
 
 /// Configuration for the agent
@@ -230,17 +233,27 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         situation.clone(),
     );
 
-    // Connect to configured MCP servers and register their tools
+    // Connect to configured MCP servers and register their tools. A `url`
+    // selects the Streamable HTTP transport; otherwise spawn command/args (stdio).
     for server_cfg in &config.mcp_servers {
-        let args_ref: Vec<&str> = server_cfg.args.iter().map(|s| s.as_str()).collect();
-        match mcp_client::McpClient::connect(&server_cfg.command, &args_ref) {
-            Ok(client) => {
-                for handler in client.tool_handlers() {
+        let http_url = server_cfg.url.as_deref().filter(|u| !u.is_empty());
+        let result = match http_url {
+            Some(url) => mcp_client_http::McpHttpClient::connect(url).map(|c| c.tool_handlers()),
+            None => {
+                let args_ref: Vec<&str> = server_cfg.args.iter().map(|s| s.as_str()).collect();
+                mcp_client::McpClient::connect(&server_cfg.command, &args_ref)
+                    .map(|c| c.tool_handlers())
+            }
+        };
+        match result {
+            Ok(handlers) => {
+                for handler in handlers {
                     tool_registry.register(handler);
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to connect MCP server '{}': {}", server_cfg.command, e);
+                let target = http_url.unwrap_or(server_cfg.command.as_str());
+                tracing::warn!("Failed to connect MCP server '{}': {}", target, e);
             }
         }
     }

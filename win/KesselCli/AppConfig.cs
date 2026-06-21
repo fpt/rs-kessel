@@ -80,15 +80,30 @@ public sealed class AppConfig
 
         [YamlMember(Alias = "args")]
         public List<string> Args { get; set; } = [];
+
+        /// If set, connect over Streamable HTTP to this URL instead of spawning command.
+        [YamlMember(Alias = "url")]
+        public string? Url { get; set; }
+    }
+
+    /// The default user config: ~/.cache/kessel/config.yml.
+    public static string UserConfigPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".cache", "kessel", "config.yml");
     }
 
     /// Load config from an explicit path, or the first existing default candidate.
+    /// If nothing is found, a starter config is written to the user config path.
     public static (AppConfig Config, string? Path) Load(string? explicitPath)
     {
+        var userCfg = UserConfigPath();
         var candidates = new[]
         {
             explicitPath,
             Environment.GetEnvironmentVariable("KESSEL_CONFIG"),
+            userCfg,
+            Path.ChangeExtension(userCfg, ".yaml"),    // accept .yaml too
             Path.Combine(Directory.GetCurrentDirectory(), "configs", "default.yaml"),
             FindInAncestors(AppContext.BaseDirectory, Path.Combine("configs", "default.yaml")),
         };
@@ -97,17 +112,66 @@ public sealed class AppConfig
         {
             if (path is not null && File.Exists(path))
             {
-                var yaml = File.ReadAllText(path);
-                var cfg = new DeserializerBuilder()
-                    .IgnoreUnmatchedProperties()
-                    .Build()
-                    .Deserialize<AppConfig>(yaml) ?? new AppConfig();
-                return (cfg, Path.GetFullPath(path));
+                return (Deserialize(File.ReadAllText(path)), Path.GetFullPath(path));
             }
         }
 
-        return (new AppConfig(), null);
+        // Nothing found anywhere: scaffold a starter config at the user path so the
+        // user has a template to edit (LLM, TTS/STT, and MCP servers).
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(userCfg)!);
+            File.WriteAllText(userCfg, DefaultConfigYaml);
+            Console.Error.WriteLine($"[info] Wrote a starter config to {userCfg}");
+            return (Deserialize(DefaultConfigYaml), Path.GetFullPath(userCfg));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[warn] Could not create {userCfg}: {ex.Message}");
+            return (new AppConfig(), null);
+        }
     }
+
+    private static AppConfig Deserialize(string yaml) =>
+        new DeserializerBuilder()
+            .IgnoreUnmatchedProperties()
+            .Build()
+            .Deserialize<AppConfig>(yaml) ?? new AppConfig();
+
+    /// Starter config written to ~/.cache/kessel/config.yml on first run.
+    private const string DefaultConfigYaml =
+        """
+        # Kessel configuration (~/.cache/kessel/config.yml)
+        # API key: fill apiKey below, set OPENAI_API_KEY in the environment, or put
+        # it in a local .env file (project dir, the exe's dir, or ~/.cache/kessel/.env).
+
+        llm:
+          baseURL: "https://api.openai.com/v1"
+          model: "gpt-5.4-mini"
+          apiKey: ""
+          maxTokens: 8192
+          reasoningEffort: "high"   # reasoning models: low | medium | high
+          # For a local GGUF model instead, set modelPath (a local path or an
+          # hf: spec that auto-downloads) and remove baseURL, e.g.:
+          # modelPath: "hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf"
+
+        agent:
+          maxTurns: 50
+          language: "en"            # "en" or "ja"
+
+        tts:
+          enabled: false
+
+        stt:
+          enabled: false
+          locale: "en-US"           # BCP-47 locale for speech recognition / TTS
+
+        # MCP servers to spawn and expose as tools (stdio JSON-RPC).
+        # Uncomment and edit; each server's tools become available to the agent.
+        # mcpServers:
+        #   - command: "godevmcp"
+        #     args: ["serve"]
+        """;
 
     private static string? FindInAncestors(string start, string relative)
     {

@@ -6,6 +6,7 @@ llm:
   apiKey: ""  # Leave empty - will be read from OPENAI_API_KEY env var
   harmonyTemplate: false  # OpenAI models don't use Harmony template
   maxTokens: 8192
+  reasoningEffort: "high"  # Reasoning models: low | medium | high
 
 agent:
   systemPromptPath: "default-prompt.md"                # Path to system prompt file (relative to config dir)
@@ -32,6 +33,9 @@ watcher:
   sessionPath: null                        # Session JSONL path (null = auto-detect)
 
 mcpServers:
+  # Autodesk Fusion MCP server (Streamable HTTP transport).
+  - url: "http://127.0.0.1:27182/mcp"
+  # godevmcp (stdio transport — spawns a command).
   - command: "godevmcp"
     args: ["serve"]
 

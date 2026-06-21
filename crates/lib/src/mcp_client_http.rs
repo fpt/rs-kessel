@@ -165,12 +165,11 @@ impl McpHttpClient {
         let list_result: ToolsListResult = serde_json::from_value(result)
             .map_err(|e| AgentError::ParseError(format!("Invalid tools/list result: {}", e)))?;
 
-        tracing::info!(
-            "Discovered {} MCP tools (HTTP):",
-            list_result.tools.len()
-        );
+        tracing::info!("Discovered {} MCP tools (HTTP)", list_result.tools.len());
+        // Tool descriptions are written for models, not humans — keep them out of
+        // the normal log; available with RUST_LOG=debug.
         for tool in &list_result.tools {
-            tracing::info!("  - {}: {}", tool.name, tool.description);
+            tracing::debug!("  - {}: {}", tool.name, tool.description);
         }
 
         *self.tools.lock() = list_result.tools;

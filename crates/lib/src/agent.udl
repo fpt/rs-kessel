@@ -14,6 +14,7 @@ enum AgentError {
 dictionary McpServerConfig {
     string command;
     sequence<string> args;
+    string? url;
 };
 
 dictionary AgentConfig {
