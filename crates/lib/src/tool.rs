@@ -186,6 +186,23 @@ enum Permission {
     AllowAll,
 }
 
+/// What an [`ApprovalSink`] decided about a mutating action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Allow,
+    /// Approve, and remember the grant for the rest of the session.
+    AllowAll,
+    Deny,
+}
+
+/// Answers permission questions somewhere other than the local terminal.
+///
+/// Installed when kessel runs headless under a driving client (the app-server),
+/// where the built-in TTY prompt has nothing to prompt.
+pub trait ApprovalSink: Send + Sync {
+    fn request(&self, action: &str, target: &str) -> Result<ApprovalDecision, AgentError>;
+}
+
 /// Shared, session-scoped state for the filesystem/exec tools: which files have
 /// been read (read-first enforcement) and the write/exec permission grants.
 pub struct ToolSession {
@@ -193,6 +210,8 @@ pub struct ToolSession {
     write_perm: Mutex<Permission>,
     exec_perm: Mutex<Permission>,
     github_perm: Mutex<Permission>,
+    /// When set, permission questions go here instead of the terminal.
+    approver: Option<Arc<dyn ApprovalSink>>,
 }
 
 impl Default for ToolSession {
@@ -202,6 +221,7 @@ impl Default for ToolSession {
             write_perm: Mutex::new(Permission::Ask),
             exec_perm: Mutex::new(Permission::Ask),
             github_perm: Mutex::new(Permission::Ask),
+            approver: None,
         }
     }
 }
@@ -209,6 +229,12 @@ impl Default for ToolSession {
 impl ToolSession {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A session whose permission questions are answered by `approver` rather
+    /// than by prompting on stdin.
+    pub fn with_approver(approver: Arc<dyn ApprovalSink>) -> Self {
+        Self { approver: Some(approver), ..Self::default() }
     }
 
     /// Canonicalize a path if possible, else fall back to the absolute form, so
@@ -240,6 +266,23 @@ impl ToolSession {
     ) -> Result<(), AgentError> {
         if matches!(slot.lock().map(|p| *p), Ok(Permission::AllowAll)) {
             return Ok(());
+        }
+
+        // A driving client is authoritative when one is attached, so it is asked
+        // ahead of the env escape hatch and the terminal prompt.
+        if let Some(approver) = &self.approver {
+            return match approver.request(action, target)? {
+                ApprovalDecision::Allow => Ok(()),
+                ApprovalDecision::AllowAll => {
+                    if let Ok(mut p) = slot.lock() {
+                        *p = Permission::AllowAll;
+                    }
+                    Ok(())
+                }
+                ApprovalDecision::Deny => Err(AgentError::InternalError(format!(
+                    "{action} '{target}' denied by client"
+                ))),
+            };
         }
 
         // Non-interactive escape hatch (CI/tests): KESSEL_AUTO_APPROVE=1.
@@ -315,7 +358,22 @@ pub fn create_default_registry(
     skill_registry: Arc<SkillRegistry>,
     situation: Arc<SituationMessages>,
 ) -> ToolRegistry {
-    let session = Arc::new(ToolSession::new());
+    create_default_registry_with_session(
+        working_dir,
+        skill_registry,
+        situation,
+        Arc::new(ToolSession::new()),
+    )
+}
+
+/// Create the default registry over a caller-supplied session, so the caller can
+/// control where permission questions are answered (see [`ToolSession::with_approver`]).
+pub fn create_default_registry_with_session(
+    working_dir: PathBuf,
+    skill_registry: Arc<SkillRegistry>,
+    situation: Arc<SituationMessages>,
+    session: Arc<ToolSession>,
+) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(ReadTool::new(working_dir.clone(), session.clone())));
     registry.register(Box::new(GlobTool::new(working_dir.clone())));

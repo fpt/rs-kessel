@@ -4,6 +4,23 @@ use crate::AgentError;
 
 const DEFAULT_MAX_ITERATIONS: u32 = 10;
 
+/// Something that happened partway through a turn, reported as it occurs.
+///
+/// A caller driving kessel remotely (the app-server) relays these so its client
+/// sees progress instead of silence during a long multi-tool turn.
+pub enum ReactEvent<'a> {
+    /// The model asked to call a tool.
+    ToolCall { name: &'a str, arguments: &'a serde_json::Value },
+    /// A tool returned. `text` is the result fed back to the model.
+    ToolResult { name: &'a str, text: &'a str },
+}
+
+/// Notified as a turn progresses. Called on the turn's own thread, so an
+/// implementation that blocks stalls the turn.
+pub trait ReactObserver {
+    fn on_event(&self, event: ReactEvent<'_>);
+}
+
 /// Run a ReAct (Reason+Act) loop: call LLM with tools, execute tool calls, repeat until text response.
 ///
 /// Returns the final text response, optional reasoning, and accumulated token usage.
@@ -13,9 +30,26 @@ pub fn run(
     tools: &dyn ToolAccess,
     max_iterations: Option<u32>,
 ) -> Result<(String, Option<String>, TokenUsage), AgentError> {
+    run_observed(client, messages, tools, max_iterations, None)
+}
+
+/// As [`run`], reporting each step to `observer` as it happens.
+pub fn run_observed(
+    client: &dyn LlmProvider,
+    messages: &mut Vec<ChatMessage>,
+    tools: &dyn ToolAccess,
+    max_iterations: Option<u32>,
+    observer: Option<&dyn ReactObserver>,
+) -> Result<(String, Option<String>, TokenUsage), AgentError> {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
     let tool_defs = tools.get_definitions();
     let mut total_usage = TokenUsage::default();
+
+    let emit = |event: ReactEvent<'_>| {
+        if let Some(obs) = observer {
+            obs.on_event(event);
+        }
+    };
 
     for iteration in 0..max_iter {
         tracing::info!("ReAct iteration {}/{}", iteration + 1, max_iter);
@@ -50,6 +84,8 @@ pub fn run(
 
                 // Execute each tool call and add results
                 for call in &calls {
+                    emit(ReactEvent::ToolCall { name: &call.name, arguments: &call.arguments });
+
                     let result = execute_tool_call(tools, call);
 
                     tracing::info!(
@@ -59,6 +95,7 @@ pub fn run(
                         result.text.len(),
                         result.images.len(),
                     );
+                    emit(ReactEvent::ToolResult { name: &call.name, text: &result.text });
 
                     if result.images.is_empty() {
                         messages.push(ChatMessage::tool_result(
