@@ -1,3 +1,4 @@
+pub mod appserver;
 pub mod capture;
 pub mod event_router;
 pub mod github;

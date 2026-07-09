@@ -34,8 +34,9 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `lib/src/state_capsule.rs` | State capsule for context injection |
 | `lib/src/state_updater.rs` | Rule-based state extraction from responses |
 | `lib/src/harmony.rs` | Harmony template parser (for gpt-oss models) |
+| `lib/src/appserver/` | JSON-RPC app-server: exposes the agent as a whole-turn backend (see below) |
 | `lib/src/agent.udl` | UniFFI interface definition |
-| `app/src/main.rs` | Standalone Rust CLI (for testing without Swift) |
+| `app/src/main.rs` | Standalone Rust CLI (REPL + `app-server` subcommand) |
 
 ### Swift Packages (`swift/Sources/`)
 
@@ -145,6 +146,9 @@ cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 # Local model standalone (Rust only, no Swift)
 MODEL_PATH=../models/Qwen3-8B-Q4_K_M.gguf cargo run -p kessel-cli
+
+# As a whole-turn backend for another agent (see "App-server mode")
+OPENAI_API_KEY=sk-... cargo run -p kessel-cli -- app-server
 ```
 
 ## Windows CLI (`win/`)
@@ -191,6 +195,52 @@ win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe --config configs/default
 - `win/KesselCli/AppConfig.cs` — YAML loader (YamlDotNet) for the same `configs/*.yaml` schema; API key falls back to `OPENAI_API_KEY`
 - `win/vendor/kessel_core.cs` — generated bindings (gitignored; namespace `uniffi.kessel_core`, `DllImport("uniffi_kessel_core")`)
 - No watcher integration yet.
+
+## App-server mode (`lib/src/appserver/`)
+
+`kessel-cli app-server` exposes the agent as a **whole-turn backend** over
+line-delimited JSON-RPC 2.0 on stdio: a driving client hands kessel an entire
+conversation turn and takes back the final text, while kessel runs its own ReAct
+loop, tools, and MCP connections inside that turn.
+
+It speaks a **subset of the codex app-server protocol**, so a client that already
+drives `codex app-server` can drive kessel by swapping the binary. This is how
+[klein](../klein-cli) consumes it: `llm.backend: "kessel"` in klein's
+`settings.json`, served by `internal/agentserver` — the same runner it uses for
+codex.
+
+```bash
+OPENAI_API_KEY=sk-... kessel-cli app-server   # or MODEL_PATH=/path/to.gguf
+```
+
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `initialize` | in | capability negotiation (`experimentalApi`) |
+| `account/read` | in | readiness probe; kessel reports no auth requirement |
+| `thread/start` | in | create a thread (an LLM provider + tool registry + history) |
+| `turn/start` | in | run one turn, block until it completes |
+| `item/tool/call` | **out** | invoke a client-provided `dynamicTools` tool |
+| `item/{commandExecution,fileChange}/requestApproval` | **out** | ask the client to permit a mutation |
+| `item/completed`, `turn/completed`, `turn/failed` | **out** | progress notifications |
+
+Key points:
+
+- **The transport is bidirectional** (`rpc.rs`), unlike `mcp_server.rs`'s strict
+  request→response loop. Inbound requests are dispatched on their own threads so
+  a long `turn/start` can originate tool-call requests while the reader keeps
+  running — both sides block on each other otherwise. `serve()` joins in-flight
+  handlers before returning, and cancels pending outbound requests first so a
+  handler awaiting a hung-up client cannot deadlock the join.
+- **Client tools** (`thread/start`'s `dynamicTools`) become `ToolHandler`s that
+  call back over the connection — the mirror image of `McpRemoteTool`, which
+  wraps a tool living in a subprocess *we* spawned.
+- **Approvals**: there is no TTY, so `ToolSession`'s terminal prompt would fail
+  closed on every `write`/`edit`/`bash`. `ApprovalSink` redirects the question to
+  the client. `approvalPolicy: "never"` installs `AutoApproveSink` instead.
+  Kessel has **no sandbox**, so this is the only gate on mutations.
+- **Logs go to stderr** in this mode — stdout carries the JSON-RPC stream.
+- `react::run_observed` reports each tool call/result so progress notifications
+  can be emitted mid-turn rather than going silent for minutes.
 
 ## Claude Code Watcher
 

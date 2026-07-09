@@ -1,4 +1,5 @@
-//! Simple text-mode REPL for testing tool calling without Swift/STT/TTS.
+//! Simple text-mode REPL for testing tool calling without Swift/STT/TTS,
+//! plus the `app-server` mode that exposes the agent over JSON-RPC.
 //!
 //! Usage:
 //!   # With local model (no server needed):
@@ -9,44 +10,99 @@
 //!
 //!   # One-shot mode (for integration tests):
 //!   echo "Read the file configs/default.yaml" | MODEL_PATH=... cargo run -p kessel-cli
+//!
+//!   # As a whole-turn backend for another agent (e.g. klein):
+//!   OPENAI_API_KEY=sk-... kessel-cli app-server
 
 use kessel_core::{ChatMessage, create_provider};
 use kessel_core::tool::ToolAccess;
 
 use std::io::{self, BufRead};
 
+/// Environment-derived settings shared by both modes.
+struct EnvConfig {
+    model_path: Option<String>,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    working_dir: String,
+    max_tokens: u32,
+    max_react_iterations: u32,
+    temperature: Option<f32>,
+    reasoning_effort: Option<String>,
+}
+
+impl EnvConfig {
+    fn from_env() -> Self {
+        Self {
+            model_path: std::env::var("MODEL_PATH").ok(),
+            base_url: std::env::var("LLM_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
+            model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-5.4-mini".to_string()),
+            api_key: std::env::var("OPENAI_API_KEY").ok(),
+            working_dir: std::env::var("WORKING_DIR")
+                .unwrap_or_else(|_| std::env::current_dir().unwrap().to_string_lossy().to_string()),
+            max_tokens: std::env::var("MAX_TOKENS").ok().and_then(|s| s.parse().ok()).unwrap_or(2048),
+            max_react_iterations: std::env::var("MAX_REACT_ITERATIONS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
+            temperature: std::env::var("LLM_TEMPERATURE").ok().and_then(|s| s.parse().ok()),
+            reasoning_effort: std::env::var("REASONING_EFFORT").ok(),
+        }
+    }
+}
+
 fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let app_server = std::env::args().nth(1).as_deref() == Some("app-server");
 
-    // Configuration from environment
-    let model_path = std::env::var("MODEL_PATH").ok();
-    let base_url = std::env::var("LLM_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let model = std::env::var("LLM_MODEL")
-        .unwrap_or_else(|_| "gpt-5.4-mini".to_string());
-    let api_key = std::env::var("OPENAI_API_KEY").ok();
-    let working_dir = std::env::var("WORKING_DIR")
-        .unwrap_or_else(|_| std::env::current_dir().unwrap().to_string_lossy().to_string());
-    let max_tokens: u32 = std::env::var("MAX_TOKENS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2048);
-    let max_react_iterations: u32 = std::env::var("MAX_REACT_ITERATIONS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+    // In app-server mode stdout carries the JSON-RPC stream, so logs must not
+    // touch it. (The default fmt subscriber writes to stdout.)
+    let subscriber = tracing_subscriber::fmt().with_env_filter(
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+    );
+    if app_server {
+        subscriber.with_writer(io::stderr).init();
+    } else {
+        subscriber.init();
+    }
 
-    // Create provider (no temperature for models like gpt-5.4-mini that don't support it)
-    let temperature: Option<f32> = std::env::var("LLM_TEMPERATURE")
-        .ok()
-        .and_then(|s| s.parse().ok());
-    let reasoning_effort = std::env::var("REASONING_EFFORT").ok();
+    let config = EnvConfig::from_env();
+    if app_server {
+        run_app_server(config);
+    } else {
+        run_repl(config);
+    }
+}
+
+/// Serve the agent over JSON-RPC on stdio until the client disconnects.
+fn run_app_server(config: EnvConfig) {
+    kessel_core::appserver::run_stdio(kessel_core::appserver::ServerConfig {
+        model_path: config.model_path,
+        base_url: config.base_url,
+        model: config.model,
+        api_key: config.api_key,
+        temperature: config.temperature,
+        max_tokens: config.max_tokens,
+        reasoning_effort: config.reasoning_effort,
+        max_iterations: Some(config.max_react_iterations),
+    });
+}
+
+fn run_repl(config: EnvConfig) {
+    let EnvConfig {
+        model_path,
+        base_url,
+        model,
+        api_key,
+        working_dir,
+        max_tokens,
+        max_react_iterations,
+        temperature,
+        reasoning_effort,
+    } = config;
+
     let client = create_provider(
         model_path.clone(),
         base_url.clone(),
