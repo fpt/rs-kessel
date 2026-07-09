@@ -89,6 +89,38 @@ pub struct McpServerConfig {
     pub url: Option<String>,
 }
 
+/// Connect each configured MCP server and register its tools into `registry`.
+/// A `url` selects the Streamable HTTP transport; otherwise `command`/`args` are
+/// spawned (stdio). A server that fails to connect is logged and skipped, so one
+/// bad entry does not take down the agent.
+///
+/// Shared by `agent_new` and the app-server's `thread/start`, so both transports
+/// stay reachable from every frontend.
+pub(crate) fn register_mcp_servers(registry: &mut tool::ToolRegistry, servers: &[McpServerConfig]) {
+    for server_cfg in servers {
+        let http_url = server_cfg.url.as_deref().filter(|u| !u.is_empty());
+        let result = match http_url {
+            Some(url) => mcp_client_http::McpHttpClient::connect(url).map(|c| c.tool_handlers()),
+            None => {
+                let args_ref: Vec<&str> = server_cfg.args.iter().map(|s| s.as_str()).collect();
+                mcp_client::McpClient::connect(&server_cfg.command, &args_ref)
+                    .map(|c| c.tool_handlers())
+            }
+        };
+        match result {
+            Ok(handlers) => {
+                for handler in handlers {
+                    registry.register(handler);
+                }
+            }
+            Err(e) => {
+                let target = http_url.unwrap_or(server_cfg.command.as_str());
+                tracing::warn!("Failed to connect MCP server '{}': {}", target, e);
+            }
+        }
+    }
+}
+
 /// Configuration for the agent
 pub struct AgentConfig {
     pub model_path: Option<String>,
@@ -234,30 +266,7 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         situation.clone(),
     );
 
-    // Connect to configured MCP servers and register their tools. A `url`
-    // selects the Streamable HTTP transport; otherwise spawn command/args (stdio).
-    for server_cfg in &config.mcp_servers {
-        let http_url = server_cfg.url.as_deref().filter(|u| !u.is_empty());
-        let result = match http_url {
-            Some(url) => mcp_client_http::McpHttpClient::connect(url).map(|c| c.tool_handlers()),
-            None => {
-                let args_ref: Vec<&str> = server_cfg.args.iter().map(|s| s.as_str()).collect();
-                mcp_client::McpClient::connect(&server_cfg.command, &args_ref)
-                    .map(|c| c.tool_handlers())
-            }
-        };
-        match result {
-            Ok(handlers) => {
-                for handler in handlers {
-                    tool_registry.register(handler);
-                }
-            }
-            Err(e) => {
-                let target = http_url.unwrap_or(server_cfg.command.as_str());
-                tracing::warn!("Failed to connect MCP server '{}': {}", target, e);
-            }
-        }
-    }
+    register_mcp_servers(&mut tool_registry, &config.mcp_servers);
 
     // Register capture tools (shared request channel, separate result channels)
     tool_registry.register(Box::new(capture::CaptureScreenTool::new(

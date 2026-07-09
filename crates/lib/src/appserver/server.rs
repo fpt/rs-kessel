@@ -216,17 +216,7 @@ impl AppServer {
         );
 
         // External MCP servers the client asked us to reach.
-        for (name, cfg) in params.mcp_servers() {
-            let args: Vec<&str> = cfg.args.iter().map(String::as_str).collect();
-            match crate::mcp_client::McpClient::connect(&cfg.command, &args) {
-                Ok(client) => {
-                    for handler in client.tool_handlers() {
-                        registry.register(handler);
-                    }
-                }
-                Err(e) => tracing::warn!("failed to connect MCP server '{}': {}", name, e),
-            }
-        }
+        crate::register_mcp_servers(&mut registry, &params.mcp_servers());
 
         // The client's own tools, dispatched back over this connection. They read
         // the live turn id out of the shared cell that `run_turn` sets.
@@ -380,10 +370,10 @@ struct ThreadStartParams {
 }
 
 impl ThreadStartParams {
-    /// Pull `config.mcp_servers` out of codex's free-form config table. Only
-    /// stdio servers (command/args) are usable — kessel's MCP client spawns
-    /// subprocesses and has no URL transport.
-    fn mcp_servers(&self) -> Vec<(String, McpServerConfig)> {
+    /// Pull `config.mcp_servers` out of codex's free-form config table. An entry
+    /// carries either `url` (Streamable HTTP) or `command`/`args` (stdio); an
+    /// entry with neither is skipped.
+    fn mcp_servers(&self) -> Vec<McpServerConfig> {
         let Some(servers) = self
             .config
             .as_ref()
@@ -394,18 +384,23 @@ impl ThreadStartParams {
         };
 
         servers
-            .iter()
-            .filter_map(|(name, entry)| {
-                let command = entry.get("command").and_then(Value::as_str)?;
+            .values()
+            .filter_map(|entry| {
+                let url = entry
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .filter(|u| !u.is_empty())
+                    .map(str::to_string);
+                let command = entry.get("command").and_then(Value::as_str).unwrap_or("");
+                if url.is_none() && command.is_empty() {
+                    return None;
+                }
                 let args = entry
                     .get("args")
                     .and_then(Value::as_array)
                     .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                     .unwrap_or_default();
-                Some((
-                    name.clone(),
-                    McpServerConfig { command: command.to_string(), args },
-                ))
+                Some(McpServerConfig { command: command.to_string(), args, url })
             })
             .collect()
     }
@@ -483,22 +478,47 @@ mod tests {
     }
 
     #[test]
-    fn extracts_stdio_mcp_servers_and_skips_url_servers() {
+    fn extracts_stdio_mcp_servers() {
+        let params: ThreadStartParams = serde_json::from_value(json!({
+            "config": { "mcp_servers": { "local": { "command": "srv", "args": ["--a"] } } },
+        }))
+        .unwrap();
+
+        let servers = params.mcp_servers();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].command, "srv");
+        assert_eq!(servers[0].args, vec!["--a"]);
+        assert!(servers[0].url.is_none(), "stdio server must not carry a url");
+    }
+
+    #[test]
+    fn extracts_http_mcp_servers() {
+        let params: ThreadStartParams = serde_json::from_value(json!({
+            "config": { "mcp_servers": { "remote": { "url": "https://example.com/mcp" } } },
+        }))
+        .unwrap();
+
+        let servers = params.mcp_servers();
+        assert_eq!(servers.len(), 1, "url servers reach the Streamable HTTP transport");
+        assert_eq!(servers[0].url.as_deref(), Some("https://example.com/mcp"));
+    }
+
+    #[test]
+    fn skips_mcp_entries_with_neither_command_nor_url() {
         let params: ThreadStartParams = serde_json::from_value(json!({
             "config": {
                 "mcp_servers": {
-                    "local": { "command": "srv", "args": ["--a"] },
-                    "remote": { "url": "https://example.com" },
+                    "broken": { "env": { "A": "1" } },
+                    "empty_url": { "url": "" },
+                    "good": { "command": "srv" },
                 },
             },
         }))
         .unwrap();
 
         let servers = params.mcp_servers();
-        assert_eq!(servers.len(), 1, "url server should be skipped");
-        assert_eq!(servers[0].0, "local");
-        assert_eq!(servers[0].1.command, "srv");
-        assert_eq!(servers[0].1.args, vec!["--a"]);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].command, "srv");
     }
 
     #[test]
