@@ -12,8 +12,13 @@ public struct Config: Codable {
     public let ambient: AmbientConfig?
 
     public struct McpServer: Codable {
-        public let command: String
-        public let args: [String]
+        /// stdio transport: the binary to spawn. Absent for a URL (HTTP) server.
+        public let command: String?
+        public let args: [String]?
+        /// If set, connect over Streamable HTTP to this URL instead of spawning
+        /// `command`. Absent means stdio. Mirrors the Rust `McpServerConfig.url`
+        /// and the Windows frontend.
+        public let url: String?
     }
 
     /// Ambient `/loop` mode: periodic background observation of desktop activity.
