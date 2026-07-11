@@ -1341,12 +1341,14 @@ public func FfiConverterTypeGoalStatus_lower(_ value: GoalStatus) -> RustBuffer 
 public struct McpServerConfig {
     public var command: String
     public var args: [String]
+    public var url: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(command: String, args: [String]) {
+    public init(command: String, args: [String], url: String?) {
         self.command = command
         self.args = args
+        self.url = url
     }
 }
 
@@ -1360,12 +1362,16 @@ extension McpServerConfig: Equatable, Hashable {
         if lhs.args != rhs.args {
             return false
         }
+        if lhs.url != rhs.url {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(command)
         hasher.combine(args)
+        hasher.combine(url)
     }
 }
 
@@ -1378,13 +1384,15 @@ public struct FfiConverterTypeMcpServerConfig: FfiConverterRustBuffer {
         return
             try McpServerConfig(
                 command: FfiConverterString.read(from: &buf), 
-                args: FfiConverterSequenceString.read(from: &buf)
+                args: FfiConverterSequenceString.read(from: &buf), 
+                url: FfiConverterOptionString.read(from: &buf)
         )
     }
 
     public static func write(_ value: McpServerConfig, into buf: inout [UInt8]) {
         FfiConverterString.write(value.command, into: &buf)
         FfiConverterSequenceString.write(value.args, into: &buf)
+        FfiConverterOptionString.write(value.url, into: &buf)
     }
 }
 
