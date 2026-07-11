@@ -25,13 +25,20 @@ cargo run --bin uniffi-bindgen-swift -- --headers $LIBRARY_PATH $OUT_DIR
 cargo run --bin uniffi-bindgen-swift -- --modulemap $LIBRARY_PATH $OUT_DIR
 
 echo "✅ UniFFI bindings generated!"
-echo ""
-echo "Generated files in vendor/uniffi-swift/:"
-ls -lh ../../vendor/uniffi-swift/
 
-echo ""
-echo "📝 Next steps:"
-echo "  1. Review generated files in vendor/uniffi-swift/"
-echo "  2. Copy kessel_core.swift to swift/Sources/AgentBridge/"
-echo "  3. Update Package.swift to link the dylib"
-echo "  4. Remove the mock implementation from AgentFFI.swift"
+# Copy the generated outputs into the tracked Swift tree. `vendor/uniffi-swift/`
+# is gitignored, so the build must NOT depend on it — the FFI header is committed
+# self-contained under AgentBridgeFFI, and the Swift bindings under AgentBridge.
+# Doing the copies here (rather than as a manual "next step") keeps a clean clone
+# buildable and stops the committed bindings from silently going stale after a
+# .udl change — which is exactly what broke the McpServerConfig.url field.
+cd ..
+echo "📋 Copying generated bindings into the tracked Swift tree..."
+cp vendor/uniffi-swift/kessel_core.swift   swift/Sources/AgentBridge/kessel_core.swift
+cp vendor/uniffi-swift/kessel_coreFFI.h    swift/Sources/AgentBridgeFFI/kessel_coreFFI.h
+cp vendor/uniffi-swift/kessel_coreFFI.h    swift/Sources/AgentBridge/include/kessel_coreFFI.h
+
+echo "✅ Bindings copied. Review & commit:"
+echo "     swift/Sources/AgentBridge/kessel_core.swift"
+echo "     swift/Sources/AgentBridgeFFI/kessel_coreFFI.h"
+echo "     swift/Sources/AgentBridge/include/kessel_coreFFI.h"

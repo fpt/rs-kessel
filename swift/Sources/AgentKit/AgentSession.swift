@@ -64,7 +64,7 @@ public class AgentSession: @unchecked Sendable {
         }
 
         let mcpServers = (config.mcpServers ?? []).map {
-            McpServerConfig(command: $0.command, args: $0.args)
+            McpServerConfig(command: $0.command ?? "", args: $0.args ?? [], url: $0.url)
         }
         let contextWindow = config.llm.contextWindow.map { UInt32($0) } ?? 128_000
         let agentConfig = AgentConfig(
