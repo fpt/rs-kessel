@@ -34,7 +34,7 @@ schemars = { version = "0.8", features = ["derive"] }
 glob = "0.3"
 regex = "1"
 tiny_http.workspace = true
-llama-cpp-2 = { version = "0.1.150", optional = true, default-features = false, features = ["common"] }
+llama-cpp-2 = { version = "0.1.151", optional = true, default-features = false, features = ["common"] }
 # Render GGUF chat templates (jinja) for the local provider — llama-cpp-2 0.1.150
 # dropped its jinja-capable chat layer, so we render the embedded template here.
 minijinja = { version = "2", optional = true, features = ["loop_controls"] }
