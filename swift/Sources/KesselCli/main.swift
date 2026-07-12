@@ -78,10 +78,14 @@ for (index, arg) in arguments.enumerated() {
 }
 
 func printHelp() {
+    // Derived from argv[0]: this is installed as `kessel`, but still runs as
+    // `kessel-cli` in-repo via `swift run kessel-cli`. (The Rust core owns the
+    // installed `kessel-cli` name — it is the one with the `app-server` mode.)
+    let name = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "kessel"
     print("""
     Kessel - Local Voice Assistant
 
-    Usage: kessel-cli [OPTIONS]
+    Usage: \(name) [OPTIONS]
 
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
@@ -89,9 +93,9 @@ func printHelp() {
         --help, -h         Show this help message
 
     Examples:
-        kessel-cli
-        kessel-cli --config custom.yaml
-        kessel-cli --verbose
+        \(name)
+        \(name) --config custom.yaml
+        \(name) --verbose
     """)
 }
 

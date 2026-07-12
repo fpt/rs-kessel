@@ -149,6 +149,21 @@ MODEL_PATH=hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf cargo run -p kessel
 OPENAI_API_KEY=sk-... cargo run -p kessel-cli -- app-server
 ```
 
+### `make install` — two binaries
+
+`make install` installs **both** builds into `$PREFIX/bin` (default `~/bin`).
+They are not interchangeable:
+
+| Installed as | Built from | What it is |
+|--------------|-----------|------------|
+| `kessel-cli` | `crates/` (Rust) | Text REPL **plus `app-server`** — the JSON-RPC whole-turn backend. Statically linked, so it runs from anywhere. |
+| `kessel` | `swift/` | The voice app: TTS/STT and the Claude Code watcher. Links `libkessel_core.dylib` by **absolute path** into this repo, so the repo must stay put. |
+
+Only `kessel-cli` understands `app-server`, and [klein](../klein-cli) spawns
+`kessel-cli app-server` by default (`kessel_path` in its settings). The Swift
+binary silently ignores an `app-server` argument and boots the voice agent
+instead, so installing it under that name breaks klein's kessel backend.
+
 ## Windows CLI (`win/`)
 
 A C# console frontend (text REPL) that consumes the same Rust `kessel_core`
