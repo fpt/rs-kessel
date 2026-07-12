@@ -68,10 +68,10 @@ YAML configs in `configs/`. System prompt supports `{language}` template variabl
 
 ```yaml
 llm:
-  modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"  # For local provider (local path), OR
+  modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # For local provider (local path), OR
   # modelPath: "hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf"  # auto-download
-  modelRepo: "Qwen/Qwen3-8B-GGUF"              # HuggingFace repo (Swift auto-download)
-  modelFile: "Qwen3-8B-Q4_K_M.gguf"            # File in repo
+  modelRepo: "unsloth/Qwen3.5-9B-GGUF"              # HuggingFace repo (Swift auto-download)
+  modelFile: "Qwen3.5-9B-Q4_K_M.gguf"            # File in repo
   baseURL: "https://api.openai.com/v1"          # For OpenAI provider
   model: "gpt-5.6-luna"
   apiKey: ""                                     # Or OPENAI_API_KEY env var
@@ -145,7 +145,7 @@ cd swift && swift run kessel-cli --config ../configs/openai.yaml
 cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 # Local model standalone (Rust only, no Swift)
-MODEL_PATH=../models/Qwen3-8B-Q4_K_M.gguf cargo run -p kessel-cli
+MODEL_PATH=../models/Qwen3.5-9B-Q4_K_M.gguf cargo run -p kessel-cli
 
 # As a whole-turn backend for another agent (see "App-server mode")
 OPENAI_API_KEY=sk-... cargo run -p kessel-cli -- app-server
@@ -262,7 +262,7 @@ kessel-cli/
 │   ├── default.yaml            # Default (OpenAI, English)
 │   ├── openai.yaml             # OpenAI with watcher
 │   ├── openai-ja.yaml          # OpenAI, Japanese
-│   ├── qwen3.yaml              # Local Qwen3-8B
+│   ├── qwen3.yaml              # Local Qwen3.5-9B
 │   └── system-prompt.md        # System prompt template ({language})
 ├── skills/                     # Project-local skills
 │   └── claude-activity-report/SKILL.md
@@ -295,4 +295,4 @@ kessel-cli/
 
 **UniFFI checksum mismatch**: Regenerate bindings and copy: `bash scripts/gen_uniffi.sh && cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/`
 
-**Local model OOM**: Use a smaller quantization or model. Qwen3-8B Q4_K_M (5GB) works on M3 16GB.
+**Local model OOM**: Use a smaller quantization or model. Qwen3.5-9B Q4_K_M is ~5.7GB; the repo also ships smaller quants (Q3_K_M, IQ4_XS).

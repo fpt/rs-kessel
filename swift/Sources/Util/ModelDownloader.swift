@@ -7,8 +7,8 @@ public struct ModelDownloader {
     /// Ensure a model file exists at `path`, downloading from HuggingFace if needed.
     /// - Parameters:
     ///   - path: Local file path for the model
-    ///   - repo: HuggingFace repo (e.g. "Qwen/Qwen3-8B-GGUF")
-    ///   - file: Filename in the repo (e.g. "Qwen3-8B-Q4_K_M.gguf")
+    ///   - repo: HuggingFace repo (e.g. "unsloth/Qwen3.5-9B-GGUF")
+    ///   - file: Filename in the repo (e.g. "Qwen3.5-9B-Q4_K_M.gguf")
     /// - Returns: The resolved path (same as input)
     public static func ensureModel(path: String, repo: String, file: String) async throws -> String {
         if FileManager.default.fileExists(atPath: path) {

@@ -1,9 +1,9 @@
 llm:
-  modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"
-  modelRepo: "Qwen/Qwen3-8B-GGUF"
-  modelFile: "Qwen3-8B-Q4_K_M.gguf"
+  modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"
+  modelRepo: "unsloth/Qwen3.5-9B-GGUF"
+  modelFile: "Qwen3.5-9B-Q4_K_M.gguf"
   baseURL: ""
-  model: "qwen3:8b"
+  model: "qwen3.5:9b"
   harmonyTemplate: false
   temperature: 0.7
   maxTokens: 2048

@@ -92,7 +92,7 @@ run-lfm2:
 	@cd swift && swift run kessel-cli --config ../configs/lfm2.yaml
 
 run-qwen3:
-	@echo "Running Kessel with Qwen3 (local)..."
+	@echo "Running Kessel with Qwen3.5 (local)..."
 	@cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 run-openai-ja:
