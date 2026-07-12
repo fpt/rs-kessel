@@ -1,4 +1,4 @@
-.PHONY: help build install uninstall run run-text run-openai run-openai-text run-ministral3 build-win run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
+.PHONY: help build install uninstall run run-text run-openai run-openai-text build-win run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
 
 # Install location (override with: make install PREFIX=/usr/local)
 PREFIX ?= $(HOME)
@@ -15,7 +15,6 @@ help:
 	@echo "  make run-text        - Run in Text Mode (local)"
 	@echo "  make run-openai      - Run with OpenAI in voice mode (set OPENAI_API_KEY)"
 	@echo "  make run-openai-text - Run with OpenAI in text mode (set OPENAI_API_KEY)"
-	@echo "  make run-ministral3  - Run with local Ministral-3B (auto-downloads model)"
 	@echo "  make run-verbose     - Run in Voice Mode (verbose)"
 	@echo "  make run-text-verbose- Run in Text Mode (verbose)"
 	@echo "  make build-win       - Build the Windows C# CLI (Rust cdylib + .NET)"
