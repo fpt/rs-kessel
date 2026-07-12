@@ -32,6 +32,10 @@ stt:
   locale: "en-US"                            # BCP47 locale for transcription
   censor: false                              # Enable etiquette replacements
 
+mcpServers:
+  - command: "godevmcp"
+    args: ["serve"]
+
 watcher:
   enabled: true                              # Watch Claude Code activity
   debounceInterval: 5.0                      # Seconds to batch events before summarizing
