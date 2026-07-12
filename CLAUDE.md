@@ -73,7 +73,7 @@ llm:
   modelRepo: "Qwen/Qwen3-8B-GGUF"              # HuggingFace repo (Swift auto-download)
   modelFile: "Qwen3-8B-Q4_K_M.gguf"            # File in repo
   baseURL: "https://api.openai.com/v1"          # For OpenAI provider
-  model: "gpt-5.4-mini"
+  model: "gpt-5.6-luna"
   apiKey: ""                                     # Or OPENAI_API_KEY env var
   harmonyTemplate: false
   temperature: 0.7

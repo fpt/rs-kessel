@@ -148,7 +148,7 @@ integration-test:
 	./scripts/test_tools.sh
 
 # CLI capability matrix (see testsuite/README.md). Backends: gemma4, gpt-oss
-# (local llama.cpp) and gpt-5.4-mini (cloud; needs OPENAI_API_KEY or .env).
+# (local llama.cpp) and gpt-5.6-luna (cloud; needs OPENAI_API_KEY or .env).
 # Filter with TESTS=... / BACKENDS=...; override the binary with CLI=...
 testsuite:
 	@bash testsuite/matrix_runner.sh

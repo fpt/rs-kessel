@@ -38,7 +38,7 @@ impl EnvConfig {
             model_path: std::env::var("MODEL_PATH").ok(),
             base_url: std::env::var("LLM_BASE_URL")
                 .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
-            model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-5.4-mini".to_string()),
+            model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-5.6-luna".to_string()),
             api_key: std::env::var("OPENAI_API_KEY").ok(),
             working_dir: std::env::var("WORKING_DIR")
                 .unwrap_or_else(|_| std::env::current_dir().unwrap().to_string_lossy().to_string()),

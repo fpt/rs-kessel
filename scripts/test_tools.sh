@@ -109,7 +109,7 @@ if [ -n "${MODEL_PATH:-}" ]; then
     fi
 elif [ -n "${OPENAI_API_KEY:-}" ]; then
     echo "  Using OpenAI API"
-    export LLM_MODEL="${LLM_MODEL:-gpt-5-mini}"
+    export LLM_MODEL="${LLM_MODEL:-gpt-5.6-luna}"
 else
     echo "  Using local llama.cpp server"
     export LLM_BASE_URL="${LLM_BASE_URL:-http://127.0.0.1:8080/v1}"

@@ -149,7 +149,7 @@ make run-text
 ```yaml
 llm:
   baseURL: "https://api.openai.com/v1"
-  model: "gpt-4"
+  model: "gpt-5.6-luna"
   apiKey: ""  # Leave empty - uses OPENAI_API_KEY env var
   harmonyTemplate: false
   temperature: 0.7
