@@ -51,20 +51,30 @@ build:
 	@cd swift && swift build -c release
 	@echo "Build complete!"
 
-# Install the release binary to $(BINDIR). The executable links
-# libkessel_core.dylib by absolute path inside this repo's
-# crates/target/release, so keep the repo in place after installing (and re-run
-# `make install` after pulling/rebuilding so $(BINDIR) tracks the latest code).
+# Install both binaries to $(BINDIR):
+#
+#   kessel-cli  the Rust core — text REPL plus `app-server` (the JSON-RPC
+#               whole-turn backend klein drives). Statically linked, so it is
+#               self-contained and does not care where this repo lives.
+#   kessel      the Swift app — voice (TTS/STT) + the Claude Code watcher. It
+#               links libkessel_core.dylib by ABSOLUTE path into this repo's
+#               crates/target/release, so this repo must stay put for it to run.
+#
+# The two names are not interchangeable: only kessel-cli understands
+# `app-server`, and klein's kessel backend spawns `kessel-cli app-server` by
+# default. Re-run `make install` after pulling so $(BINDIR) tracks the latest.
 install: build
 	@mkdir -p "$(BINDIR)"
-	@cp swift/.build/release/kessel-cli "$(BINDIR)/kessel-cli"
-	@echo "✅ Installed: $(BINDIR)/kessel-cli"
-	@echo "   Links dylib from: $(CURDIR)/crates/target/release (keep this repo in place)"
-	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "   ⚠️  $(BINDIR) is not on your PATH — add it to use 'kessel-cli' directly." ;; esac
+	@cp crates/target/release/kessel-cli "$(BINDIR)/kessel-cli"
+	@cp swift/.build/release/kessel-cli "$(BINDIR)/kessel"
+	@echo "✅ Installed:"
+	@echo "   $(BINDIR)/kessel-cli  — Rust core (REPL + app-server; used by klein). Self-contained."
+	@echo "   $(BINDIR)/kessel      — Swift voice app. Links dylib from $(CURDIR)/crates/target/release (keep this repo in place)."
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "   ⚠️  $(BINDIR) is not on your PATH — add it to use 'kessel' / 'kessel-cli' directly." ;; esac
 
 uninstall:
-	@rm -f "$(BINDIR)/kessel-cli"
-	@echo "Removed $(BINDIR)/kessel-cli"
+	@rm -f "$(BINDIR)/kessel-cli" "$(BINDIR)/kessel"
+	@echo "Removed $(BINDIR)/kessel-cli and $(BINDIR)/kessel"
 
 run:
 	@echo "Running Kessel in Default Mode..."
