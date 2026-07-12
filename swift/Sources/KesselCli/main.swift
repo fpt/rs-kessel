@@ -347,6 +347,10 @@ windowListPoller.cancel()
 capturePoller.cancel()
 
 // Skip C++ static destructors to avoid ggml Metal device assertion crash.
+// Flush first — _exit bypasses stdio flushing, which would drop buffered
+// stdout when it's a pipe/file (e.g. the testsuite capturing responses).
+fflush(stdout)
+fflush(stderr)
 _exit(0)
 
 // MARK: - Text Mode
@@ -489,6 +493,7 @@ func handleCommand(_ command: String) {
     case "/quit", "/exit":
         session.tts.stop()
         print("Goodbye!")
+        fflush(stdout)
         _exit(0)
     case "/help":
         printHelp()

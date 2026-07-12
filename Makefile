@@ -4,6 +4,13 @@
 PREFIX ?= $(HOME)
 BINDIR := $(PREFIX)/bin
 
+# Testsuite CLI. Defaults to the Rust kessel-cli via the yq->env adapter
+# (Swift-free, statically linked). Override with e.g.:
+#   make testsuite CLI=swift/.build/release/kessel-cli
+#   make testsuite CLI=win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
+RUST_TESTSUITE_CLI := $(CURDIR)/testsuite/rust_cli.sh
+CLI ?= $(RUST_TESTSUITE_CLI)
+
 help:
 	@echo "Kessel - Makefile"
 	@echo ""
@@ -26,8 +33,8 @@ help:
 	@echo "  make clean           - Clean build artifacts"
 	@echo "  make test            - Run tests"
 	@echo "  make integration-test- Run Rust ReAct tool-calling tests"
-	@echo "  make testsuite       - Run CLI capability matrix (all backends; see testsuite/)"
-	@echo "  make testsuite-local - Run matrix for local backends only (gemma4,gpt-oss)"
+	@echo "  make testsuite       - Run CLI capability matrix on the Rust CLI (all backends; CLI= to override)"
+	@echo "  make testsuite-local - Run matrix on the Rust CLI, local backends only (gemma4,gpt-oss)"
 	@echo "  make gen-uniffi      - Generate UniFFI Swift bindings"
 	@echo "  make install-deps    - Install development dependencies"
 	@echo "  make zip             - Create source archive (excludes models/build artifacts)"
@@ -167,10 +174,12 @@ integration-test:
 # (local llama.cpp) and gpt-5.6-luna (cloud; needs OPENAI_API_KEY or .env).
 # Filter with TESTS=... / BACKENDS=...; override the binary with CLI=...
 testsuite:
-	@bash testsuite/matrix_runner.sh
+	@if [ "$(CLI)" = "$(RUST_TESTSUITE_CLI)" ]; then cd crates && cargo build --release -p kessel-cli; fi
+	@CLI="$(CLI)" bash testsuite/matrix_runner.sh
 
 testsuite-local:
-	@BACKENDS="gemma4,gpt-oss" bash testsuite/matrix_runner.sh
+	@if [ "$(CLI)" = "$(RUST_TESTSUITE_CLI)" ]; then cd crates && cargo build --release -p kessel-cli; fi
+	@CLI="$(CLI)" BACKENDS="gemma4,gpt-oss" bash testsuite/matrix_runner.sh
 
 gen-uniffi:
 	@echo "🦀 Building Rust library..."

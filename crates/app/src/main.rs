@@ -220,7 +220,9 @@ fn run_repl(config: EnvConfig) {
                 if let Some(ref thinking) = reasoning {
                     eprintln!("\x1b[90m💭 {}\x1b[0m", thinking);
                 }
-                println!("{}", response);
+                // Prefix so consumers can find the reply (matches the Swift/Windows
+                // REPLs and testsuite/extract_response.sh's "Assistant:" contract).
+                println!("Assistant: {}", response);
                 if usage.total_tokens > 0 {
                     eprintln!(
                         "\x1b[90m📊 tokens: in={}, out={}, total={}\x1b[0m",
