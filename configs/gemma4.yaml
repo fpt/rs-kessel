@@ -13,8 +13,9 @@ llm:
   maxTokens: 2048
 
 agent:
-  # Gemma's chat template rejects a system role; llm_local.rs folds the system
-  # prompt into the first user message (see the system-role fold fallback).
+  # Gemma 4 does support a system role, and its template declares tools natively
+  # (`<|tool>` / `<|tool_call>`), which llm_local.rs renders and parses. See
+  # docs/GEMMA4.md.
   systemPromptPath: null
   maxTurns: 50
   language: "en"
