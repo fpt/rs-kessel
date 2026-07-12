@@ -133,6 +133,21 @@ impl LlamaLocalProvider {
         messages: &[ChatMessage],
         tools: Option<&[ToolDefinition]>,
     ) -> Result<String> {
+        // Gemma-4-style templates format tools natively (`<|tool>declaration:…`,
+        // `<|tool_call>`, `<|tool_response>`). Feed those templates structured
+        // tool inputs so the model sees tools in the exact form it was trained
+        // on. Fall back to the generic JSON-prose protocol if it doesn't render.
+        if let Some(tools) = tools {
+            if self.template_supports_native_tools() {
+                match self.render_native(messages, tools) {
+                    Ok(prompt) => return Ok(prompt),
+                    Err(e) => tracing::warn!(
+                        "native tool template render failed ({e}); using JSON-prose fallback"
+                    ),
+                }
+            }
+        }
+
         // (role, content) pairs using only system/user/assistant roles, which
         // every chat template supports (a "tool" role is not universal).
         let mut pairs: Vec<(&'static str, String)> =
@@ -169,17 +184,14 @@ impl LlamaLocalProvider {
         }
     }
 
-    /// Render the model's embedded jinja chat template with minijinja.
-    fn render_template(
-        &self,
-        pairs: &[(&'static str, String)],
-    ) -> std::result::Result<String, minijinja::Error> {
+    /// Build a minijinja environment with the model's chat template registered.
+    fn jinja_env(&self) -> std::result::Result<minijinja::Environment<'static>, minijinja::Error> {
         let src = self.template_src.as_deref().ok_or_else(|| {
             minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, "no chat template")
         })?;
 
         let mut env = minijinja::Environment::new();
-        // Support Python-ish str methods (.strip/.startswith/...) some templates use.
+        // Support Python-ish str methods (.strip/.startswith/.split/.get/...).
         env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
         // Templates call raise_exception(...) to reject unsupported inputs.
         env.add_function(
@@ -194,7 +206,15 @@ impl LlamaLocalProvider {
             |_fmt: String| -> std::result::Result<String, minijinja::Error> { Ok(String::new()) },
         );
         env.add_template_owned("chat", src.to_string())?;
+        Ok(env)
+    }
 
+    /// Render the model's embedded jinja chat template with minijinja.
+    fn render_template(
+        &self,
+        pairs: &[(&'static str, String)],
+    ) -> std::result::Result<String, minijinja::Error> {
+        let env = self.jinja_env()?;
         let messages: Vec<Value> = pairs
             .iter()
             .map(|(role, content)| serde_json::json!({"role": role, "content": content}))
@@ -207,6 +227,83 @@ impl LlamaLocalProvider {
             bos_token => self.bos,
             eos_token => self.eos,
         })
+    }
+
+    /// True if the embedded chat template formats tools in the Gemma-4 native
+    /// protocol, so we can feed it structured tools rather than JSON prose.
+    fn template_supports_native_tools(&self) -> bool {
+        self.template_src.as_deref().map_or(false, |s| {
+            s.contains("<|tool_call>") || s.contains("<|tool>") || s.contains("declaration:")
+        })
+    }
+
+    /// Render via the model's native tool protocol: pass the OpenAI-style tools
+    /// array and full message objects (with `tool_calls` / tool results) so the
+    /// template emits `<|tool>declaration:…`, `<|tool_call>`, `<|tool_response>`.
+    fn render_native(&self, messages: &[ChatMessage], tools: &[ToolDefinition]) -> Result<String> {
+        let env = self.jinja_env().map_err(|e| anyhow::anyhow!("jinja env: {e}"))?;
+
+        let msgs: Vec<Value> = messages.iter().map(Self::render_message_native).collect();
+        let tool_defs: Vec<Value> = tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    }
+                })
+            })
+            .collect();
+
+        let tmpl = env
+            .get_template("chat")
+            .map_err(|e| anyhow::anyhow!("get template: {e}"))?;
+        let rendered = tmpl
+            .render(minijinja::context! {
+                messages => msgs,
+                tools => tool_defs,
+                add_generation_prompt => true,
+                bos_token => self.bos,
+                eos_token => self.eos,
+            })
+            .map_err(|e| anyhow::anyhow!("render: {e}"))?;
+        tracing::debug!("rendered {} tools via native Gemma tool protocol", tools.len());
+        Ok(rendered)
+    }
+
+    /// Convert a ChatMessage to the message object the native template expects,
+    /// preserving assistant `tool_calls` and `tool` results.
+    fn render_message_native(msg: &ChatMessage) -> Value {
+        match msg.role {
+            ChatRole::System => serde_json::json!({"role": "system", "content": msg.content}),
+            ChatRole::User => serde_json::json!({"role": "user", "content": msg.content}),
+            ChatRole::Assistant => {
+                let mut m = serde_json::json!({"role": "assistant", "content": msg.content});
+                if let Some(calls) = &msg.tool_calls {
+                    let tc: Vec<Value> = calls
+                        .iter()
+                        .map(|c| {
+                            serde_json::json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": {"name": c.name, "arguments": c.arguments},
+                            })
+                        })
+                        .collect();
+                    m["tool_calls"] = Value::Array(tc);
+                }
+                m
+            }
+            ChatRole::Tool => serde_json::json!({
+                "role": "tool",
+                "content": msg.content,
+                "tool_call_id": msg.tool_call_id,
+                "name": msg.tool_name,
+            }),
+        }
     }
 
     /// Last-resort manual ChatML layout when the embedded template is missing or
@@ -389,6 +486,16 @@ impl LlamaLocalProvider {
                 Err(e) => tracing::debug!("skipping undecodable token {token:?}: {e}"),
             }
 
+            // Stop at Gemma-4 tool boundaries: once the model closes a tool call
+            // (`<tool_call|>`) or emits a tool-response marker, stop so we can run
+            // the tool instead of letting it hallucinate a result. These literals
+            // are gemma-specific, so this is a no-op for other local models.
+            if generated_text.ends_with("<tool_call|>")
+                || generated_text.contains("<|tool_response>")
+            {
+                break;
+            }
+
             batch.clear();
             batch
                 .add(token, n_cur, &[0], true)
@@ -454,6 +561,15 @@ impl LlamaLocalProvider {
                 Self::number_ids(&mut calls);
                 return calls;
             }
+        }
+
+        // Gemma-style native format: some models ignore the JSON protocol and emit
+        // `<|tool_call>call:NAME{k:<|"|>v<|"|>, ...}<tool_call|>` (with `<|"|>` as a
+        // quote token). Parse it leniently as a last resort.
+        let mut gemma = parse_gemma_calls(text);
+        if !gemma.is_empty() {
+            Self::number_ids(&mut gemma);
+            return gemma;
         }
 
         Vec::new()
@@ -624,6 +740,49 @@ fn parse_py_value(v: &str) -> Value {
     serde_json::from_str::<Value>(v).unwrap_or_else(|_| Value::String(v.to_string()))
 }
 
+/// Parse the gemma-style native tool-call format that some models emit instead
+/// of the JSON protocol we ask for:
+/// `<|tool_call>call:NAME{key:<|"|>value<|"|>, key2:123}<tool_call|>`.
+/// `<|"|>` is the model's quote token; tool names may contain hyphens (e.g. the
+/// MCP tool `search-godoc`). Delimiter-agnostic — we key on `call:NAME{...}`.
+fn parse_gemma_calls(text: &str) -> Vec<ToolCallInfo> {
+    use std::sync::OnceLock;
+    // Normalize the quote token to a real double-quote.
+    let norm = text.replace("<|\"|>", "\"");
+
+    static CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let call_re = CALL_RE.get_or_init(|| {
+        regex::Regex::new(r"call:\s*([A-Za-z0-9_.\-]+)\s*\{([^{}]*)\}").unwrap()
+    });
+    static ARG_RE: OnceLock<regex::Regex> = OnceLock::new();
+    // key: "quoted value"  |  key: bare_value(up to , or })
+    let arg_re = ARG_RE.get_or_init(|| {
+        regex::Regex::new(r#"([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(?:"([^"]*)"|([^,}]+))"#).unwrap()
+    });
+
+    let mut out = Vec::new();
+    for cap in call_re.captures_iter(&norm) {
+        let name = cap[1].to_string();
+        let body = &cap[2];
+        let mut map = serde_json::Map::new();
+        for a in arg_re.captures_iter(body) {
+            let key = a[1].to_string();
+            let value = if let Some(q) = a.get(2) {
+                Value::String(q.as_str().to_string())
+            } else {
+                parse_py_value(a.get(3).map(|m| m.as_str()).unwrap_or("").trim())
+            };
+            map.insert(key, value);
+        }
+        out.push(ToolCallInfo {
+            id: "call_0".to_string(),
+            name,
+            arguments: Value::Object(map),
+        });
+    }
+    out
+}
+
 /// Strip HF chat-template extensions minijinja can't parse. The `{% generation %}`
 /// / `{% endgeneration %}` markers only tag assistant tokens for training masks
 /// and are no-ops at inference time.
@@ -735,6 +894,36 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read");
         assert_eq!(calls[0].arguments["path"], "a.txt");
+    }
+
+    #[test]
+    fn parses_gemma_native_tool_call() {
+        // Gemma's native envelope, calling an MCP tool (godevmcp's search-godoc).
+        // The hyphens exercise the name charset (`[A-Za-z0-9_.-]`) on both sides.
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            "<|tool_call>call:search-godoc{query:<|\"|>mcp-go<|\"|>}<tool_call|>",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "search-godoc");
+        assert_eq!(calls[0].arguments["query"], "mcp-go");
+        assert_eq!(calls[0].id, "call_0");
+    }
+
+    #[test]
+    fn parses_gemma_call_with_mixed_args() {
+        let calls = LlamaLocalProvider::parse_tool_calls(
+            "<|tool_call>call:grep{pattern:<|\"|>foo<|\"|>, limit:50}<tool_call|>",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(calls[0].arguments["pattern"], "foo");
+        assert_eq!(calls[0].arguments["limit"], 50);
+    }
+
+    #[test]
+    fn plain_prose_is_not_a_gemma_call() {
+        let calls = LlamaLocalProvider::parse_tool_calls("Sure, I'll call the search tool for you.");
+        assert!(calls.is_empty());
     }
 
     #[test]
