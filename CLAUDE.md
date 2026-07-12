@@ -263,6 +263,7 @@ kessel-cli/
 │   ├── openai.yaml             # OpenAI with watcher
 │   ├── openai-ja.yaml          # OpenAI, Japanese
 │   ├── qwen3.yaml              # Local Qwen3.5-9B
+│   ├── gemma4.yaml             # Local Gemma 4 E4B
 │   └── system-prompt.md        # System prompt template ({language})
 ├── skills/                     # Project-local skills
 │   └── claude-activity-report/SKILL.md

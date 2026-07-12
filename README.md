@@ -77,7 +77,7 @@ watcher:
   debounceInterval: 3.0
 ```
 
-Available configs: `default.yaml`, `openai.yaml`, `openai-ja.yaml`, `qwen3.yaml`
+Available configs: `default.yaml`, `openai.yaml`, `openai-ja.yaml`, `qwen3.yaml`, `gemma4.yaml`
 
 ## Claude Code Integration
 
