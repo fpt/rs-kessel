@@ -19,7 +19,7 @@ testsuite/
 ├── backends/            # one YAML config per model
 │   ├── gemma4.yaml       # local Gemma 4 E4B (llama.cpp)
 │   ├── gpt-oss.yaml      # local GPT-OSS 20B (llama.cpp, harmony)
-│   └── gpt-5.4-mini.yaml # cloud OpenAI (needs OPENAI_API_KEY)
+│   └── gpt-5.6-luna.yaml # cloud OpenAI (needs OPENAI_API_KEY)
 ├── testcases/
 │   ├── arithmetic/       # 17 × 23 = 391
 │   ├── capital/          # capital of France = Paris
@@ -73,3 +73,7 @@ TESTS="memory,file_read"   bash testsuite/matrix_runner.sh
 | gpt-5.4-mini  | PASS | PASS | PASS | PASS | PASS |
 
 All 15 combinations passed (100%).
+
+> The cloud backend has since been renamed to `gpt-5.6-luna`; the row above
+> records the run that actually happened, against `gpt-5.4-mini`. Re-run
+> `make testsuite` to refresh it for the new model.

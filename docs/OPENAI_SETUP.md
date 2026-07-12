@@ -77,7 +77,7 @@ OPENAI_API_KEY=sk-... make run-text
 ```yaml
 llm:
   baseURL: "https://api.openai.com/v1"
-  model: "gpt-4"  # or gpt-3.5-turbo, gpt-4-turbo
+  model: "gpt-5.6-luna"  # or gpt-5.6-sol, gpt-5.6-terra
   apiKey: ""  # Leave empty - uses OPENAI_API_KEY env var
   harmonyTemplate: false  # OpenAI doesn't use Harmony
   temperature: 0.7
@@ -102,13 +102,13 @@ stt:
 
 ## Available Models
 
-Common OpenAI models:
-- `gpt-4` - Most capable, slower, more expensive
-- `gpt-4-turbo` - Faster, cheaper than gpt-4
-- `gpt-3.5-turbo` - Fast, cheap, good for most tasks
-- `gpt-4o` - Optimized for efficiency
+Current OpenAI models:
+- `gpt-5.6-luna` — the default used by `configs/openai.yaml`
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
 
-See https://platform.openai.com/docs/models for full list.
+See https://platform.openai.com/docs/models for the full list, current
+capabilities, and pricing.
 
 ## Usage Examples
 
@@ -286,18 +286,13 @@ bash ../scripts/gen_uniffi.sh
 
 ## Cost Considerations
 
-OpenAI charges per token. Approximate costs (as of 2025):
+OpenAI charges per token. Rates change and differ per model, so check
+https://openai.com/api/pricing for current numbers rather than trusting a table
+here.
 
-| Model | Input | Output |
-|-------|-------|--------|
-| gpt-3.5-turbo | $0.0005/1K | $0.0015/1K |
-| gpt-4 | $0.03/1K | $0.06/1K |
-| gpt-4-turbo | $0.01/1K | $0.03/1K |
-
-With voice mode and backchannel responses:
+What drives cost in this app:
 - Each voice interaction = ~200-500 tokens
 - Backchannel triggers do NOT call the LLM (state-only)
-- 100 conversations ≈ $0.10 (gpt-3.5) to $3.00 (gpt-4)
 
 **Tip**: Use `maxTokens` to control response length and costs.
 

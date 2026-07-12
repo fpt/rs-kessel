@@ -40,7 +40,7 @@ public sealed class AppConfig
         public string BaseUrl { get; set; } = "https://api.openai.com/v1";
 
         [YamlMember(Alias = "model")]
-        public string Model { get; set; } = "gpt-5.4-mini";
+        public string Model { get; set; } = "gpt-5.6-luna";
 
         [YamlMember(Alias = "apiKey")]
         public string? ApiKey { get; set; }
@@ -147,7 +147,7 @@ public sealed class AppConfig
 
         llm:
           baseURL: "https://api.openai.com/v1"
-          model: "gpt-5.4-mini"
+          model: "gpt-5.6-luna"
           apiKey: ""
           maxTokens: 8192
           reasoningEffort: "high"   # reasoning models: low | medium | high

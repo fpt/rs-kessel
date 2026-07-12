@@ -2,14 +2,19 @@ llm:
   # `hf:` spec — resolved and downloaded into the HuggingFace cache by the Rust
   # model downloader, so this works from every frontend (Swift, Windows C#, and
   # the Rust CLI).
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+  #
+  # The GGUF build lives in the `-it-GGUF` repo: the plain `unsloth/gemma-4-E4B`
+  # repo ships safetensors only, which llama.cpp cannot load.
+  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
   baseURL: ""
-  model: "qwen3.5:9b"
+  model: "gemma4:e4b"
   harmonyTemplate: false
   temperature: 0.7
   maxTokens: 2048
 
 agent:
+  # Gemma's chat template rejects a system role; llm_local.rs folds the system
+  # prompt into the first user message (see the system-role fold fallback).
   systemPromptPath: null
   maxTurns: 50
   language: "en"

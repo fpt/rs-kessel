@@ -50,9 +50,9 @@ public struct Config: Codable {
         public let temperature: Float?
         public let maxTokens: Int
         public let contextWindow: Int?
+        /// Local GGUF. Either a path, or an `hf:ORG/REPO[@REV]/file.gguf` spec that
+        /// the Rust model downloader resolves and fetches into the HF cache.
         public let modelPath: String?
-        public let modelRepo: String?
-        public let modelFile: String?
         public let reasoningEffort: String?
 
         enum CodingKeys: String, CodingKey {
@@ -64,8 +64,6 @@ public struct Config: Codable {
             case maxTokens
             case contextWindow
             case modelPath
-            case modelRepo
-            case modelFile
             case reasoningEffort
         }
     }
@@ -157,8 +155,6 @@ public struct Config: Codable {
                 maxTokens: 4096,
                 contextWindow: nil,
                 modelPath: nil,
-                modelRepo: nil,
-                modelFile: nil,
                 reasoningEffort: nil
             ),
             agent: AgentConfig(

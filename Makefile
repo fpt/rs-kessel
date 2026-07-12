@@ -1,4 +1,4 @@
-.PHONY: help build install uninstall run run-text run-openai run-openai-text run-ministral3 build-win run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
+.PHONY: help build install uninstall run run-text run-openai run-openai-text build-win run-win clean test integration-test testsuite testsuite-local gen-uniffi install-deps zip
 
 # Install location (override with: make install PREFIX=/usr/local)
 PREFIX ?= $(HOME)
@@ -15,7 +15,9 @@ help:
 	@echo "  make run-text        - Run in Text Mode (local)"
 	@echo "  make run-openai      - Run with OpenAI in voice mode (set OPENAI_API_KEY)"
 	@echo "  make run-openai-text - Run with OpenAI in text mode (set OPENAI_API_KEY)"
-	@echo "  make run-ministral3  - Run with local Ministral-3B (auto-downloads model)"
+	@echo "  make run-qwen3       - Run with local Qwen3.5-9B (auto-downloads model)"
+	@echo "  make run-gemma4      - Run with local Gemma 4 E4B (auto-downloads model)"
+	@echo "  make run-lfm2        - Run with local LFM2.5-8B (auto-downloads model)"
 	@echo "  make run-verbose     - Run in Voice Mode (verbose)"
 	@echo "  make run-text-verbose- Run in Text Mode (verbose)"
 	@echo "  make build-win       - Build the Windows C# CLI (Rust cdylib + .NET)"
@@ -93,8 +95,12 @@ run-lfm2:
 	@cd swift && swift run kessel-cli --config ../configs/lfm2.yaml
 
 run-qwen3:
-	@echo "Running Kessel with Qwen3 (local)..."
+	@echo "Running Kessel with Qwen3.5 (local)..."
 	@cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
+
+run-gemma4:
+	@echo "Running Kessel with Gemma 4 E4B (local)..."
+	@cd swift && swift run kessel-cli --config ../configs/gemma4.yaml
 
 run-openai-ja:
 	@if [ -z "$$OPENAI_API_KEY" ]; then \
@@ -113,7 +119,7 @@ run-openai-ja:
 	@cd swift && swift run kessel-cli --config ../configs/openai-ja.yaml
 
 # Windows C# CLI. WIN_CONFIG selects the config (Windows-only; independent of the
-# other run targets). e.g. make run-win WIN_CONFIG=configs/local-lfm2.yaml
+# other run targets). e.g. make run-win WIN_CONFIG=configs/gemma4.yaml
 WIN_CLI    := win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
 WIN_CONFIG ?= configs/default.yaml
 
@@ -148,7 +154,7 @@ integration-test:
 	./scripts/test_tools.sh
 
 # CLI capability matrix (see testsuite/README.md). Backends: gemma4, gpt-oss
-# (local llama.cpp) and gpt-5.4-mini (cloud; needs OPENAI_API_KEY or .env).
+# (local llama.cpp) and gpt-5.6-luna (cloud; needs OPENAI_API_KEY or .env).
 # Filter with TESTS=... / BACKENDS=...; override the binary with CLI=...
 testsuite:
 	@bash testsuite/matrix_runner.sh

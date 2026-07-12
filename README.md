@@ -4,7 +4,7 @@ A voice assistant for macOS that runs locally or with cloud LLMs. Supports conti
 
 ## Features
 
-- **Dual LLM backend**: Local models via llama.cpp FFI (Qwen3-8B, etc.) or OpenAI Responses API
+- **Dual LLM backend**: Local models via llama.cpp FFI (Qwen3.5-9B, etc.) or OpenAI Responses API
 - **Voice I/O**: Apple SpeechTranscriber (STT) + AVSpeechSynthesizer (TTS)
 - **Tool calling**: ReAct loop with built-in tools (shell, file read/write, web fetch) and extensible skill system
 - **Claude Code watcher**: Monitors Claude Code activity via hooks and reports changes aloud
@@ -33,7 +33,7 @@ export OPENAI_API_KEY=sk-...
 swift run kessel-cli --config ../configs/openai.yaml
 ```
 
-### With local model (Qwen3-8B)
+### With local model (Qwen3.5-9B)
 
 ```bash
 # Build
@@ -51,9 +51,9 @@ YAML configs live in `configs/`. Key sections:
 
 ```yaml
 llm:
-  modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"  # Local model (omit for cloud)
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # Local model, auto-downloaded (omit for cloud)
   baseURL: "https://api.openai.com/v1"           # API endpoint (omit for local)
-  model: "gpt-5.4-mini"
+  model: "gpt-5.6-luna"
   harmonyTemplate: false
   temperature: 0.7
   maxTokens: 2048
@@ -77,7 +77,7 @@ watcher:
   debounceInterval: 3.0
 ```
 
-Available configs: `default.yaml`, `openai.yaml`, `openai-ja.yaml`, `qwen3.yaml`
+Available configs: `default.yaml`, `openai.yaml`, `openai-ja.yaml`, `qwen3.yaml`, `gemma4.yaml`
 
 ## Claude Code Integration
 

@@ -143,7 +143,7 @@ impl Default for AgentConfig {
         Self {
             model_path: None,
             base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-5.4-mini".to_string(),
+            model: "gpt-5.6-luna".to_string(),
             api_key: None,
             use_harmony_template: true,
             temperature: Some(0.7),
