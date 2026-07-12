@@ -224,13 +224,24 @@ pub fn extract_sse_data(body: &str) -> String {
 }
 
 /// Generate a session ID for HTTP transport.
+///
+/// The timestamp alone is not enough: the system clock's resolution is coarser
+/// than a nanosecond (notably on macOS), so two sessions opened in quick
+/// succession can read the same instant and collide. A per-process counter makes
+/// each id unique regardless of how the clock ticks; the pid keeps ids distinct
+/// across processes.
 pub fn generate_session_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("mcp-{:x}-{:x}", std::process::id(), ts)
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("mcp-{:x}-{:x}-{:x}", std::process::id(), ts, seq)
 }
 
 /// Header name for MCP session tracking.
@@ -345,6 +356,15 @@ mod tests {
         let id2 = generate_session_id();
         assert!(id1.starts_with("mcp-"));
         assert_ne!(id1, id2);
+    }
+
+    /// Ids must stay unique in a tight burst, where the clock may not advance
+    /// between calls — the case that used to collide.
+    #[test]
+    fn test_generate_session_id_unique_in_burst() {
+        let ids: std::collections::HashSet<String> =
+            (0..1000).map(|_| generate_session_id()).collect();
+        assert_eq!(ids.len(), 1000, "session ids collided within a burst");
     }
 
     #[test]
