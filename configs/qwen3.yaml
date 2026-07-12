@@ -1,7 +1,8 @@
 llm:
-  modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"
-  modelRepo: "unsloth/Qwen3.5-9B-GGUF"
-  modelFile: "Qwen3.5-9B-Q4_K_M.gguf"
+  # `hf:` spec — resolved and downloaded into the HuggingFace cache by the Rust
+  # model downloader, so this works from every frontend (Swift, Windows C#, and
+  # the Rust CLI). modelRepo/modelFile would be Swift-only.
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
   baseURL: ""
   model: "qwen3.5:9b"
   harmonyTemplate: false

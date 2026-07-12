@@ -68,10 +68,10 @@ YAML configs in `configs/`. System prompt supports `{language}` template variabl
 
 ```yaml
 llm:
-  modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # For local provider (local path), OR
-  # modelPath: "hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf"  # auto-download
-  modelRepo: "unsloth/Qwen3.5-9B-GGUF"              # HuggingFace repo (Swift auto-download)
-  modelFile: "Qwen3.5-9B-Q4_K_M.gguf"            # File in repo
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # Local provider; auto-downloads
+  # modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # ...or a plain path to an existing GGUF
+  # modelRepo/modelFile: legacy Swift-only auto-download. Prefer `hf:` — the Rust
+  # downloader resolves it, so it works from Swift, the Windows C# CLI, and the Rust CLI.
   baseURL: "https://api.openai.com/v1"          # For OpenAI provider
   model: "gpt-5.6-luna"
   apiKey: ""                                     # Or OPENAI_API_KEY env var
@@ -145,7 +145,7 @@ cd swift && swift run kessel-cli --config ../configs/openai.yaml
 cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 # Local model standalone (Rust only, no Swift)
-MODEL_PATH=../models/Qwen3.5-9B-Q4_K_M.gguf cargo run -p kessel-cli
+MODEL_PATH=hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf cargo run -p kessel-cli
 
 # As a whole-turn backend for another agent (see "App-server mode")
 OPENAI_API_KEY=sk-... cargo run -p kessel-cli -- app-server

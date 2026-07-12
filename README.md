@@ -51,7 +51,7 @@ YAML configs live in `configs/`. Key sections:
 
 ```yaml
 llm:
-  modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # Local model (omit for cloud)
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # Local model, auto-downloaded (omit for cloud)
   baseURL: "https://api.openai.com/v1"           # API endpoint (omit for local)
   model: "gpt-5.6-luna"
   harmonyTemplate: false
