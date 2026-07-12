@@ -44,8 +44,8 @@ public class AgentSession: @unchecked Sendable {
         }()
 
         // Resolve model path. `hf:ORG/REPO[@REV]/file.gguf` specs and absolute
-        // paths pass through untouched (the Rust model downloader resolves `hf:`
-        // and downloads into the HF cache); only bare relative paths are resolved
+        // paths pass through untouched (the Rust model downloader resolves `hf:`,
+        // downloading into the HF cache); only bare relative paths are resolved
         // against the config dir.
         var modelPath: String? = nil
         if let cfgModelPath = config.llm.modelPath {
@@ -54,12 +54,6 @@ public class AgentSession: @unchecked Sendable {
             } else {
                 let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent()
                 modelPath = configDir.appendingPathComponent(cfgModelPath).path
-            }
-
-            // Auto-download if model file is missing
-            if let path = modelPath, !FileManager.default.fileExists(atPath: path),
-               let repo = config.llm.modelRepo, let file = config.llm.modelFile {
-                modelPath = try await ModelDownloader.ensureModel(path: path, repo: repo, file: file)
             }
         }
 

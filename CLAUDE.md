@@ -46,7 +46,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
 | `TTS` | AVSpeechSynthesizer wrapper |
 | `Watcher` | SessionJSONLWatcher, SocketReceiver, EventPipeline |
-| `Util` | Config, Logger, HarmonyParser, SkillLoader, ModelDownloader |
+| `Util` | Config, Logger, HarmonyParser, SkillLoader, WhisperModelDownloader |
 | `AgentBridge` | Generated UniFFI Swift bindings |
 | `AgentBridgeFFI` | C module map for FFI |
 | `LLM` | LanguageClient protocol (experimental) |
@@ -70,8 +70,6 @@ YAML configs in `configs/`. System prompt supports `{language}` template variabl
 llm:
   modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # Local provider; auto-downloads
   # modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # ...or a plain path to an existing GGUF
-  # modelRepo/modelFile: legacy Swift-only auto-download. Prefer `hf:` — the Rust
-  # downloader resolves it, so it works from Swift, the Windows C# CLI, and the Rust CLI.
   baseURL: "https://api.openai.com/v1"          # For OpenAI provider
   model: "gpt-5.6-luna"
   apiKey: ""                                     # Or OPENAI_API_KEY env var
