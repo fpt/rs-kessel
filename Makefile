@@ -119,7 +119,7 @@ run-openai-ja:
 	@cd swift && swift run kessel-cli --config ../configs/openai-ja.yaml
 
 # Windows C# CLI. WIN_CONFIG selects the config (Windows-only; independent of the
-# other run targets). e.g. make run-win WIN_CONFIG=configs/local-lfm2.yaml
+# other run targets). e.g. make run-win WIN_CONFIG=configs/gemma4.yaml
 WIN_CLI    := win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
 WIN_CONFIG ?= configs/default.yaml
 

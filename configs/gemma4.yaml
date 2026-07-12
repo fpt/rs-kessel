@@ -1,10 +1,11 @@
 llm:
-  # Auto-downloaded on first run (Swift ModelDownloader) into ../models/.
-  # Note: the GGUF build lives in the `-it-GGUF` repo — the plain
-  # `unsloth/gemma-4-E4B` repo ships safetensors only, which llama.cpp can't load.
-  modelPath: "../models/gemma-4-E4B-it-Q4_K_M.gguf"
-  modelRepo: "unsloth/gemma-4-E4B-it-GGUF"
-  modelFile: "gemma-4-E4B-it-Q4_K_M.gguf"
+  # `hf:` spec — resolved and downloaded into the HuggingFace cache by the Rust
+  # model downloader, so this works from every frontend (Swift, Windows C#, and
+  # the Rust CLI). modelRepo/modelFile would be Swift-only.
+  #
+  # The GGUF build lives in the `-it-GGUF` repo: the plain `unsloth/gemma-4-E4B`
+  # repo ships safetensors only, which llama.cpp cannot load.
+  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
   baseURL: ""
   model: "gemma4:e4b"
   harmonyTemplate: false
