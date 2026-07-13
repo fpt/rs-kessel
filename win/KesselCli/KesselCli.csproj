@@ -5,7 +5,10 @@
     <!-- net8.0-windows so we can use System.Speech (Windows-only) for /listen. -->
     <TargetFramework>net8.0-windows</TargetFramework>
     <RootNamespace>KesselCli</RootNamespace>
-    <AssemblyName>kessel-cli</AssemblyName>
+    <!-- kessel.exe, not kessel-cli.exe: the Rust core owns the `kessel-cli` name
+         because it is the one with the `app-server` subcommand that klein spawns.
+         This is the voice/REPL frontend, matching `kessel` on macOS. -->
+    <AssemblyName>kessel</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

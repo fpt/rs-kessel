@@ -4,7 +4,8 @@ REM feature on Windows. Must run inside the MSVC environment so cmake/cc use
 REM cl.exe + the Windows SDK instead of LLVM clang.
 REM
 REM Usage:  scripts\build-win-local.bat
-REM Output: crates\target\release\kessel_core.dll
+REM Output: crates\target\release\kessel_core.dll  (cdylib, for the C# kessel.exe)
+REM         crates\target\release\kessel-cli.exe   (Rust CLI: REPL + app-server)
 
 setlocal
 
@@ -33,5 +34,9 @@ REM x86_64-pc-windows-msvc), plus VS's bundled ninja.
 set "PATH=%USERPROFILE%\.cargo\bin;%VSINSTALL%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
 
 cd /d "%~dp0..\crates" || exit /b 1
-cargo build --release -p kessel-core --features local
+REM Build the cdylib (for the C# frontend) and the Rust CLI in ONE invocation,
+REM selecting the same feature for both. Building them separately would resolve
+REM different feature sets for kessel-core and the second build would overwrite
+REM the first's kessel_core.dll.
+cargo build --release -p kessel-core -p kessel-cli --features kessel-core/local,kessel-cli/local
 exit /b %ERRORLEVEL%

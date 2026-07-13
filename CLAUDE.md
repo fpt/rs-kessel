@@ -170,9 +170,22 @@ A C# console frontend (text REPL) that consumes the same Rust `kessel_core`
 library through **UniFFI C# bindings** — the Windows analogue of the Swift CLI.
 Mirrors the `../rs-gallium` approach (cdylib + `uniffi-bindgen-cs` + .NET).
 
+Windows produces **two binaries**, the same split as macOS (see `make install`):
+
+| Binary | Built from | What it is |
+|--------|-----------|------------|
+| `kessel-cli.exe` | `crates/` (Rust) | REPL **plus `app-server`** — the JSON-RPC backend klein spawns. Statically links `kessel_core`, so it needs no DLL beside it. |
+| `kessel.exe` | `win/KesselCli/` (C#) | The frontend: text/listen REPL, TTS/STT. Needs `uniffi_kessel_core.dll` beside it (the csproj copies the cdylib under that name). |
+
+Only `kessel-cli.exe` understands `app-server`. The build scripts build the
+cdylib **and** `kessel-cli.exe` in a single cargo invocation with the same
+feature — building them separately would resolve `kessel-core` differently for
+each and overwrite the GPU `kessel_core.dll` with a CPU one.
+
 ```bash
-# 1a. Cloud-only cdylib (no llama.cpp; uses whatever cargo is on PATH):
-cd crates && cargo build --release --no-default-features   # -> crates/target/release/kessel_core.dll
+# 1a. Cloud-only (no llama.cpp; uses whatever cargo is on PATH):
+cd crates && cargo build --release --no-default-features -p kessel-core -p kessel-cli
+#     -> crates/target/release/{kessel_core.dll, kessel-cli.exe}
 
 # 1b. With in-process llama.cpp (local GGUF models): use the helper script.
 #     It enters the MSVC dev env (vcvars64), forces cmake's Ninja generator, and
@@ -196,10 +209,15 @@ scripts/build-win-cuda.bat   # CUDA build; pins a Pascal-capable toolkit + sm_61
 #    cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3)
 bash scripts/gen_uniffi_cs.sh
 
-# 3. Build & run the CLI (net8.0, x64). The build copies kessel_core.dll next to
-#    the exe as uniffi_kessel_core.dll (the DllImport name the bindings expect).
+# 3. Build & run the C# frontend (net8.0, x64). The build copies kessel_core.dll
+#    next to the exe as uniffi_kessel_core.dll (the DllImport name the bindings
+#    expect). Emits kessel.exe.
 dotnet build win/KesselCli/KesselCli.csproj -c Release
-win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe --config configs/default.yaml
+win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/default.yaml
+
+# 4. The Rust CLI came out of step 1 and needs no dotnet build. Point klein's
+#    `kessel_path` at it (or put it on PATH as kessel-cli.exe).
+crates\target\release\kessel-cli.exe app-server
 ```
 
 - `win/KesselCli/Program.cs` — REPL with two modes toggled by **Shift+Tab** (like Claude Code's plan/auto cycle): `text` (type → printed reply) ⇄ `listen` (speak → reply printed **and** spoken). Interactive terminals use a key-level loop (`ReadLineOrToggle`/`TogglePressed`); piped stdin (the testsuite) uses a plain line loop with no mode switching. Commands: `/listen` (one-shot), `/reset`, `/history`, `/help`, `/quit`.

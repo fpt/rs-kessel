@@ -14,7 +14,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 proj_root="$(cd "$script_dir/.." && pwd)"
 
 if [ -z "$CLI" ]; then
-    CLI="$proj_root/win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe"
+    CLI="$proj_root/win/KesselCli/bin/Release/net8.0-windows/kessel.exe"
 fi
 if [ ! -f "$CLI" ]; then
     echo "Error: CLI binary '$CLI' not found. Build with:"
