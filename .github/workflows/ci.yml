@@ -15,6 +15,23 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # llama.cpp defaults LLAMA_OPENSSL=ON (its CMakeLists), and llama-cpp-sys-2's
+      # build.rs turns off LLAMA_BUILD_SERVER and LLAMA_CURL but NOT that. So its
+      # vendored cpp-httplib compiles with CPPHTTPLIB_OPENSSL_SUPPORT and needs
+      # OpenSSL headers — which macOS does not ship in /usr/include. cmake's
+      # FindOpenSSL honors $ENV{OPENSSL_ROOT_DIR}, so point it at Homebrew's.
+      #
+      # Without this a COLD build dies with "'openssl/err.h' file not found". It
+      # only looked intermittent because a warm crates/target cache skipped the
+      # llama.cpp build entirely.
+      - name: Point cmake at a complete OpenSSL (for llama.cpp's cpp-httplib)
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      # The cache version prefix (v2-) is deliberate: bumping it forces a cold
+      # build, so a change to the native-build setup above is actually exercised
+      # rather than masked by a cache from before the fix.
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -22,8 +39,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: v2-${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: v2-${{ runner.os }}-cargo-
 
       - name: Run tests
         working-directory: crates
