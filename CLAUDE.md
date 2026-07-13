@@ -279,8 +279,8 @@ Key points:
 
 Monitors Claude Code via hooks (PostToolUse, Stop events) sent over a Unix domain socket.
 
-- **Hook script**: `scripts/kessel-cli-hook.sh` forwards stdin JSON to `/tmp/kessel-cli-<uid>.sock`
-- **Install**: `bash scripts/install-kessel-cli-hook.sh` copies hook and updates `~/.claude/settings.json`
+- **Hook script**: `scripts/claude-hook.sh` forwards stdin JSON to `/tmp/kessel-cli-<uid>.sock`
+- **Install**: `bash scripts/install-claude-hook.sh` copies hook and updates `~/.claude/settings.json`
 - **SocketReceiver** (`swift/Sources/Watcher/`): listens on the socket, parses ndjson
 - **EventPipeline**: debounces events, summarizes via `EventSummarizer`, calls `agent.chatOnce()` with the `claude-activity-report` skill
 - **SessionJSONLWatcher**: also watches Claude Code's session JSONL file for events
@@ -312,8 +312,8 @@ kessel-cli/
 │       └── AgentBridgeFFI/     # C module map
 ├── scripts/
 │   ├── gen_uniffi.sh           # Generate UniFFI bindings
-│   ├── install-kessel-cli-hook.sh  # Install Claude Code hook
-│   ├── kessel-cli-hook.sh          # Hook script (stdin -> socket)
+│   ├── install-claude-hook.sh  # Install Claude Code hook
+│   ├── claude-hook.sh          # Hook script (stdin -> socket)
 │   └── ...
 ├── vendor/uniffi-swift/        # Generated UniFFI outputs
 └── models/                     # GGUF models (gitignored)
