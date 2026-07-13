@@ -276,7 +276,7 @@ kessel-cli/
 │   ├── openai.yaml             # OpenAI with watcher
 │   ├── openai-ja.yaml          # OpenAI, Japanese
 │   ├── qwen3.yaml              # Local Qwen3.5-9B
-│   ├── gemma4.yaml             # Local Gemma 4 E4B
+│   ├── gemma4.yaml             # Local Gemma 4 26B-A4B (QAT)
 │   └── system-prompt.md        # System prompt template ({language})
 ├── skills/                     # Project-local skills
 │   └── claude-activity-report/SKILL.md
@@ -309,4 +309,12 @@ kessel-cli/
 
 **UniFFI checksum mismatch**: Regenerate bindings and copy: `bash scripts/gen_uniffi.sh && cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/`
 
-**Local model OOM**: Use a smaller quantization or model. Qwen3.5-9B Q4_K_M is ~5.7GB; the repo also ships smaller quants (Q3_K_M, IQ4_XS).
+**Local model OOM**: Use a smaller quantization or model. Rough weights-on-disk for the shipped configs:
+
+| config | model | size |
+|--------|-------|------|
+| `gemma4.yaml` | gemma-4-26B-A4B-it-qat (UD-Q4_K_XL) | 14.3GB |
+| `qwen3.yaml` | Qwen3.5-9B (Q4_K_M) | 5.7GB |
+| `lfm2.yaml` | LFM2.5-8B-A1B (Q4_K_M) | 5.2GB |
+
+`gemma4.yaml` is the big one — it is a 26B mixture-of-experts (only ~4B active per token, but **all** weights must be resident). If it will not fit, swap `modelPath` for `hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf` (~5.0GB, identical prompt format), or pick a smaller quant from the model's repo.

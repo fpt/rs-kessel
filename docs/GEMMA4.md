@@ -3,7 +3,9 @@
 Gemma 4 does not use ChatML. It has its own turn markers and — unusually for an
 open model — a **native tool-calling syntax baked into the chat template**, not a
 JSON convention layered on top. `configs/gemma4.yaml` runs
-`unsloth/gemma-4-E4B-it-GGUF`, so kessel has to speak that format exactly.
+`unsloth/gemma-4-26B-A4B-it-qat-GGUF`, so kessel has to speak that format
+exactly. The format is shared across the Gemma 4 family, so everything below
+applies equally to the smaller `gemma-4-E4B-it-GGUF`.
 
 This documents the wire format and what `crates/lib/src/llm_local.rs` actually
 does with it.
@@ -165,5 +167,7 @@ sometimes emits its native `<|tool_call>` form — which is precisely why
 
 Run: `cd crates && cargo test -p kessel-core --lib gemma`
 
-Verified end to end against `gemma-4-E4B` (see `configs/gemma4.yaml`,
-`make run-gemma4`).
+Verified end to end against `gemma-4-E4B`. The default in `configs/gemma4.yaml`
+has since moved to `gemma-4-26B-A4B-it-qat`, which shares the prompt format but
+has **not** been re-run against these paths — if tool calling misbehaves there,
+that gap is the first thing to check (`make run-gemma4`).
