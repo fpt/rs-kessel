@@ -23,7 +23,7 @@ help:
 	@echo "  make run-openai      - Run with OpenAI in voice mode (set OPENAI_API_KEY)"
 	@echo "  make run-openai-text - Run with OpenAI in text mode (set OPENAI_API_KEY)"
 	@echo "  make run-qwen3       - Run with local Qwen3.5-9B (auto-downloads model)"
-	@echo "  make run-gemma4      - Run with local Gemma 4 E4B (auto-downloads model)"
+	@echo "  make run-gemma4      - Run with local Gemma 4 26B-A4B (auto-downloads model)"
 	@echo "  make run-lfm2        - Run with local LFM2.5-8B (auto-downloads model)"
 	@echo "  make run-verbose     - Run in Voice Mode (verbose)"
 	@echo "  make run-text-verbose- Run in Text Mode (verbose)"
@@ -116,7 +116,7 @@ run-qwen3:
 	@cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
 
 run-gemma4:
-	@echo "Running Kessel with Gemma 4 E4B (local)..."
+	@echo "Running Kessel with Gemma 4 26B-A4B (local)..."
 	@cd swift && swift run kessel-cli --config ../configs/gemma4.yaml
 
 run-openai-ja:
