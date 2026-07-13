@@ -10,7 +10,8 @@ REM   set CUDA_VER=v12.9                  (toolkit folder under the CUDA install
 REM   set CUDA_ARCH=61                    (GPU compute capability; 1060 = 61)
 REM
 REM Usage:  scripts\build-win-cuda.bat
-REM Output: crates\target\release\kessel_core.dll (CUDA-enabled)
+REM Output: crates\target\release\kessel_core.dll  (CUDA-enabled cdylib, for kessel.exe)
+REM         crates\target\release\kessel-cli.exe   (CUDA-enabled Rust CLI: REPL + app-server)
 
 setlocal
 
@@ -48,5 +49,8 @@ set "NVCC_APPEND_FLAGS=-allow-unsupported-compiler"
 
 echo Building with CUDA %CUDA_VER% for sm_%CUDA_ARCH% ...
 cd /d "%~dp0..\crates" || exit /b 1
-cargo build --release -p kessel-core --no-default-features --features cuda
+REM Build the cdylib and the Rust CLI in ONE invocation with the same feature.
+REM Building them separately would resolve kessel-core with `local` for the CLI
+REM (its default) and overwrite the CUDA kessel_core.dll with a CPU one.
+cargo build --release -p kessel-core -p kessel-cli --no-default-features --features kessel-core/cuda,kessel-cli/cuda
 exit /b %ERRORLEVEL%

@@ -7,7 +7,7 @@ BINDIR := $(PREFIX)/bin
 # Testsuite CLI. Defaults to the Rust kessel-cli via the yq->env adapter
 # (Swift-free, statically linked). Override with e.g.:
 #   make testsuite CLI=swift/.build/release/kessel-cli
-#   make testsuite CLI=win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
+#   make testsuite CLI=win/KesselCli/bin/Release/net8.0-windows/kessel.exe
 RUST_TESTSUITE_CLI := $(CURDIR)/testsuite/rust_cli.sh
 CLI ?= $(RUST_TESTSUITE_CLI)
 
@@ -27,8 +27,8 @@ help:
 	@echo "  make run-lfm2        - Run with local LFM2.5-8B (auto-downloads model)"
 	@echo "  make run-verbose     - Run in Voice Mode (verbose)"
 	@echo "  make run-text-verbose- Run in Text Mode (verbose)"
-	@echo "  make build-win       - Build the Windows C# CLI (Rust cdylib + .NET)"
-	@echo "  make run-win         - Build & run the Windows C# CLI (WIN_CONFIG=configs/foo.yaml)"
+	@echo "  make build-win       - Build Windows kessel.exe (C# frontend) + kessel-cli.exe (Rust core)"
+	@echo "  make run-win         - Build & run the Windows frontend (WIN_CONFIG=configs/foo.yaml)"
 	@echo ""
 	@echo "  make clean           - Clean build artifacts"
 	@echo "  make test            - Run tests"
@@ -135,23 +135,34 @@ run-openai-ja:
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
 	@cd swift && swift run kessel-cli --config ../configs/openai-ja.yaml
 
-# Windows C# CLI. WIN_CONFIG selects the config (Windows-only; independent of the
-# other run targets). e.g. make run-win WIN_CONFIG=configs/gemma4.yaml
-WIN_CLI    := win/KesselCli/bin/Release/net8.0-windows/kessel-cli.exe
+# Windows. Two binaries, mirroring the macOS split (see `make install`):
+#
+#   kessel.exe      the C# frontend (voice/REPL). Needs uniffi_kessel_core.dll
+#                   beside it — the csproj copies the Rust cdylib under that name.
+#   kessel-cli.exe  the Rust core: REPL + `app-server`, the JSON-RPC backend klein
+#                   spawns. Statically links kessel_core, so it stands alone.
+#
+# WIN_CONFIG selects the config for run-win (independent of the other run
+# targets). e.g. make run-win WIN_CONFIG=configs/gemma4.yaml
+WIN_EXE    := win/KesselCli/bin/Release/net8.0-windows/kessel.exe
+WIN_CLI    := crates/target/release/kessel-cli.exe
 WIN_CONFIG ?= configs/default.yaml
 
-# Full Windows build: Rust cdylib (local llama.cpp, via the MSVC build script) +
-# the .NET CLI. For a CUDA build, run scripts\build-win-cuda.bat instead.
+# Full Windows build. build-win-local.bat builds BOTH Rust artifacts (cdylib +
+# kessel-cli.exe) in one cargo invocation; dotnet then builds kessel.exe.
+# For a CUDA build, run scripts\build-win-cuda.bat instead, then dotnet build.
 build-win:
 	@cmd //C "scripts\\build-win-local.bat"
 	@dotnet build win/KesselCli/KesselCli.csproj -c Release --nologo
-	@echo "Built $(WIN_CLI)"
+	@echo "Built:"
+	@echo "   $(WIN_EXE)  — C# frontend (voice/REPL)"
+	@echo "   $(WIN_CLI)  — Rust core (REPL + app-server; used by klein)"
 
-# Build the .NET CLI (copies the latest Rust cdylib) then run it.
+# Build the .NET frontend (copies the latest Rust cdylib) then run it.
 run-win:
 	@dotnet build win/KesselCli/KesselCli.csproj -c Release --nologo
-	@echo "Running Windows CLI with $(WIN_CONFIG)..."
-	@"$(WIN_CLI)" --config "$(WIN_CONFIG)"
+	@echo "Running Windows frontend with $(WIN_CONFIG)..."
+	@"$(WIN_EXE)" --config "$(WIN_CONFIG)"
 
 clean:
 	@echo "Cleaning build artifacts..."
