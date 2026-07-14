@@ -99,7 +99,9 @@ run_test_multi() {
 
 # Check if LLM is available
 echo "Checking LLM availability..."
-export MAX_REACT_ITERATIONS="${MAX_REACT_ITERATIONS:-10}"
+# MAX_REACT_ITERATIONS is left unset on purpose: the CLI falls back to
+# react::DEFAULT_MAX_ITERATIONS. Hardcoding a copy here just gives it somewhere
+# to drift. Export it yourself to override.
 
 if [ -n "${MODEL_PATH:-}" ]; then
     echo "  Using local model (FFI): $MODEL_PATH"

@@ -2,7 +2,16 @@ use crate::llm::{ChatMessage, LlmProvider, LlmResponse, TokenUsage, ToolCallInfo
 use crate::tool::{ToolAccess, ToolResult};
 use crate::AgentError;
 
-const DEFAULT_MAX_ITERATIONS: u32 = 10;
+/// Tool-calling rounds allowed in one turn before the loop gives up.
+///
+/// Each iteration is one LLM call, so this bounds both cost and how long a turn
+/// can run. 10 was too tight: a multi-file task spends iterations on
+/// read/grep/edit and would hit the ceiling mid-way and abort, losing the work.
+/// 30 matches klein's `max_iterations` default.
+///
+/// Callers that want a different bound pass `Some(n)` to [`run`]; the Rust CLI
+/// and app-server expose it as `MAX_REACT_ITERATIONS`.
+pub const DEFAULT_MAX_ITERATIONS: u32 = 30;
 
 /// Something that happened partway through a turn, reported as it occurs.
 ///
@@ -360,5 +369,43 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("maximum iterations"));
+    }
+
+    /// `None` must fall through to DEFAULT_MAX_ITERATIONS. The frontends (Swift,
+    /// C#) always pass None, so this is the bound they actually run under —
+    /// worth pinning behaviorally rather than trusting the constant.
+    #[test]
+    fn test_react_none_uses_the_default_iteration_cap() {
+        // A provider that never stops asking for tools, so the cap is what ends it.
+        let provider = MockProvider::new(
+            (0..DEFAULT_MAX_ITERATIONS + 5)
+                .map(|i| {
+                    LlmResponse::ToolCalls(
+                        vec![ToolCallInfo {
+                            id: format!("call_{i}"),
+                            name: "tasks".to_string(),
+                            arguments: serde_json::json!({"action": "list"}),
+                        }],
+                        None,
+                    )
+                })
+                .collect(),
+        );
+
+        let mut messages = vec![ChatMessage::user("Loop forever".to_string())];
+        use crate::tool::TaskTool;
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(TaskTool::new()));
+
+        let err = run(&provider, &mut messages, &tools, None).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("({})", DEFAULT_MAX_ITERATIONS)),
+            "expected the cap to be DEFAULT_MAX_ITERATIONS, got: {err}"
+        );
+        assert_eq!(
+            provider.call_count.load(Ordering::SeqCst),
+            DEFAULT_MAX_ITERATIONS as usize,
+            "the loop should run exactly DEFAULT_MAX_ITERATIONS times"
+        );
     }
 }

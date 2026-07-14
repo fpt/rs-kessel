@@ -43,10 +43,12 @@ impl EnvConfig {
             working_dir: std::env::var("WORKING_DIR")
                 .unwrap_or_else(|_| std::env::current_dir().unwrap().to_string_lossy().to_string()),
             max_tokens: std::env::var("MAX_TOKENS").ok().and_then(|s| s.parse().ok()).unwrap_or(2048),
+            // Falls back to the library default rather than restating it, so the
+            // two cannot drift apart.
             max_react_iterations: std::env::var("MAX_REACT_ITERATIONS")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(10),
+                .unwrap_or(kessel_core::react::DEFAULT_MAX_ITERATIONS),
             temperature: std::env::var("LLM_TEMPERATURE").ok().and_then(|s| s.parse().ok()),
             reasoning_effort: std::env::var("REASONING_EFFORT").ok(),
         }
