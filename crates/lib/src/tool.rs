@@ -377,6 +377,7 @@ pub fn create_default_registry_with_session(
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(ReadTool::new(working_dir.clone(), session.clone())));
     registry.register(Box::new(GlobTool::new(working_dir.clone())));
+    registry.register(Box::new(LsTool::new(working_dir.clone())));
     registry.register(Box::new(GrepTool::new(working_dir.clone())));
     registry.register(Box::new(WriteTool::new(working_dir.clone(), session.clone())));
     registry.register(Box::new(EditTool::new(working_dir.clone(), session.clone())));
@@ -649,6 +650,183 @@ impl ToolHandler for GlobTool {
             output.push_str(&format!("\n\n({} files found)", total));
             Ok(ToolResult::text(output))
         }
+    }
+}
+
+// ============================================================================
+// LsTool — List one directory level, with optional ignore globs
+// ============================================================================
+
+/// List the contents of a single directory.
+///
+/// Complements `glob`: `glob` answers "where are the files matching X" across a
+/// tree, `ls` answers "what is *in* this directory" — including empty dirs and
+/// entries no pattern was written for, which is what you want when exploring an
+/// unfamiliar layout.
+pub struct LsTool {
+    working_dir: PathBuf,
+}
+
+impl LsTool {
+    pub fn new(working_dir: PathBuf) -> Self {
+        Self { working_dir }
+    }
+}
+
+/// Human-readable size, so the model can tell a 2KB config from a 40MB blob
+/// before deciding to `read` it.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    match bytes {
+        b if b >= GB => format!("{:.1}GB", b as f64 / GB as f64),
+        b if b >= MB => format!("{:.1}MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{:.1}KB", b as f64 / KB as f64),
+        b => format!("{}B", b),
+    }
+}
+
+impl ToolHandler for LsTool {
+    fn name(&self) -> &str {
+        "ls"
+    }
+
+    fn description(&self) -> &str {
+        "List the contents of a directory (one level, not recursive), with file sizes. Optionally \
+         skip entries whose name matches a glob (e.g. ignore: [\".git\", \"*.lock\"]). \
+         ALWAYS prefer this over running `ls`, `find` or `dir` through the bash tool: it needs no \
+         permission prompt and works on every platform. Use glob instead to find files matching a \
+         pattern across a whole tree."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Directory to list (absolute, or relative to the working directory). Defaults to the working directory."
+                },
+                "ignore": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Glob patterns matched against each entry's name; matching entries are skipped (e.g. [\"*.lock\", \".git\"])"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of entries to return (default: 200)"
+                }
+            }
+        })
+    }
+
+    fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError> {
+        let dir = match args["path"].as_str() {
+            Some(p) => resolve_in(&self.working_dir, p),
+            None => self.working_dir.clone(),
+        };
+        let limit = args["limit"].as_u64().unwrap_or(200) as usize;
+
+        if !dir.exists() {
+            return Err(AgentError::InternalError(format!(
+                "No such directory: {}",
+                dir.display()
+            )));
+        }
+        if !dir.is_dir() {
+            return Err(AgentError::InternalError(format!(
+                "{} is a file, not a directory. Use the read tool for files.",
+                dir.display()
+            )));
+        }
+
+        // Compile the ignore globs up front so a bad pattern is a clear error
+        // rather than a silently-unmatched entry.
+        let ignores: Vec<glob::Pattern> = args["ignore"]
+            .as_array()
+            .map(|v| {
+                v.iter()
+                    .filter_map(|p| p.as_str())
+                    .map(|p| {
+                        glob::Pattern::new(p).map_err(|e| {
+                            AgentError::ParseError(format!("Invalid ignore pattern '{}': {}", p, e))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let entries = std::fs::read_dir(&dir).map_err(|e| {
+            AgentError::InternalError(format!("Failed to read {}: {}", dir.display(), e))
+        })?;
+
+        let mut dirs: Vec<String> = Vec::new();
+        let mut files: Vec<(String, u64)> = Vec::new();
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("ls: skipping unreadable entry: {}", e);
+                    continue;
+                }
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            if ignores.iter().any(|p| p.matches(&name)) {
+                continue;
+            }
+            // `path().is_dir()` follows symlinks, so a symlinked directory lists
+            // as a directory — which is what a caller means to descend into.
+            if entry.path().is_dir() {
+                dirs.push(name);
+            } else {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                files.push((name, size));
+            }
+        }
+
+        // read_dir order is filesystem-dependent; sort so output is stable.
+        dirs.sort();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let total = dirs.len() + files.len();
+        if total == 0 {
+            return Ok(ToolResult::text(format!("{} is empty", dir.display())));
+        }
+
+        let mut lines: Vec<String> = Vec::with_capacity(total.min(limit));
+        for name in &dirs {
+            if lines.len() == limit {
+                break;
+            }
+            lines.push(format!("  {}/", name));
+        }
+        for (name, size) in &files {
+            if lines.len() == limit {
+                break;
+            }
+            lines.push(format!("  {} ({})", name, format_size(*size)));
+        }
+
+        let mut out = format!(
+            "{} — {} director{}, {} file{}:\n{}",
+            dir.display(),
+            dirs.len(),
+            if dirs.len() == 1 { "y" } else { "ies" },
+            files.len(),
+            if files.len() == 1 { "" } else { "s" },
+            lines.join("\n")
+        );
+        if total > lines.len() {
+            out.push_str(&format!(
+                "\n\n... (showing {}/{} entries. Use limit to see more.)",
+                lines.len(),
+                total
+            ));
+        }
+        Ok(ToolResult::text(out))
     }
 }
 
@@ -1741,11 +1919,12 @@ mod tests {
         let registry = create_default_registry(dir, skill_reg, situation);
 
         let defs = registry.get_definitions();
-        assert_eq!(defs.len(), 10);
+        assert_eq!(defs.len(), 11);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"read"));
         assert!(names.contains(&"glob"));
+        assert!(names.contains(&"ls"));
         assert!(names.contains(&"grep"));
         assert!(names.contains(&"write"));
         assert!(names.contains(&"edit"));
@@ -1927,5 +2106,98 @@ mod tests {
         let tool = MultiEditTool::new(dir, session);
         assert!(tool.call(serde_json::json!({"edits": []})).is_err());
         assert!(tool.call(serde_json::json!({})).is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // ls
+    // ------------------------------------------------------------------
+
+    fn ls_fixture(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ls_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "x").unwrap();
+        std::fs::write(dir.join("Cargo.lock"), "y").unwrap();
+        dir
+    }
+
+    #[test]
+    fn ls_lists_dirs_before_files_and_is_sorted() {
+        let dir = ls_fixture("basic");
+        let out = LsTool::new(dir.clone())
+            .call(serde_json::json!({}))
+            .unwrap()
+            .text;
+
+        assert!(out.contains("2 directories, 2 files"), "got: {out}");
+        // Directories first, each group sorted — read_dir order is not stable
+        // across filesystems, so this is a real guarantee, not an accident.
+        let git = out.find(".git/").unwrap();
+        let src = out.find("src/").unwrap();
+        let lock = out.find("Cargo.lock").unwrap();
+        let toml = out.find("Cargo.toml").unwrap();
+        assert!(git < src, "dirs sorted");
+        assert!(src < lock, "dirs before files");
+        assert!(lock < toml, "files sorted");
+    }
+
+    #[test]
+    fn ls_skips_entries_matching_ignore_globs() {
+        let dir = ls_fixture("ignore");
+        let out = LsTool::new(dir.clone())
+            .call(serde_json::json!({"ignore": ["*.lock", ".git"]}))
+            .unwrap()
+            .text;
+
+        assert!(!out.contains("Cargo.lock"));
+        assert!(!out.contains(".git/"));
+        assert!(out.contains("Cargo.toml"));
+        assert!(out.contains("src/"));
+        assert!(out.contains("1 directory, 1 file"), "got: {out}");
+    }
+
+    #[test]
+    fn ls_reports_a_bad_ignore_pattern_instead_of_silently_matching_nothing() {
+        let dir = ls_fixture("badpat");
+        let err = LsTool::new(dir)
+            .call(serde_json::json!({"ignore": ["[unclosed"]}))
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid ignore pattern"), "got: {err}");
+    }
+
+    #[test]
+    fn ls_on_a_file_says_so() {
+        let dir = ls_fixture("file");
+        let err = LsTool::new(dir.clone())
+            .call(serde_json::json!({"path": "Cargo.toml"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("is a file, not a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn ls_on_a_missing_path_says_so() {
+        let dir = ls_fixture("missing");
+        let err = LsTool::new(dir)
+            .call(serde_json::json!({"path": "nope"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("No such directory"), "got: {err}");
+    }
+
+    #[test]
+    fn ls_reports_an_empty_directory() {
+        let dir = std::env::temp_dir().join(format!("ls_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = LsTool::new(dir).call(serde_json::json!({})).unwrap().text;
+        assert!(out.contains("is empty"), "got: {out}");
+    }
+
+    #[test]
+    fn format_size_is_human_readable() {
+        assert_eq!(format_size(0), "0B");
+        assert_eq!(format_size(512), "512B");
+        assert_eq!(format_size(2048), "2.0KB");
+        assert_eq!(format_size(5 * 1024 * 1024), "5.0MB");
     }
 }

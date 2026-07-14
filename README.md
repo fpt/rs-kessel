@@ -20,7 +20,7 @@ frontend.
 ## Features
 
 - **Dual LLM backend**: local models via llama.cpp FFI (Gemma 4, Qwen3.5, LFM2 — auto-downloaded) or the OpenAI Responses API
-- **Tool calling**: ReAct loop with built-in tools — file `read`/`write`/`edit`, `multi_edit` (atomic multi-file batch), `glob`, `grep`, `bash`, `tasks`, and skills
+- **Tool calling**: ReAct loop with built-in tools — file `read`/`write`/`edit`, `multi_edit` (atomic multi-file batch), `glob`, `ls`, `grep`, `bash`, `tasks`, and skills
 - **MCP client**: connect to external MCP servers over stdio or Streamable HTTP; their tools join the agent's toolset ([details](#mcp))
 - **Voice I/O**: continuous conversation, half-duplex (mic muted during playback to prevent echo)
 - **Claude Code watcher** (macOS): monitors Claude Code via hooks and reports activity aloud
