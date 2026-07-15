@@ -746,41 +746,17 @@ fn parse_py_value(v: &str) -> Value {
 /// `<|"|>` is the model's quote token; tool names may contain hyphens (e.g. the
 /// MCP tool `search-godoc`). Delimiter-agnostic — we key on `call:NAME{...}`.
 fn parse_gemma_calls(text: &str) -> Vec<ToolCallInfo> {
-    use std::sync::OnceLock;
-    // Normalize the quote token to a real double-quote.
-    let norm = text.replace("<|\"|>", "\"");
-
-    static CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let call_re = CALL_RE.get_or_init(|| {
-        regex::Regex::new(r"call:\s*([A-Za-z0-9_.\-]+)\s*\{([^{}]*)\}").unwrap()
-    });
-    static ARG_RE: OnceLock<regex::Regex> = OnceLock::new();
-    // key: "quoted value"  |  key: bare_value(up to , or })
-    let arg_re = ARG_RE.get_or_init(|| {
-        regex::Regex::new(r#"([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(?:"([^"]*)"|([^,}]+))"#).unwrap()
-    });
-
-    let mut out = Vec::new();
-    for cap in call_re.captures_iter(&norm) {
-        let name = cap[1].to_string();
-        let body = &cap[2];
-        let mut map = serde_json::Map::new();
-        for a in arg_re.captures_iter(body) {
-            let key = a[1].to_string();
-            let value = if let Some(q) = a.get(2) {
-                Value::String(q.as_str().to_string())
-            } else {
-                parse_py_value(a.get(3).map(|m| m.as_str()).unwrap_or("").trim())
-            };
-            map.insert(key, value);
-        }
-        out.push(ToolCallInfo {
+    // Shared wire-format parser (see `crate::gemma`). Names are kept verbatim
+    // here — the llama.cpp path is the general-purpose local backend and must
+    // not fold mixed-case MCP tool names.
+    crate::gemma::parse_native_tool_calls(text)
+        .into_iter()
+        .map(|c| ToolCallInfo {
             id: "call_0".to_string(),
-            name,
-            arguments: Value::Object(map),
-        });
-    }
-    out
+            name: c.name,
+            arguments: c.arguments,
+        })
+        .collect()
 }
 
 /// Strip HF chat-template extensions minijinja can't parse. The `{% generation %}`

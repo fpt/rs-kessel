@@ -4,6 +4,9 @@ pub mod event_router;
 pub mod github;
 pub mod goal;
 mod harmony;
+// Shared Gemma native tool-call parsing, used by both local backends.
+#[cfg(any(feature = "local", feature = "gallium"))]
+pub mod gemma;
 mod llm;
 #[cfg(feature = "gallium")]
 pub mod llm_gallium;
