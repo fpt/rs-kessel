@@ -27,6 +27,10 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `lib/src/lib.rs` | Agent struct, UniFFI exports, provider factory |
 | `lib/src/llm.rs` | LlmProvider trait, OpenAiProvider (Responses API) |
 | `lib/src/llm_local.rs` | LlamaLocalProvider (in-process llama-cpp-2 FFI) |
+| `lib/src/llm_gallium.rs` | GalliumProvider (native candle inference) + `gallium:` spec loader — `gallium` feature |
+| `lib/src/protocol.rs` | ModelProtocol adapters (Harmony/Gemma/Qwen) for the gallium provider — `gallium` feature |
+| `gallium-core/` | Composable transformer building blocks + generation (candle) — vendored from rs-gallium |
+| `gallium-models/` | Hand-written GPT-OSS / Qwen 3.5 / Gemma 4 model implementations — vendored from rs-gallium |
 | `lib/src/react.rs` | Provider-agnostic ReAct loop |
 | `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools, ToolSession (read-tracking + permissions) |
 | `lib/src/skill.rs` | SkillRegistry, lookup_skill tool |
@@ -101,7 +105,30 @@ watcher:
   debounceInterval: 3.0
 ```
 
-Provider selection logic: if `modelPath` is set -> `LlamaLocalProvider`; else if `baseURL` is set -> `OpenAiProvider`.
+Provider selection logic: if `modelPath` starts with `gallium:` -> `GalliumProvider` (needs the `gallium` feature); else if `modelPath` is set -> `LlamaLocalProvider`; else if `baseURL` is set -> `OpenAiProvider`.
+
+### Native gallium provider (`lib/src/llm_gallium.rs`, `gallium` feature)
+
+An alternative to the llama.cpp local provider: a **pure-Rust candle** inference
+engine (crates `gallium-core` + `gallium-models`, vendored from `../rs-gallium`)
+with hand-written GPT-OSS / Qwen 3.5 / Gemma 4 implementations. Off by default —
+it pulls in candle, so build with `--features gallium`. The gallium crates are
+workspace members but excluded from `default-members`, so a bare `cargo build`
+does not compile candle.
+
+Selected by a `modelPath` of the form `gallium:<arch>:<format>:<source>`:
+
+- `<arch>` = `gpt-oss` | `qwen35` | `gemma4` (picks the model impl **and** its
+  `ModelProtocol` in `protocol.rs`: Harmony full tool-calling for GPT-OSS, plain
+  ChatML for Qwen, Gemini template for Gemma).
+- `<format>` = `gguf` | `safetensors`.
+- `<source>` = `hf:ORG/REPO/path/to/file.gguf` (gguf), `hf:ORG/REPO` (a
+  safetensors repo of shards), or a local `.gguf` file / model directory.
+
+Example: `gallium:qwen35:gguf:hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf`.
+Env knobs: `KESSEL_GALLIUM_TOKENIZER_REPO`, `KESSEL_GALLIUM_DTYPE`
+(`f16`/`bf16`/`f32`, safetensors only), `KESSEL_GALLIUM_THINKING` (Gemma 4).
+Device is CPU-only for now. See `configs/gallium.yaml`.
 
 ### Model auto-download (`lib/src/model_downloader.rs`)
 

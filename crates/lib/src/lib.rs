@@ -5,8 +5,12 @@ pub mod github;
 pub mod goal;
 mod harmony;
 mod llm;
+#[cfg(feature = "gallium")]
+pub mod llm_gallium;
 #[cfg(feature = "local")]
 pub mod llm_local;
+#[cfg(feature = "gallium")]
+pub mod protocol;
 pub mod mcp;
 pub mod mcp_client;
 pub mod mcp_client_http;

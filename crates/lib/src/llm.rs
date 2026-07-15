@@ -834,6 +834,21 @@ pub fn create_provider(
     reasoning_effort: Option<String>,
 ) -> Result<Box<dyn LlmProvider>, anyhow::Error> {
     if let Some(ref path) = model_path {
+        // Native pure-Rust (candle) backend, selected by a `gallium:` spec.
+        #[cfg(feature = "gallium")]
+        if crate::llm_gallium::is_gallium_spec(path) {
+            tracing::info!("Using native gallium provider (candle)");
+            let provider = crate::llm_gallium::load_gallium_provider(path, temperature, max_tokens)
+                .map_err(|e| anyhow::anyhow!("Failed to load gallium model '{}': {}", path, e))?;
+            return Ok(Box::new(provider));
+        }
+        #[cfg(not(feature = "gallium"))]
+        if path.starts_with("gallium:") {
+            anyhow::bail!(
+                "Gallium model support not compiled in. Build with --features gallium"
+            );
+        }
+
         #[cfg(feature = "local")]
         {
             tracing::info!("Using local llama.cpp provider (FFI)");

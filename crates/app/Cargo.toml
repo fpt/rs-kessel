@@ -20,6 +20,8 @@ local = ["kessel-core/local"]
 cuda = ["kessel-core/cuda"]
 metal = ["kessel-core/metal"]
 vulkan = ["kessel-core/vulkan"]
+# Native pure-Rust (candle) backend. Forwarded to kessel-core; off by default.
+gallium = ["kessel-core/gallium"]
 
 [dependencies]
 kessel-core = { path = "../lib", default-features = false }
