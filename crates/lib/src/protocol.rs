@@ -1079,44 +1079,20 @@ pub fn parse_gemini_tool_call(raw: &str) -> Option<(String, serde_json::Value)> 
     if raw_func.is_empty() {
         return None;
     }
-    let func_name = normalise_tool_name(&raw_func);
+    let func_name = crate::gemma::normalise_tool_name(&raw_func);
 
     // Find the outer closing brace.
     let args_section = &rest[brace..];
     let close = args_section.rfind('}')?;
     let inner = &args_section[1..close]; // between { and }
 
-    let mut args_val = parse_gemma_kv_args(inner);
+    let mut args_val = crate::gemma::parse_kv_args(inner);
 
     // Normalise "file" / "path" → "file_path" (model sometimes uses short aliases).
-    if let Some(map) = args_val.as_object_mut() {
-        if let Some(v) = map.remove("file") {
-            map.entry("file_path".to_string()).or_insert(v);
-        }
-        if let Some(v) = map.remove("path") {
-            map.entry("file_path".to_string()).or_insert(v);
-        }
-    }
+    crate::gemma::normalise_path_args(&mut args_val);
 
     tracing::debug!("Gemini tool call: {}({:?})", func_name, args_val);
     Some((func_name, args_val))
-}
-
-/// Normalise common tool name aliases the model may emit.
-///
-/// Gemma 4 4B at low temperature often completes `call:` with `write_file`,
-/// `create_file`, etc. instead of the registered `write` name.
-fn normalise_tool_name(name: &str) -> String {
-    match name {
-        "write_file" | "create_file" | "file_write" | "write_to_file" | "writefile"
-        | "write_tool" | "writetool" | "write_content" | "create" => {
-            "write".to_string()
-        }
-        "read_file" | "file_read" | "readfile" | "open_file" | "read_tool" => "read".to_string(),
-        "list_files" | "list_file" | "ls" | "find_files" | "glob_tool" => "glob".to_string(),
-        "edit_file" | "file_edit" | "update_file" | "patch_file" | "edit_tool" => "edit".to_string(),
-        _ => name.to_string(),
-    }
 }
 
 /// Parse the continuation of the `<|tool_call>call:` prefill.
@@ -1147,100 +1123,22 @@ pub fn parse_gemini_tool_call_continuation(raw: &str) -> Option<(String, serde_j
     }
 
     // Normalise common tool name aliases the model may emit
-    let func_name = normalise_tool_name(&raw_func);
+    let func_name = crate::gemma::normalise_tool_name(&raw_func);
 
     // Find the outer closing brace.
     let args_section = &raw[brace..];
     let close = args_section.rfind('}')?;
     let inner = &args_section[1..close];
 
-    let mut args_val = parse_gemma_kv_args(inner);
+    let mut args_val = crate::gemma::parse_kv_args(inner);
 
     // Normalise "file" / "path" → "file_path"
-    if let Some(map) = args_val.as_object_mut() {
-        if let Some(v) = map.remove("file") {
-            map.entry("file_path".to_string()).or_insert(v);
-        }
-        if let Some(v) = map.remove("path") {
-            map.entry("file_path".to_string()).or_insert(v);
-        }
-    }
+    crate::gemma::normalise_path_args(&mut args_val);
 
     tracing::debug!("Gemini tool call continuation: {}({:?})", func_name, args_val);
     Some((func_name, args_val))
 }
 
-/// Parse Gemma 4 key-value argument pairs (native-token format).
-///
-/// Format: `key:<|"|>strval<|"|>,key2:42,...`
-/// String values are delimited by `<|"|>`, non-strings are bare.
-#[allow(dead_code)]
-fn parse_gemma_kv_args(inner: &str) -> serde_json::Value {
-    const STR_DELIM: &str = "<|\"|>";
-    let mut map = serde_json::Map::new();
-    let mut s = inner;
-
-    loop {
-        s = s.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
-        if s.is_empty() {
-            break;
-        }
-
-        // Read key until ':'
-        let colon = match s.find(':') {
-            Some(p) => p,
-            None => break,
-        };
-        let key = s[..colon].trim().to_string();
-        s = &s[colon + 1..];
-        if key.is_empty() {
-            break;
-        }
-
-        if s.starts_with(STR_DELIM) {
-            // String value enclosed in <|"|>...<|"|>
-            s = &s[STR_DELIM.len()..];
-            match s.find(STR_DELIM) {
-                Some(end) => {
-                    let val = s[..end].to_string();
-                    map.insert(key, serde_json::Value::String(val));
-                    s = &s[end + STR_DELIM.len()..];
-                }
-                None => {
-                    // Malformed: consume rest
-                    map.insert(key, serde_json::Value::String(s.to_string()));
-                    break;
-                }
-            }
-        } else {
-            // Non-string: read until next comma or end
-            let end = s.find(',').unwrap_or(s.len());
-            let val_str = s[..end].trim();
-            map.insert(key, parse_gemma_scalar(val_str));
-            s = &s[end..];
-        }
-    }
-
-    serde_json::Value::Object(map)
-}
-
-#[allow(dead_code)]
-fn parse_gemma_scalar(s: &str) -> serde_json::Value {
-    match s {
-        "true" => serde_json::Value::Bool(true),
-        "false" => serde_json::Value::Bool(false),
-        "null" => serde_json::Value::Null,
-        _ => {
-            if let Ok(n) = s.parse::<i64>() {
-                return serde_json::json!(n);
-            }
-            if let Ok(f) = s.parse::<f64>() {
-                return serde_json::json!(f);
-            }
-            serde_json::Value::String(s.to_string())
-        }
-    }
-}
 
 /// Strip known Gemma 4 special token strings from decoded output and trim.
 ///

@@ -44,6 +44,7 @@ api_key="$(y '.llm.apiKey')"
 temperature="$(y '.llm.temperature')"
 max_tokens="$(y '.llm.maxTokens')"
 reasoning="$(y '.llm.reasoningEffort')"
+inference_engine="$(y '.llm.inferenceEngine')"
 max_turns="$(y '.agent.maxTurns')"
 # stdio MCP servers only: "cmd arg1 arg2,cmd2 ..." (matches MCP_SERVERS format).
 mcp="$(yq '[.mcpServers[]? | select(.command != null and .command != "") | (.command + " " + ((.args // []) | join(" ")))] | join(",")' "$config")"
@@ -58,6 +59,10 @@ mcp="$(yq '[.mcpServers[]? | select(.command != null and .command != "") | (.com
 [ -n "$temperature" ] && export LLM_TEMPERATURE="$temperature"
 [ -n "$max_tokens" ] && export MAX_TOKENS="$max_tokens"
 [ -n "$reasoning" ]  && export REASONING_EFFORT="$reasoning"
+# Local backend selector: "llamacpp" (default) or "gallium". If the yaml omits
+# it, any ambient INFERENCE_ENGINE (e.g. set to run the matrix per engine) flows
+# through untouched.
+[ -n "$inference_engine" ] && export INFERENCE_ENGINE="$inference_engine"
 [ -n "$max_turns" ]  && export MAX_REACT_ITERATIONS="$max_turns"
 [ -n "$mcp" ]        && export MCP_SERVERS="$mcp"
 
