@@ -59,6 +59,11 @@ public sealed class AppConfig
 
         [YamlMember(Alias = "reasoningEffort")]
         public string? ReasoningEffort { get; set; }
+
+        // Local inference backend for modelPath: "llamacpp" (default) or
+        // "gallium". Overridable at runtime by the INFERENCE_ENGINE env var.
+        [YamlMember(Alias = "inferenceEngine")]
+        public string? InferenceEngine { get; set; }
     }
 
     public sealed class AgentSection

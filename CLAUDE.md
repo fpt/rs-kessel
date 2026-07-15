@@ -27,6 +27,10 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `lib/src/lib.rs` | Agent struct, UniFFI exports, provider factory |
 | `lib/src/llm.rs` | LlmProvider trait, OpenAiProvider (Responses API) |
 | `lib/src/llm_local.rs` | LlamaLocalProvider (in-process llama-cpp-2 FFI) |
+| `lib/src/llm_gallium.rs` | GalliumProvider (native candle inference) + arch/format auto-detecting loader — `gallium` feature |
+| `lib/src/protocol.rs` | ModelProtocol adapters (Harmony/Gemma/Qwen) for the gallium provider — `gallium` feature |
+| `gallium-core/` | Composable transformer building blocks + generation (candle) — vendored from rs-gallium |
+| `gallium-models/` | Hand-written GPT-OSS / Qwen 3.5 / Gemma 4 model implementations — vendored from rs-gallium |
 | `lib/src/react.rs` | Provider-agnostic ReAct loop |
 | `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools, ToolSession (read-tracking + permissions) |
 | `lib/src/skill.rs` | SkillRegistry, lookup_skill tool |
@@ -71,6 +75,7 @@ YAML configs in `configs/`. System prompt supports `{language}` template variabl
 llm:
   modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # Local provider; auto-downloads
   # modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # ...or a plain path to an existing GGUF
+  inferenceEngine: "llamacpp"                    # Local backend: "llamacpp" (default) or "gallium"; INFERENCE_ENGINE env overrides
   baseURL: "https://api.openai.com/v1"          # For OpenAI provider
   model: "gpt-5.6-luna"
   apiKey: ""                                     # Or OPENAI_API_KEY env var
@@ -101,7 +106,36 @@ watcher:
   debounceInterval: 3.0
 ```
 
-Provider selection logic: if `modelPath` is set -> `LlamaLocalProvider`; else if `baseURL` is set -> `OpenAiProvider`.
+Provider selection logic: with `modelPath` set, the **inference engine** decides the local backend — `llm.inference_engine` (config) or the `INFERENCE_ENGINE` env var, values `llamacpp` (default) or `gallium` (needs the `gallium` feature); env overrides config. With no `modelPath` but a `baseURL`, it's `OpenAiProvider`. `modelPath` itself is **neutral** to the engine — the same `hf:`/local spec drives either backend. Resolution lives in `llm::resolve_inference_engine`.
+
+### Native gallium provider (`lib/src/llm_gallium.rs`, `gallium` feature)
+
+An alternative local backend to llama.cpp: a **pure-Rust candle** inference
+engine (crates `gallium-core` + `gallium-models`, vendored from `../rs-gallium`)
+with hand-written GPT-OSS / Qwen 3.5 / Gemma 4 implementations. Off by default —
+it pulls in candle, so build with `--features gallium` (and keep `local` too for
+a runtime switch: `--features "local gallium"`). The gallium crates are
+workspace members but excluded from `default-members`, so a bare `cargo build`
+does not compile candle.
+
+Selected by `inference_engine: "gallium"` (config or env) — **not** by the model
+path, which stays an ordinary `hf:ORG/REPO/file.gguf` / local spec, identical to
+the llama.cpp path. gallium **auto-detects**:
+
+- **format** from the path — a `.gguf` suffix is GGUF, otherwise safetensors (a
+  bare `hf:ORG/REPO` repo of shards or a local directory).
+- **arch** from the model — the GGUF `general.architecture` metadata, or
+  `config.json` `model_type`/`architectures` for safetensors — mapping to the
+  model impl **and** its `ModelProtocol` in `protocol.rs` (Harmony tool-calling
+  for GPT-OSS, ChatML for Qwen, Gemini template for Gemma). Undetectable → error.
+
+GGUF resolves through the shared `model_downloader::ensure_model` (same cache as
+llama.cpp); the tokenizer comes from a `tokenizer.json` beside the GGUF, else
+fetched from the model's HF repo (llama.cpp reads the GGUF's embedded tokenizer,
+gallium needs the HF `tokenizer.json`). Safetensors HF repos download via
+`hf-hub`. Env knobs: `KESSEL_GALLIUM_TOKENIZER_REPO`, `KESSEL_GALLIUM_DTYPE`
+(`f16`/`bf16`/`f32`, safetensors only), `KESSEL_GALLIUM_THINKING` (Gemma 4).
+Device is CPU-only for now. See `configs/gallium.yaml`.
 
 ### Model auto-download (`lib/src/model_downloader.rs`)
 

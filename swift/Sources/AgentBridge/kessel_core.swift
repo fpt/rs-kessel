@@ -804,11 +804,12 @@ public struct AgentConfig {
     public var language: String?
     public var workingDir: String?
     public var reasoningEffort: String?
+    public var inferenceEngine: String?
     public var mcpServers: [McpServerConfig]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, contextWindow: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, mcpServers: [McpServerConfig]) {
+    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, contextWindow: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, mcpServers: [McpServerConfig]) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
@@ -820,6 +821,7 @@ public struct AgentConfig {
         self.language = language
         self.workingDir = workingDir
         self.reasoningEffort = reasoningEffort
+        self.inferenceEngine = inferenceEngine
         self.mcpServers = mcpServers
     }
 }
@@ -861,6 +863,9 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.reasoningEffort != rhs.reasoningEffort {
             return false
         }
+        if lhs.inferenceEngine != rhs.inferenceEngine {
+            return false
+        }
         if lhs.mcpServers != rhs.mcpServers {
             return false
         }
@@ -879,6 +884,7 @@ extension AgentConfig: Equatable, Hashable {
         hasher.combine(language)
         hasher.combine(workingDir)
         hasher.combine(reasoningEffort)
+        hasher.combine(inferenceEngine)
         hasher.combine(mcpServers)
     }
 }
@@ -902,6 +908,7 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
                 language: FfiConverterOptionString.read(from: &buf), 
                 workingDir: FfiConverterOptionString.read(from: &buf), 
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
+                inferenceEngine: FfiConverterOptionString.read(from: &buf), 
                 mcpServers: FfiConverterSequenceTypeMcpServerConfig.read(from: &buf)
         )
     }
@@ -918,6 +925,7 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.language, into: &buf)
         FfiConverterOptionString.write(value.workingDir, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
+        FfiConverterOptionString.write(value.inferenceEngine, into: &buf)
         FfiConverterSequenceTypeMcpServerConfig.write(value.mcpServers, into: &buf)
     }
 }

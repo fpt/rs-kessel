@@ -54,6 +54,9 @@ public struct Config: Codable {
         /// the Rust model downloader resolves and fetches into the HF cache.
         public let modelPath: String?
         public let reasoningEffort: String?
+        /// Local inference backend for `modelPath`: "llamacpp" (default) or
+        /// "gallium". Overridable at runtime by the `INFERENCE_ENGINE` env var.
+        public let inferenceEngine: String?
 
         enum CodingKeys: String, CodingKey {
             case baseURL = "baseURL"
@@ -65,6 +68,7 @@ public struct Config: Codable {
             case contextWindow
             case modelPath
             case reasoningEffort
+            case inferenceEngine
         }
     }
 
@@ -155,7 +159,8 @@ public struct Config: Codable {
                 maxTokens: 4096,
                 contextWindow: nil,
                 modelPath: nil,
-                reasoningEffort: nil
+                reasoningEffort: nil,
+                inferenceEngine: nil
             ),
             agent: AgentConfig(
                 systemPromptPath: nil,

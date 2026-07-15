@@ -1,0 +1,45 @@
+llm:
+  # Note this is the SAME modelPath as qwen3.yaml — the model spec is neutral to
+  # the backend. `inferenceEngine` below picks who runs it.
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+  baseURL: ""
+  model: "qwen3.5:9b"
+  harmonyTemplate: false
+  temperature: 0.7
+  maxTokens: 2048
+
+  # Local inference backend: "llamacpp" (default, in-process llama.cpp) or
+  # "gallium" (native pure-Rust candle engine). The `INFERENCE_ENGINE` env var
+  # overrides this at runtime. Switching needs no rebuild IF the binary was built
+  # with both backends compiled in:
+  #   cargo build --release -p kessel-cli --features "local gallium"
+  inferenceEngine: "gallium"
+  # gallium auto-detects the architecture (gpt-oss / qwen35 / gemma4) from the
+  # GGUF metadata (or config.json for safetensors). Optional env knobs:
+  #   KESSEL_GALLIUM_TOKENIZER_REPO  tokenizer.json repo (if not beside the GGUF)
+  #   KESSEL_GALLIUM_DTYPE           f16 | bf16 | f32  (safetensors only, default f16)
+  #   KESSEL_GALLIUM_THINKING        1 to enable Gemma 4's thinking channel
+
+agent:
+  systemPromptPath: null
+  maxTurns: 50
+  language: "en"
+  skillPaths: ["../skills"]   # SKILL.md dirs (relative to this config's dir)
+
+tts:
+  enabled: true
+  voice: "com.apple.voice.enhanced.en-US.Zoe"  # com.apple.voice.enhanced.ja-JP.Kyoko for Japanese
+  rate: 0.5
+  pitchMultiplier: 1.0
+  volume: 1.0
+
+stt:
+  enabled: true                              # Enable speech-to-text (Apple SpeechTranscriber)
+  locale: "en-US"                            # BCP47 locale for transcription
+  censor: false                              # Enable etiquette replacements
+
+watcher:
+  enabled: true                              # Watch Claude Code activity
+  debounceInterval: 5.0                      # Seconds to batch events before summarizing
+  socketPath: null                         # Unix socket path (null = /tmp/kessel-cli-<uid>.sock)
+  sessionPath: null                        # Session JSONL path (null = auto-detect)
