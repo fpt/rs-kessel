@@ -26,7 +26,7 @@
 //! 4. Otherwise extracts the response text via `protocol.parse_response()`.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -182,8 +182,13 @@ impl LlmProvider for GalliumProvider {
 }
 
 // ============================================================================
-// Loader — construct a GalliumProvider from a `gallium:` model-path spec
+// Loader — build a GalliumProvider from a plain model path
 // ============================================================================
+//
+// The model path is exactly the spec the llama.cpp backend accepts (an
+// `hf:ORG/REPO/…` spec or a local path) — the engine is chosen out of band via
+// `llm.inference_engine` / `INFERENCE_ENGINE`, so the path carries no engine or
+// arch marker. Arch and format are auto-detected from the model itself.
 
 /// Which hand-written model implementation to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,14 +199,18 @@ enum Arch {
 }
 
 impl Arch {
-    fn parse(s: &str) -> Result<Self> {
-        match s.trim().to_ascii_lowercase().replace(['-', '_'], "").as_str() {
-            "gptoss" => Ok(Arch::GptOss),
-            "qwen35" | "qwen3" => Ok(Arch::Qwen35),
-            "gemma4" => Ok(Arch::Gemma4),
-            other => anyhow::bail!(
-                "unknown gallium arch '{other}' (expected: gpt-oss, qwen35, gemma4)"
-            ),
+    /// Map an architecture hint — GGUF `general.architecture`, or config.json
+    /// `model_type` / `architectures[]` — to a supported arch, by substring.
+    fn from_hint(hint: &str) -> Option<Self> {
+        let h = hint.to_ascii_lowercase();
+        if h.contains("gemma") {
+            Some(Arch::Gemma4)
+        } else if h.contains("qwen") {
+            Some(Arch::Qwen35)
+        } else if h.contains("gptoss") || h.contains("gpt-oss") || h.contains("gpt_oss") {
+            Some(Arch::GptOss)
+        } else {
+            None
         }
     }
 
@@ -228,124 +237,137 @@ enum Format {
 }
 
 impl Format {
-    fn parse(s: &str) -> Result<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "safetensors" | "st" => Ok(Format::Safetensors),
-            "gguf" | "q" => Ok(Format::Gguf),
-            other => anyhow::bail!(
-                "unknown gallium format '{other}' (expected: safetensors, gguf)"
-            ),
+    /// Detect the on-disk format from a model path: a `.gguf` suffix (whether an
+    /// `hf:` spec or a local file) is GGUF; anything else (a bare `hf:ORG/REPO`
+    /// repo or a local directory of shards) is safetensors.
+    fn detect(model_path: &str) -> Self {
+        if model_path
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .ends_with(".gguf")
+        {
+            Format::Gguf
+        } else {
+            Format::Safetensors
         }
     }
 }
 
-/// Does a model-path select the native gallium backend?
-pub fn is_gallium_spec(path: &str) -> bool {
-    path.starts_with("gallium:")
-}
-
-/// Build a [`GalliumProvider`] from a `gallium:<arch>:<format>:<source>` spec.
+/// Build a [`GalliumProvider`] from a plain model path — the same `hf:ORG/REPO…`
+/// or local spec the llama.cpp backend accepts.
 ///
-/// `<source>` is either an `hf:` HuggingFace spec or a local filesystem path:
-/// - **gguf** — `hf:ORG/REPO/path/to/file.gguf`, or a local `.gguf` file.
-/// - **safetensors** — `hf:ORG/REPO` (a repo of shards), or a local directory.
+/// - **GGUF** (`….gguf`): resolved via the shared model downloader
+///   ([`crate::model_downloader::ensure_model`]) and arch is read from the GGUF
+///   `general.architecture` metadata. The tokenizer comes from a `tokenizer.json`
+///   beside the GGUF, else it is fetched from the model's HF repo (llama.cpp uses
+///   the GGUF's embedded tokenizer; gallium needs the HF `tokenizer.json`).
+/// - **safetensors** (a bare `hf:ORG/REPO` repo or a local directory of shards):
+///   the repo is fetched (or the directory used as-is) and arch is read from
+///   `config.json`.
 ///
-/// Extra knobs come from the environment: `KESSEL_GALLIUM_TOKENIZER_REPO`
-/// (tokenizer.json source repo), `KESSEL_GALLIUM_DTYPE` (`f16`/`bf16`/`f32`,
-/// safetensors only, default `f16`), `KESSEL_GALLIUM_THINKING` (Gemma 4).
+/// Env knobs: `KESSEL_GALLIUM_TOKENIZER_REPO` (tokenizer.json source repo),
+/// `KESSEL_GALLIUM_DTYPE` (`f16`/`bf16`/`f32`, safetensors only, default `f16`),
+/// `KESSEL_GALLIUM_THINKING` (Gemma 4 thinking channel).
 pub fn load_gallium_provider(
-    spec: &str,
+    model_path: &str,
     temperature: Option<f32>,
     max_tokens: u32,
 ) -> Result<GalliumProvider> {
     use candle_core::{DType, Device};
-
-    // gallium:<arch>:<format>:<source> — splitn(4) keeps the source intact even
-    // though it may itself contain ':' (e.g. `hf:...` or a Windows `C:\` path).
-    let rest = spec
-        .strip_prefix("gallium:")
-        .ok_or_else(|| anyhow::anyhow!("not a gallium spec: {spec}"))?;
-    let parts: Vec<&str> = rest.splitn(3, ':').collect();
-    if parts.len() != 3 {
-        anyhow::bail!(
-            "malformed gallium spec '{spec}' \
-             (expected gallium:<arch>:<format>:<source>)"
-        );
-    }
-    let arch = Arch::parse(parts[0])?;
-    let format = Format::parse(parts[1])?;
-    let source = parts[2];
-
-    let tok_repo = std::env::var("KESSEL_GALLIUM_TOKENIZER_REPO").ok();
-    let model_path = resolve_source(source, format, tok_repo.as_deref())?;
 
     let device = Device::Cpu;
     let params = SamplingParams {
         temperature: temperature.unwrap_or(0.7),
         ..Default::default()
     };
+    let tok_repo = std::env::var("KESSEL_GALLIUM_TOKENIZER_REPO").ok();
 
-    let (model, tokenizer): (Box<dyn CausalLM>, Tokenizer) = match format {
-        Format::Gguf => {
-            tracing::info!("Loading GGUF gallium model from {:?}", model_path);
-            let (metadata, vb) = gallium_core::load_gguf(&model_path, &device)?;
-            let dir = model_path.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let tokenizer = load_tokenizer(&dir.join("tokenizer.json"))?;
-            let model: Box<dyn CausalLM> = match arch {
-                Arch::GptOss => Box::new(gallium_models::gpt_oss_q::GptOssQ::load(&metadata, &vb, &device)?),
-                Arch::Qwen35 => Box::new(gallium_models::qwen35_q::Qwen35Q::load(&metadata, &vb, &device)?),
-                Arch::Gemma4 => Box::new(gallium_models::gemma4_q::Gemma4Q::load(&metadata, &vb, &device)?),
-            };
-            (model, tokenizer)
-        }
-        Format::Safetensors => {
-            let dtype = match std::env::var("KESSEL_GALLIUM_DTYPE")
-                .unwrap_or_else(|_| "f16".to_string())
-                .as_str()
-            {
-                "f32" => DType::F32,
-                "f16" => DType::F16,
-                "bf16" => DType::BF16,
-                other => anyhow::bail!("unsupported KESSEL_GALLIUM_DTYPE '{other}'"),
-            };
-            tracing::info!("Loading safetensors gallium model from {:?}", model_path);
-            let shards: Vec<PathBuf> = std::fs::read_dir(&model_path)?
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.extension().map(|ext| ext == "safetensors").unwrap_or(false))
-                .collect();
-            if shards.is_empty() {
-                anyhow::bail!("no .safetensors files in {:?}", model_path);
+    let (arch, model, tokenizer): (Arch, Box<dyn CausalLM>, Tokenizer) =
+        match Format::detect(model_path) {
+            Format::Gguf => {
+                // Same hf:/local resolution as the llama.cpp backend.
+                let gguf = crate::model_downloader::ensure_model(model_path)
+                    .map_err(|e| anyhow::anyhow!("failed to resolve '{model_path}': {e}"))?;
+                tracing::info!("Loading GGUF gallium model from {:?}", gguf);
+                let (metadata, vb) = gallium_core::load_gguf(&gguf, &device)?;
+
+                let hint = metadata.get_str("general.architecture").unwrap_or_default();
+                let arch = Arch::from_hint(&hint).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "could not detect gallium arch from GGUF general.architecture '{hint}' \
+                         (supported: qwen35, gemma4, gpt-oss)"
+                    )
+                })?;
+
+                let tokenizer = resolve_gguf_tokenizer(&gguf, model_path, tok_repo.as_deref())?;
+                let model: Box<dyn CausalLM> = match arch {
+                    Arch::GptOss => Box::new(gallium_models::gpt_oss_q::GptOssQ::load(&metadata, &vb, &device)?),
+                    Arch::Qwen35 => Box::new(gallium_models::qwen35_q::Qwen35Q::load(&metadata, &vb, &device)?),
+                    Arch::Gemma4 => Box::new(gallium_models::gemma4_q::Gemma4Q::load(&metadata, &vb, &device)?),
+                };
+                (arch, model, tokenizer)
             }
-            let config_path = model_path.join("config.json");
-            let vb = gallium_models::loader::load_safetensors(&shards, dtype, &device)?;
-            let tokenizer = load_tokenizer(&model_path.join("tokenizer.json"))?;
-            let model: Box<dyn CausalLM> = match arch {
-                Arch::GptOss => {
-                    let cfg: gallium_models::gpt_oss::GptOssConfig =
-                        gallium_models::loader::load_config(&config_path)?;
-                    Box::new(gallium_models::gpt_oss::GptOss::load(&cfg, vb, &shards, &device)?)
-                }
-                Arch::Qwen35 => {
-                    let full: serde_json::Value = gallium_models::loader::load_config(&config_path)?;
-                    let text = full.get("text_config").unwrap_or(&full);
-                    let cfg: gallium_models::qwen35::Qwen35Config = serde_json::from_value(text.clone())
-                        .map_err(|e| anyhow::anyhow!("Qwen35 config error: {e}"))?;
-                    Box::new(gallium_models::qwen35::Qwen35::load(&cfg, vb, &device)?)
-                }
-                Arch::Gemma4 => {
-                    let full: serde_json::Value = gallium_models::loader::load_config(&config_path)?;
-                    let text = full.get("text_config").unwrap_or(&full);
-                    let cfg: gallium_models::gemma4::Gemma4Config = serde_json::from_value(text.clone())
-                        .map_err(|e| anyhow::anyhow!("Gemma4 config error: {e}"))?;
-                    Box::new(gallium_models::gemma4::Gemma4::load(&cfg, vb, &device)?)
-                }
-            };
-            (model, tokenizer)
-        }
-    };
+            Format::Safetensors => {
+                let dir = resolve_safetensors_dir(model_path, tok_repo.as_deref())?;
+                tracing::info!("Loading safetensors gallium model from {:?}", dir);
 
-    tracing::info!("Gallium model loaded.");
+                let config_path = dir.join("config.json");
+                let full: serde_json::Value = gallium_models::loader::load_config(&config_path)?;
+                let arch = detect_safetensors_arch(&full).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "could not detect gallium arch from {:?} \
+                         (supported: qwen35, gemma4, gpt-oss)",
+                        config_path
+                    )
+                })?;
+
+                let dtype = match std::env::var("KESSEL_GALLIUM_DTYPE")
+                    .unwrap_or_else(|_| "f16".to_string())
+                    .as_str()
+                {
+                    "f32" => DType::F32,
+                    "f16" => DType::F16,
+                    "bf16" => DType::BF16,
+                    other => anyhow::bail!("unsupported KESSEL_GALLIUM_DTYPE '{other}'"),
+                };
+                let shards: Vec<PathBuf> = std::fs::read_dir(&dir)?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|ext| ext == "safetensors").unwrap_or(false))
+                    .collect();
+                if shards.is_empty() {
+                    anyhow::bail!("no .safetensors files in {:?}", dir);
+                }
+                let vb = gallium_models::loader::load_safetensors(&shards, dtype, &device)?;
+                let tokenizer = load_tokenizer(&dir.join("tokenizer.json"))?;
+                // GPT-OSS parses the whole config; Qwen/Gemma nest theirs under
+                // `text_config` (multimodal configs) and fall back to the root.
+                let text = full.get("text_config").unwrap_or(&full);
+                let model: Box<dyn CausalLM> = match arch {
+                    Arch::GptOss => {
+                        let cfg: gallium_models::gpt_oss::GptOssConfig =
+                            serde_json::from_value(full.clone())
+                                .map_err(|e| anyhow::anyhow!("GptOss config error: {e}"))?;
+                        Box::new(gallium_models::gpt_oss::GptOss::load(&cfg, vb, &shards, &device)?)
+                    }
+                    Arch::Qwen35 => {
+                        let cfg: gallium_models::qwen35::Qwen35Config =
+                            serde_json::from_value(text.clone())
+                                .map_err(|e| anyhow::anyhow!("Qwen35 config error: {e}"))?;
+                        Box::new(gallium_models::qwen35::Qwen35::load(&cfg, vb, &device)?)
+                    }
+                    Arch::Gemma4 => {
+                        let cfg: gallium_models::gemma4::Gemma4Config =
+                            serde_json::from_value(text.clone())
+                                .map_err(|e| anyhow::anyhow!("Gemma4 config error: {e}"))?;
+                        Box::new(gallium_models::gemma4::Gemma4::load(&cfg, vb, &device)?)
+                    }
+                };
+                (arch, model, tokenizer)
+            }
+        };
+
+    tracing::info!("Gallium model loaded (arch: {:?}).", arch);
     Ok(GalliumProvider::new(
         model,
         tokenizer,
@@ -355,77 +377,117 @@ pub fn load_gallium_provider(
     ))
 }
 
-fn load_tokenizer(path: &std::path::Path) -> Result<Tokenizer> {
+fn load_tokenizer(path: &Path) -> Result<Tokenizer> {
     Tokenizer::from_file(path)
         .map_err(|e| anyhow::anyhow!("failed to load tokenizer from {:?}: {e}", path))
 }
 
-/// Resolve `<source>` to a local model path, downloading from HuggingFace if the
-/// source is an `hf:` spec (otherwise it is treated as a local path as-is).
-fn resolve_source(source: &str, format: Format, tok_repo: Option<&str>) -> Result<PathBuf> {
-    let Some(hf) = source.strip_prefix("hf:") else {
-        return Ok(PathBuf::from(source));
-    };
-    download_from_hub(hf, format, tok_repo)
+/// Find a `tokenizer.json` for a GGUF: prefer one sitting beside the file (the
+/// shared downloader can place it there), otherwise fetch it from HuggingFace —
+/// an explicit `KESSEL_GALLIUM_TOKENIZER_REPO`, else the GGUF's own model repo.
+fn resolve_gguf_tokenizer(gguf: &Path, model_path: &str, tok_repo: Option<&str>) -> Result<Tokenizer> {
+    let beside = gguf
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("tokenizer.json");
+    if beside.exists() {
+        return load_tokenizer(&beside);
+    }
+
+    let repo = tok_repo.map(String::from).or_else(|| hf_repo_of(model_path));
+    let repo = repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "tokenizer.json not found beside {:?}; set KESSEL_GALLIUM_TOKENIZER_REPO \
+             to its HuggingFace repo",
+            gguf
+        )
+    })?;
+    use hf_hub::api::sync::Api;
+    tracing::info!("Fetching tokenizer.json from HuggingFace: {repo}");
+    let local = Api::new()?.model(repo).get("tokenizer.json")?;
+    load_tokenizer(&local)
 }
 
-/// Download a model from the HuggingFace hub into the shared HF cache.
-///
-/// `hf` is `ORG/REPO[/path/to/file.gguf]`. For gguf the trailing path component
-/// past `ORG/REPO` is the file to fetch; for safetensors the whole repo of
-/// shards (plus config.json/tokenizer.json) is fetched and its dir returned.
-fn download_from_hub(hf: &str, format: Format, tok_repo: Option<&str>) -> Result<PathBuf> {
+/// Resolve a safetensors model path to a local directory of shards, downloading
+/// the repo from HuggingFace for an `hf:` spec.
+fn resolve_safetensors_dir(model_path: &str, tok_repo: Option<&str>) -> Result<PathBuf> {
+    if let Some(hf) = hf_spec(model_path) {
+        return download_safetensors_repo(hf, tok_repo);
+    }
+    let dir = PathBuf::from(model_path);
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        anyhow::bail!("safetensors model path is not a directory: {model_path}");
+    }
+}
+
+/// Download a full-precision safetensors repo (shards + config.json +
+/// tokenizer.json) into the HuggingFace cache and return its directory.
+fn download_safetensors_repo(hf: &str, tok_repo: Option<&str>) -> Result<PathBuf> {
     use hf_hub::api::sync::Api;
 
+    let repo_id = hf.trim_end_matches('/');
+    tracing::info!("Fetching safetensors repo from HuggingFace: {repo_id}");
     let api = Api::new()?;
-    match format {
-        Format::Safetensors => {
-            let repo_id = hf;
-            tracing::info!("Fetching safetensors repo from HuggingFace: {repo_id}");
-            let repo = api.model(repo_id.to_string());
-            let info = repo.info()?;
-            let shards: Vec<String> = info
-                .siblings
-                .iter()
-                .map(|s| s.rfilename.clone())
-                .filter(|name| name.ends_with(".safetensors"))
-                .collect();
-            if shards.is_empty() {
-                anyhow::bail!("no .safetensors files found in {repo_id}");
-            }
-            let config_local = repo.get("config.json")?;
-            api.model(tok_repo.unwrap_or(repo_id).to_string()).get("tokenizer.json")?;
-            for shard in &shards {
-                repo.get(shard)?;
-            }
-            Ok(config_local.parent().unwrap().to_path_buf())
-        }
-        Format::Gguf => {
-            // Split ORG/REPO/<file...>: the repo id is the first two path
-            // segments, the remainder (may contain '/') is the gguf filename.
-            let mut segs = hf.splitn(3, '/');
-            let org = segs.next().unwrap_or_default();
-            let name = segs
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("gguf hf spec needs ORG/REPO/FILE: {hf}"))?;
-            let filename = segs
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("gguf hf spec needs a file: {hf}"))?;
-            let repo_id = format!("{org}/{name}");
-            tracing::info!("Fetching {filename} from HuggingFace: {repo_id}");
-            let repo = api.model(repo_id.clone());
-            let tok_local = api
-                .model(tok_repo.unwrap_or(&repo_id).to_string())
-                .get("tokenizer.json")?;
-            let gguf_local = repo.get(filename)?;
-            let gguf_dir = gguf_local.parent().unwrap();
-            let tok_dest = gguf_dir.join("tokenizer.json");
-            if !tok_dest.exists() {
-                std::fs::copy(&tok_local, &tok_dest)?;
-            }
-            Ok(gguf_local)
-        }
+    let repo = api.model(repo_id.to_string());
+    let info = repo.info()?;
+    let shards: Vec<String> = info
+        .siblings
+        .iter()
+        .map(|s| s.rfilename.clone())
+        .filter(|name| name.ends_with(".safetensors"))
+        .collect();
+    if shards.is_empty() {
+        anyhow::bail!("no .safetensors files found in {repo_id}");
     }
+    let config_local = repo.get("config.json")?;
+    api.model(tok_repo.unwrap_or(repo_id).to_string())
+        .get("tokenizer.json")?;
+    for shard in &shards {
+        repo.get(shard)?;
+    }
+    Ok(config_local.parent().unwrap().to_path_buf())
+}
+
+/// Detect the arch from a parsed `config.json`: try `model_type` and
+/// `architectures[]`, at the root and under a nested `text_config`.
+fn detect_safetensors_arch(config: &serde_json::Value) -> Option<Arch> {
+    fn hints(v: &serde_json::Value) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(mt) = v.get("model_type").and_then(|x| x.as_str()) {
+            out.push(mt.to_string());
+        }
+        if let Some(arr) = v.get("architectures").and_then(|x| x.as_array()) {
+            out.extend(arr.iter().filter_map(|a| a.as_str().map(String::from)));
+        }
+        out
+    }
+    let mut all = hints(config);
+    if let Some(text) = config.get("text_config") {
+        all.extend(hints(text));
+    }
+    all.iter().find_map(|h| Arch::from_hint(h))
+}
+
+/// Strip a leading `hf:` / `hf://` scheme, returning the `ORG/REPO[/…]` body.
+fn hf_spec(model_path: &str) -> Option<&str> {
+    model_path
+        .strip_prefix("hf://")
+        .or_else(|| model_path.strip_prefix("hf:"))
+}
+
+/// The `ORG/REPO` of an `hf:` spec (dropping any `@revision` and file path).
+fn hf_repo_of(model_path: &str) -> Option<String> {
+    let rest = hf_spec(model_path)?;
+    let mut segs = rest.splitn(3, '/');
+    let org = segs.next()?;
+    let name = segs.next()?;
+    let name = name.split('@').next().unwrap_or(name);
+    if org.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some(format!("{org}/{name}"))
 }
 
 fn env_flag(key: &str) -> bool {
@@ -438,51 +500,58 @@ fn env_flag(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn is_gallium_spec_matches_only_prefix() {
-        assert!(is_gallium_spec("gallium:qwen35:gguf:hf:a/b/c.gguf"));
-        assert!(!is_gallium_spec("hf:unsloth/Qwen3.5-9B-GGUF/x.gguf"));
-        assert!(!is_gallium_spec("/models/x.gguf"));
-    }
-
-    #[test]
-    fn arch_parse_accepts_aliases_and_rejects_junk() {
-        assert_eq!(Arch::parse("gpt-oss").unwrap(), Arch::GptOss);
-        assert_eq!(Arch::parse("gpt_oss").unwrap(), Arch::GptOss);
-        assert_eq!(Arch::parse("qwen35").unwrap(), Arch::Qwen35);
-        assert_eq!(Arch::parse("Gemma4").unwrap(), Arch::Gemma4);
-        assert!(Arch::parse("llama").is_err());
-    }
-
-    #[test]
-    fn format_parse() {
-        assert_eq!(Format::parse("gguf").unwrap(), Format::Gguf);
-        assert_eq!(Format::parse("safetensors").unwrap(), Format::Safetensors);
-        assert!(Format::parse("onnx").is_err());
-    }
-
-    #[test]
-    fn malformed_spec_is_rejected() {
-        // Missing the <source> field.
-        let msg = match load_gallium_provider("gallium:qwen35:gguf", None, 128) {
-            Ok(_) => panic!("expected malformed-spec error"),
-            Err(e) => e.to_string(),
-        };
-        assert!(msg.contains("malformed gallium spec"), "got: {msg}");
-    }
-
-    #[test]
-    fn local_source_passes_through_untouched() {
-        // hf-less source is treated as a local path; a Windows drive letter's
-        // colon must survive splitn(3).
+    fn format_detects_gguf_by_suffix() {
         assert_eq!(
-            resolve_source("/models/qwen.gguf", Format::Gguf, None).unwrap(),
-            PathBuf::from("/models/qwen.gguf"),
+            Format::detect("hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"),
+            Format::Gguf
         );
-        let spec = "gallium:qwen35:gguf:C:\\models\\qwen.gguf";
-        let rest = spec.strip_prefix("gallium:").unwrap();
-        let parts: Vec<&str> = rest.splitn(3, ':').collect();
-        assert_eq!(parts[2], "C:\\models\\qwen.gguf");
+        assert_eq!(Format::detect("/models/x.GGUF"), Format::Gguf);
+        assert_eq!(Format::detect("hf:org/repo"), Format::Safetensors);
+        assert_eq!(Format::detect("/models/qwen-dir/"), Format::Safetensors);
+    }
+
+    #[test]
+    fn arch_from_hint_maps_known_names() {
+        assert_eq!(Arch::from_hint("qwen3"), Some(Arch::Qwen35));
+        assert_eq!(Arch::from_hint("Qwen3MoeForCausalLM"), Some(Arch::Qwen35));
+        assert_eq!(Arch::from_hint("gemma3"), Some(Arch::Gemma4));
+        assert_eq!(Arch::from_hint("Gemma3ForCausalLM"), Some(Arch::Gemma4));
+        assert_eq!(Arch::from_hint("gpt-oss"), Some(Arch::GptOss));
+        assert_eq!(Arch::from_hint("gpt_oss"), Some(Arch::GptOss));
+        assert_eq!(Arch::from_hint("llama"), None);
+    }
+
+    #[test]
+    fn detect_arch_from_config_json_shapes() {
+        assert_eq!(
+            detect_safetensors_arch(&json!({"model_type": "qwen3"})),
+            Some(Arch::Qwen35)
+        );
+        assert_eq!(
+            detect_safetensors_arch(&json!({"architectures": ["Gemma3ForCausalLM"]})),
+            Some(Arch::Gemma4)
+        );
+        // Hint nested under text_config (multimodal wrapper).
+        assert_eq!(
+            detect_safetensors_arch(&json!({"text_config": {"model_type": "gpt_oss"}})),
+            Some(Arch::GptOss)
+        );
+        assert_eq!(detect_safetensors_arch(&json!({"model_type": "phi3"})), None);
+    }
+
+    #[test]
+    fn hf_repo_of_drops_file_and_revision() {
+        assert_eq!(
+            hf_repo_of("hf:unsloth/Qwen3.5-9B-GGUF/x.gguf").as_deref(),
+            Some("unsloth/Qwen3.5-9B-GGUF")
+        );
+        assert_eq!(
+            hf_repo_of("hf://org/repo@abc123/sub/model.gguf").as_deref(),
+            Some("org/repo")
+        );
+        assert_eq!(hf_repo_of("/local/path.gguf"), None);
     }
 }

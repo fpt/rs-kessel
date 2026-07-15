@@ -55,6 +55,7 @@ var agentConfig = new AgentConfig(
     @language: cfg.Agent.Language,
     @workingDir: Directory.GetCurrentDirectory(),
     @reasoningEffort: cfg.Llm.ReasoningEffort,
+    @inferenceEngine: cfg.Llm.InferenceEngine,
     @mcpServers: mcpServers);
 
 Agent agent;

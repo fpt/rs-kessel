@@ -44,6 +44,9 @@ pub struct ServerConfig {
     pub temperature: Option<f32>,
     pub max_tokens: u32,
     pub reasoning_effort: Option<String>,
+    /// Local inference backend: "llamacpp" (default) or "gallium". `None`
+    /// auto-detects (and still honors the `INFERENCE_ENGINE` env var).
+    pub inference_engine: Option<String>,
     pub max_iterations: Option<u32>,
 }
 
@@ -119,6 +122,7 @@ fn default_provider_factory(config: &ServerConfig, model: &str) -> Result<Box<dy
         config.temperature,
         config.max_tokens,
         config.reasoning_effort.clone(),
+        config.inference_engine.clone(),
     )
     .map_err(|e| AgentError::ConfigError(e.to_string()))
 }

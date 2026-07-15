@@ -30,6 +30,7 @@ struct EnvConfig {
     max_react_iterations: u32,
     temperature: Option<f32>,
     reasoning_effort: Option<String>,
+    inference_engine: Option<String>,
 }
 
 impl EnvConfig {
@@ -51,6 +52,7 @@ impl EnvConfig {
                 .unwrap_or(kessel_core::react::DEFAULT_MAX_ITERATIONS),
             temperature: std::env::var("LLM_TEMPERATURE").ok().and_then(|s| s.parse().ok()),
             reasoning_effort: std::env::var("REASONING_EFFORT").ok(),
+            inference_engine: std::env::var("INFERENCE_ENGINE").ok(),
         }
     }
 }
@@ -88,6 +90,7 @@ fn run_app_server(config: EnvConfig) {
         temperature: config.temperature,
         max_tokens: config.max_tokens,
         reasoning_effort: config.reasoning_effort,
+        inference_engine: config.inference_engine,
         max_iterations: Some(config.max_react_iterations),
     });
 }
@@ -103,6 +106,7 @@ fn run_repl(config: EnvConfig) {
         max_react_iterations,
         temperature,
         reasoning_effort,
+        inference_engine,
     } = config;
 
     let client = create_provider(
@@ -113,6 +117,7 @@ fn run_repl(config: EnvConfig) {
         temperature,
         max_tokens,
         reasoning_effort,
+        inference_engine.clone(),
     )
     .expect("Failed to create LLM provider");
 

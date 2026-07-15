@@ -29,6 +29,7 @@ dictionary AgentConfig {
     string? language;
     string? working_dir;
     string? reasoning_effort;
+    string? inference_engine;
     sequence<McpServerConfig> mcp_servers;
 };
 

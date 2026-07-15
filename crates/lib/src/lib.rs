@@ -139,6 +139,10 @@ pub struct AgentConfig {
     pub language: Option<String>,
     pub working_dir: Option<String>,
     pub reasoning_effort: Option<String>,
+    /// Local inference backend: "llamacpp" (default) or "gallium". Overridable at
+    /// runtime by the `INFERENCE_ENGINE` env var. `None` auto-detects from
+    /// `model_path` (a `gallium:` spec selects gallium).
+    pub inference_engine: Option<String>,
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -156,6 +160,7 @@ impl Default for AgentConfig {
             language: Some("en".to_string()),
             working_dir: None,
             reasoning_effort: None,
+            inference_engine: None,
             mcp_servers: Vec::new(),
         }
     }
@@ -246,6 +251,7 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         config.temperature,
         config.max_tokens,
         config.reasoning_effort.clone(),
+        config.inference_engine.clone(),
     )
     .map_err(|e| AgentError::ConfigError(e.to_string()))?;
 

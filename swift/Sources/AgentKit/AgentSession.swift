@@ -73,6 +73,7 @@ public class AgentSession: @unchecked Sendable {
             language: language,
             workingDir: FileManager.default.currentDirectoryPath,
             reasoningEffort: config.llm.reasoningEffort,
+            inferenceEngine: config.llm.inferenceEngine,
             mcpServers: mcpServers
         )
 

@@ -824,6 +824,41 @@ pub(crate) fn http_agent_with_ca(redirects: Option<u32>) -> ureq::Agent {
     builder.build()
 }
 
+/// Which local inference backend runs a `model_path`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InferenceEngine {
+    /// In-process llama.cpp (GGUF) via `llama-cpp-2` FFI — the `local` feature.
+    LlamaCpp,
+    /// Native pure-Rust candle engine — the `gallium` feature.
+    Gallium,
+}
+
+/// Resolve the local inference engine: explicit config (`llm.inference_engine`)
+/// takes precedence, then the `INFERENCE_ENGINE` env var, else the default
+/// (llama.cpp). The `model_path` is neutral to this choice — the same
+/// `hf:`/local spec drives either backend. Both must be compiled in for a
+/// switch without a rebuild.
+pub fn resolve_inference_engine(explicit: Option<String>) -> InferenceEngine {
+    let selector = explicit
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("INFERENCE_ENGINE").ok())
+        .map(|s| s.trim().to_ascii_lowercase());
+
+    match selector.as_deref() {
+        Some("gallium") => InferenceEngine::Gallium,
+        Some("llamacpp") | Some("llama.cpp") | Some("llama-cpp") | Some("llama_cpp")
+        | Some("llama") => InferenceEngine::LlamaCpp,
+        Some(other) => {
+            tracing::warn!(
+                "Unknown inference_engine '{}' (expected 'llamacpp' or 'gallium'); using llamacpp",
+                other
+            );
+            InferenceEngine::LlamaCpp
+        }
+        None => InferenceEngine::LlamaCpp,
+    }
+}
+
 pub fn create_provider(
     model_path: Option<String>,
     _base_url: String,
@@ -832,46 +867,49 @@ pub fn create_provider(
     temperature: Option<f32>,
     max_tokens: u32,
     reasoning_effort: Option<String>,
+    inference_engine: Option<String>,
 ) -> Result<Box<dyn LlmProvider>, anyhow::Error> {
     if let Some(ref path) = model_path {
-        // Native pure-Rust (candle) backend, selected by a `gallium:` spec.
-        #[cfg(feature = "gallium")]
-        if crate::llm_gallium::is_gallium_spec(path) {
-            tracing::info!("Using native gallium provider (candle)");
-            let provider = crate::llm_gallium::load_gallium_provider(path, temperature, max_tokens)
-                .map_err(|e| anyhow::anyhow!("Failed to load gallium model '{}': {}", path, e))?;
-            return Ok(Box::new(provider));
-        }
-        #[cfg(not(feature = "gallium"))]
-        if path.starts_with("gallium:") {
-            anyhow::bail!(
-                "Gallium model support not compiled in. Build with --features gallium"
-            );
-        }
-
-        #[cfg(feature = "local")]
-        {
-            tracing::info!("Using local llama.cpp provider (FFI)");
-            // Resolve `hf:` specs (download into the HF cache if needed); plain
-            // paths pass through unchanged.
-            let resolved = crate::model_downloader::ensure_model(path)
-                .map_err(|e| anyhow::anyhow!("Failed to resolve model '{}': {}", path, e))?;
-            let resolved = resolved.to_string_lossy().to_string();
-            let temp = temperature.unwrap_or(0.7);
-            let provider =
-                crate::llm_local::LlamaLocalProvider::new(&resolved, temp, max_tokens, 8192)
-                    .map_err(|e| {
-                        tracing::error!("Failed to create local provider: {}", e);
-                        anyhow::anyhow!("Failed to load model from {}: {}", resolved, e)
-                    })?;
-            return Ok(Box::new(provider));
-        }
-        #[cfg(not(feature = "local"))]
-        {
-            let _ = path;
-            anyhow::bail!(
-                "Local model support not compiled in. Build with --features local"
-            );
+        match resolve_inference_engine(inference_engine) {
+            InferenceEngine::Gallium => {
+                #[cfg(feature = "gallium")]
+                {
+                    tracing::info!("Using native gallium provider (candle)");
+                    let provider =
+                        crate::llm_gallium::load_gallium_provider(path, temperature, max_tokens)
+                            .map_err(|e| {
+                                anyhow::anyhow!("Failed to load gallium model '{}': {}", path, e)
+                            })?;
+                    return Ok(Box::new(provider));
+                }
+                #[cfg(not(feature = "gallium"))]
+                anyhow::bail!(
+                    "Gallium inference engine not compiled in. Build with --features gallium"
+                );
+            }
+            InferenceEngine::LlamaCpp => {
+                #[cfg(feature = "local")]
+                {
+                    tracing::info!("Using local llama.cpp provider (FFI)");
+                    // Resolve `hf:` specs (download into the HF cache if needed);
+                    // plain paths pass through unchanged.
+                    let resolved = crate::model_downloader::ensure_model(path)
+                        .map_err(|e| anyhow::anyhow!("Failed to resolve model '{}': {}", path, e))?;
+                    let resolved = resolved.to_string_lossy().to_string();
+                    let temp = temperature.unwrap_or(0.7);
+                    let provider =
+                        crate::llm_local::LlamaLocalProvider::new(&resolved, temp, max_tokens, 8192)
+                            .map_err(|e| {
+                                tracing::error!("Failed to create local provider: {}", e);
+                                anyhow::anyhow!("Failed to load model from {}: {}", resolved, e)
+                            })?;
+                    return Ok(Box::new(provider));
+                }
+                #[cfg(not(feature = "local"))]
+                anyhow::bail!(
+                    "Local (llama.cpp) inference engine not compiled in. Build with --features local"
+                );
+            }
         }
     }
 
@@ -892,6 +930,34 @@ pub fn create_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_explicit_config_wins() {
+        // An explicit, non-empty selector short-circuits before the env var is
+        // read, so these are deterministic regardless of the environment.
+        for v in ["gallium", "Gallium", "GALLIUM", "  gallium "] {
+            assert_eq!(
+                resolve_inference_engine(Some(v.to_string())),
+                InferenceEngine::Gallium
+            );
+        }
+        for v in ["llamacpp", "llama.cpp", "llama-cpp", "llama_cpp", "llama", "LlamaCpp"] {
+            assert_eq!(
+                resolve_inference_engine(Some(v.to_string())),
+                InferenceEngine::LlamaCpp
+            );
+        }
+    }
+
+    #[test]
+    fn engine_unknown_selector_defaults_to_llamacpp() {
+        // An unknown (but non-empty) selector is consumed (env not read) and
+        // falls back to the default backend.
+        assert_eq!(
+            resolve_inference_engine(Some("bogus".to_string())),
+            InferenceEngine::LlamaCpp
+        );
+    }
 
     #[test]
     fn test_convert_user_message_plain() {
