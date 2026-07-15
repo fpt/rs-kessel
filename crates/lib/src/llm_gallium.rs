@@ -34,7 +34,7 @@ use gallium_core::{generate, CausalLM, SamplingParams};
 use tokenizers::Tokenizer;
 
 use crate::llm::{ChatMessage, LlmProvider, LlmResponse, ToolCallInfo, ToolDefinition};
-use crate::protocol::{GemmaProtocol, HarmonyProtocol, ModelProtocol, QwenProtocol};
+use crate::protocol::{GemmaProtocol, HarmonyProtocol, Lfm2Protocol, ModelProtocol, QwenProtocol};
 
 pub struct GalliumProvider {
     model: RefCell<Box<dyn CausalLM>>,
@@ -196,6 +196,7 @@ enum Arch {
     GptOss,
     Qwen35,
     Gemma4,
+    Lfm2,
 }
 
 impl Arch {
@@ -209,6 +210,8 @@ impl Arch {
             Some(Arch::Qwen35)
         } else if h.contains("gptoss") || h.contains("gpt-oss") || h.contains("gpt_oss") {
             Some(Arch::GptOss)
+        } else if h.contains("lfm2") {
+            Some(Arch::Lfm2)
         } else {
             None
         }
@@ -218,6 +221,7 @@ impl Arch {
         match self {
             Arch::GptOss => Box::new(HarmonyProtocol),
             Arch::Qwen35 => Box::new(QwenProtocol),
+            Arch::Lfm2 => Box::new(Lfm2Protocol),
             Arch::Gemma4 => {
                 // Gemma 4 supports an optional thinking channel.
                 if env_flag("KESSEL_GALLIUM_THINKING") {
@@ -304,6 +308,7 @@ pub fn load_gallium_provider(
                     Arch::GptOss => Box::new(gallium_models::gpt_oss_q::GptOssQ::load(&metadata, &vb, &device)?),
                     Arch::Qwen35 => Box::new(gallium_models::qwen35_q::Qwen35Q::load(&metadata, &vb, &device)?),
                     Arch::Gemma4 => Box::new(gallium_models::gemma4_q::Gemma4Q::load(&metadata, &vb, &device)?),
+                    Arch::Lfm2 => Box::new(gallium_models::lfm2moe_q::Lfm2MoeQ::load(&metadata, &vb, &device)?),
                 };
                 (arch, model, tokenizer)
             }
@@ -362,6 +367,9 @@ pub fn load_gallium_provider(
                                 .map_err(|e| anyhow::anyhow!("Gemma4 config error: {e}"))?;
                         Box::new(gallium_models::gemma4::Gemma4::load(&cfg, vb, &device)?)
                     }
+                    Arch::Lfm2 => anyhow::bail!(
+                        "LFM2 is only supported as GGUF for now; use an `hf:…/….gguf` model path"
+                    ),
                 };
                 (arch, model, tokenizer)
             }

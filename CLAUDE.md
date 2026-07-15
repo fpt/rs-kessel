@@ -30,7 +30,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `lib/src/llm_gallium.rs` | GalliumProvider (native candle inference) + arch/format auto-detecting loader — `gallium` feature |
 | `lib/src/protocol.rs` | ModelProtocol adapters (Harmony/Gemma/Qwen) for the gallium provider — `gallium` feature |
 | `gallium-core/` | Composable transformer building blocks + generation (candle) — vendored from rs-gallium |
-| `gallium-models/` | Hand-written GPT-OSS / Qwen 3.5 / Gemma 4 model implementations — vendored from rs-gallium |
+| `gallium-models/` | Hand-written GPT-OSS / Qwen 3.5 / Gemma 4 / LFM2.5 model implementations — vendored from rs-gallium |
 | `lib/src/react.rs` | Provider-agnostic ReAct loop |
 | `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools, ToolSession (read-tracking + permissions) |
 | `lib/src/skill.rs` | SkillRegistry, lookup_skill tool |
@@ -112,7 +112,7 @@ Provider selection logic: with `modelPath` set, the **inference engine** decides
 
 An alternative local backend to llama.cpp: a **pure-Rust candle** inference
 engine (crates `gallium-core` + `gallium-models`, vendored from `../rs-gallium`)
-with hand-written GPT-OSS / Qwen 3.5 / Gemma 4 implementations. Off by default —
+with hand-written GPT-OSS / Qwen 3.5 / Gemma 4 / LFM2.5 implementations. Off by default —
 it pulls in candle, so build with `--features gallium` (and keep `local` too for
 a runtime switch: `--features "local gallium"`). The gallium crates are
 workspace members but excluded from `default-members`, so a bare `cargo build`
@@ -127,7 +127,13 @@ the llama.cpp path. gallium **auto-detects**:
 - **arch** from the model — the GGUF `general.architecture` metadata, or
   `config.json` `model_type`/`architectures` for safetensors — mapping to the
   model impl **and** its `ModelProtocol` in `protocol.rs` (Harmony tool-calling
-  for GPT-OSS, ChatML for Qwen, Gemini template for Gemma). Undetectable → error.
+  for GPT-OSS, ChatML for Qwen, Gemini template for Gemma, ChatML +
+  `[func(arg=val)]` tool calls for LFM2). Undetectable → error.
+
+LFM2.5 (`lfm2moe`) is a **hybrid** MoE (short-conv + GQA blocks, sparse
+sigmoid-gated experts); its GGUF experts are Q4_K, dequantized one expert at a
+time via `gallium_core::QExperts` (the generic counterpart to the MXFP4-only
+`Tq2Tensor`). GGUF-only for now (no safetensors path).
 
 GGUF resolves through the shared `model_downloader::ensure_model` (same cache as
 llama.cpp); the tokenizer comes from a `tokenizer.json` beside the GGUF, else
