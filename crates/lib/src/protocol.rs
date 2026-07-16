@@ -1089,7 +1089,7 @@ pub fn parse_gemini_tool_call(raw: &str) -> Option<(String, serde_json::Value)> 
     let mut args_val = crate::gemma::parse_kv_args(inner);
 
     // Normalise "file" / "path" → "file_path" (model sometimes uses short aliases).
-    crate::gemma::normalise_path_args(&mut args_val);
+    crate::gemma::normalise_path_args(&func_name, &mut args_val);
 
     tracing::debug!("Gemini tool call: {}({:?})", func_name, args_val);
     Some((func_name, args_val))
@@ -1133,7 +1133,7 @@ pub fn parse_gemini_tool_call_continuation(raw: &str) -> Option<(String, serde_j
     let mut args_val = crate::gemma::parse_kv_args(inner);
 
     // Normalise "file" / "path" → "file_path"
-    crate::gemma::normalise_path_args(&mut args_val);
+    crate::gemma::normalise_path_args(&func_name, &mut args_val);
 
     tracing::debug!("Gemini tool call continuation: {}({:?})", func_name, args_val);
     Some((func_name, args_val))
