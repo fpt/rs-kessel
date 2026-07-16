@@ -115,19 +115,29 @@ pub fn parse_scalar(s: &str) -> Value {
 
 /// Fold common tool-name aliases a Gemma model may hallucinate onto the
 /// registered names (e.g. `write_file` → `write`). Opt-in per caller.
+///
+/// Note `ls` is NOT an alias: kessel registers a real `ls` tool, so an `ls`
+/// call must route to it verbatim (folding it onto `glob` used to send a bogus
+/// `file_path` arg to a tool that wants `pattern`, wedging the ReAct loop).
 pub fn normalise_tool_name(name: &str) -> String {
     match name {
         "write_file" | "create_file" | "file_write" | "write_to_file" | "writefile"
         | "write_tool" | "writetool" | "write_content" | "create" => "write".to_string(),
         "read_file" | "file_read" | "readfile" | "open_file" | "read_tool" => "read".to_string(),
-        "list_files" | "list_file" | "ls" | "find_files" | "glob_tool" => "glob".to_string(),
+        "list_files" | "list_file" | "find_files" | "glob_tool" => "glob".to_string(),
         "edit_file" | "file_edit" | "update_file" | "patch_file" | "edit_tool" => "edit".to_string(),
         _ => name.to_string(),
     }
 }
 
-/// Fold the short `file` / `path` argument aliases onto `file_path`. Opt-in.
-pub fn normalise_path_args(args: &mut Value) {
+/// Fold the short `file` / `path` argument aliases onto `file_path` — but only
+/// for the file tools whose canonical parameter IS `file_path`. Other tools
+/// (`ls`, `glob`, MCP tools, …) legitimately take `path`-named params that must
+/// pass through untouched.
+pub fn normalise_path_args(tool: &str, args: &mut Value) {
+    if !matches!(tool, "read" | "write" | "edit" | "multi_edit") {
+        return;
+    }
     if let Some(map) = args.as_object_mut() {
         if let Some(v) = map.remove("file") {
             map.entry("file_path".to_string()).or_insert(v);
@@ -189,8 +199,19 @@ mod tests {
         assert_eq!(normalise_tool_name("write_file"), "write");
         assert_eq!(normalise_tool_name("search-godoc"), "search-godoc");
         let mut args = serde_json::json!({"file": "x.rs"});
-        normalise_path_args(&mut args);
+        normalise_path_args("read", &mut args);
         assert_eq!(args["file_path"], "x.rs");
         assert!(args.get("file").is_none());
+    }
+
+    #[test]
+    fn ls_is_a_real_tool_and_keeps_its_path_arg() {
+        // kessel registers a real `ls` tool taking `path` — neither the name
+        // nor the arg may be folded (this wedged the 26B file_read loop).
+        assert_eq!(normalise_tool_name("ls"), "ls");
+        let mut args = serde_json::json!({"path": "."});
+        normalise_path_args("ls", &mut args);
+        assert_eq!(args["path"], ".");
+        assert!(args.get("file_path").is_none());
     }
 }

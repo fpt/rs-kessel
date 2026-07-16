@@ -136,6 +136,13 @@ sigmoid-gated experts); its GGUF experts are Q4_K, dequantized one expert at a
 time via `gallium_core::QExperts` (the generic counterpart to the MXFP4-only
 `Tq2Tensor`). GGUF-only for now (no safetensors path).
 
+Gemma 4 covers **both** variants in one impl (`gemma4_q.rs`): the dense E4B
+(with per-layer embeddings) and the 26B-A4B **MoE** (per-layer KV-head arrays —
+sliding layers 8 heads × 256 dim, global layers 2 × 512; **shared K=V** on
+global layers, which have no `attn_v`; and a shared GEGLU MLP + 128-expert
+top-8 softmax-routed MoE per block, experts via `QExperts`, router computed on
+the post-attention residual per llama.cpp's `models/gemma4.cpp`).
+
 GGUF resolves through the shared `model_downloader::ensure_model` (same cache as
 llama.cpp); the tokenizer comes from a `tokenizer.json` beside the GGUF, else
 fetched from the model's HF repo (llama.cpp reads the GGUF's embedded tokenizer,
