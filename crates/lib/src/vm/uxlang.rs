@@ -1449,6 +1449,21 @@ mod tests {
     }
 
     #[test]
+    fn entity_builtin_reports_x_y_tag_in_order() {
+        // Pins the `entity(x, y, tag)` argument order through the emitted
+        // `ux_tmp STORE16 … #52 DEO` sequence, and that it leaves a clean stack.
+        let src = "proc draw() { entity(11, 22, 7); }";
+        let mut c = load(src);
+        let obs = c.run_frame(0);
+        assert!(obs.fault.is_none(), "entity faulted: {:?}", obs.fault);
+        assert_eq!(obs.entities.len(), 1);
+        assert_eq!(obs.entities[0].x, 11);
+        assert_eq!(obs.entities[0].y, 22);
+        assert_eq!(obs.entities[0].tag, 7);
+        assert!(obs.data_stack.is_empty(), "entity left {:?} on the stack", obs.data_stack);
+    }
+
+    #[test]
     fn init_runs_once_at_reset() {
         let src = r#"
             var n: word;
