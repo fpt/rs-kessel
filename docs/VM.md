@@ -145,56 +145,86 @@ Note: the example wraps `@skip-left`/`@skip-right` as labels **after** the branc
 so `JZ` skips the movement block — labels mark addresses, no jump is needed to
 "fall through" into them.
 
-## uxlang dialect (`.ux`)
+## luax dialect (`.lua`)
 
-A small, LL(1), typed **Pascal/C-ish** language that **compiles to the assembler
-above** — a more conventional, readable alternative to raw stack code. Give the
-source a `.ux` path and `vm_assemble` compiles it to assembly, then assembles.
-Everything downstream (load, run, observe) is identical.
+A small, statically-typed **Lua-flavored** language that **compiles to the
+assembler above** — the high-level way to write games. Models have strong Lua
+priors (PICO-8/TIC-80/Löve), so a Lua surface lets them reuse that knowledge.
+Give the source a `.lua` path and `vm_assemble` compiles it, then assembles.
+Everything downstream (load, run, observe, play) is identical.
 
-Structure: the top level holds `const` / `var` declarations and `proc`
-definitions. Entry points are conventional (the VM is vector-driven, so there is
-no `main(){ loop … }`): `init` runs once at reset; `update` then `draw` run each
-frame (or a single `frame` proc). Locals/params use static slots, so **recursion
-is not supported**.
+**Not** real Lua — a static subset: no `require`, metatables, coroutines,
+closures, varargs, GC, or stdlib. Tables are compile-time **records**; arrays are
+fixed-length. Entry points (VM is vector-driven, no `main(){ loop … }`): `init`
+runs once at reset; `update` then `draw` run each frame (or a single `frame`).
+Locals/params use static slots — **no recursion**.
 
-```c
-const SCREEN_W = 128;
-var player_x: word = 32;
-var vx: word = 1;
+```lua
+record Ball { x, y, vx, vy, color: byte }   -- fields default to `word`
 
-var ball: [32]byte;              // 8x8 sprite, 4bpp (2 px/byte, hi-nibble = left)
+local ball: Ball          -- top-level local = a global (persistent state)
+local GRAVITY = 1         -- constant-initialized local also folds as a constant
 
-proc init() {
-    ball[0] = 0x11; ball[1] = 0x11;   // fill a couple of rows...
-}
+function init() ball.x = 20  ball.y = 30  ball.vx = 1  ball.vy = 1  ball.color = 8 end
 
-proc update() {
-    if button(LEFT)  { player_x = player_x - 1; }
-    if button(RIGHT) { player_x = player_x + 1; }
-    if player_x >= SCREEN_W - 8 { vx = 0 - vx; }
-}
+function move(b: Ball)    -- records pass by ADDRESS (mutable)
+  b.x = b.x + b.vx
+  if b.x >= 118 or b.x <= 2 then b.vx = 0 - b.vx end
+end
 
-proc draw() {
-    clear(0);
-    sprite(ball, player_x, 60);   // ( tile x y )
-    entity(player_x, 60, 1);      // ( x y tag ) — report for observation
-}
+function update() move(ball) end
+
+function draw()
+  cls(0)
+  pset(ball.x, ball.y, ball.color)
+  entity(ball.x, ball.y, 1)       -- report for observation
+end
 ```
 
-- **Types**: `byte` (8-bit), `word`/`bool` (16-bit); fixed arrays `[N]byte` /
-  `[N]word`. A bare array name is its base address.
-- **Declarations**: `const NAME = <const-expr>;`, `var name: type [= const];`,
-  `proc name(a: type, …)[: type] { … }`.
-- **Statements**: `var`, assignment (`x = e;`, `a[i] = e;`), `if/else`, `while`,
-  `loop`, `break`, `return`, and calls.
-- **Operators**: `+ - * / %`, `& | ^ << >>`, `== != < <= > >=`, `and or not`,
-  unary `-` `~`. Assignment is a statement (no `a = b = c`).
-- **Builtins**: `clear(c)`, `pixel(x,y,c)`, `sprite(tile,x,y)`,
-  `entity(x,y,tag)`, `button(mask)→0/1`, `buttons()`, `rnd()`,
-  `peek8/peek16(addr)`, `poke8/poke16(addr,val)`.
-- **Button constants**: `LEFT RIGHT UP DOWN A B START SELECT`.
-- Comments: `//` to end of line, `/* … */` block.
+- **Types:** `word` (default) / `byte` / `bool`; `record Name { field[: type], … }`;
+  fixed arrays `array(N, T)` where `T` is a scalar **or a record**
+  (`local es: array(16, Enemy)`), indexed `a[i]` / `a[i].field`.
+- **Declarations:** `record`; top-level `local name[: T] [= const]` (a global);
+  `function name(a[: T], …) … end`. Records pass by address (functions mutate
+  them); scalars pass by value.
+- **Statements:** `local`, assignment, `if/elseif/else … end`, `while … do … end`,
+  `for i = a, b[, step] do … end` (ascending, positive literal step), `break`,
+  `return`, calls.
+- **Operators (Lua):** `+ - * / %`, `& | ~ << >>` (binary `~` is xor), `== ~= < <=
+  > >=`, `and or not`, unary `-` `~` (bitwise not). Assignment is a statement.
+- **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(tile,x,y,flags)` (flags bit0/1 =
+  flip x/y), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
+  `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
+  `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
+- **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
+- Comments: `--` line, `--[[ … ]]` block.
+
+### Tutorial snippets
+
+Worked examples the model can adapt (this is what helps most):
+
+```lua
+-- input: move a block
+function update()
+  if btn(LEFT)  then p.x = p.x - 1 end
+  if btn(RIGHT) then p.x = p.x + 1 end
+end
+
+-- entity list: update an array of records
+record Enemy { x, y, alive }
+local es: array(8, Enemy)
+function update()
+  for i = 0, 7 do
+    if es[i].alive == 1 then es[i].x = es[i].x + 1 end
+  end
+end
+
+-- simple state switch
+local state = 0            -- 0 title, 1 play
+function update()
+  if state == 0 and btn(START) then state = 1 end
+end
+```
 
 ## Playing a game (`kessel --play`)
 
@@ -202,11 +232,11 @@ The standalone `kessel` app can render a ROM in a native window, so the games th
 model authors are **human-playable**:
 
 ```bash
-kessel --play games/bounce.ux     # a self-animating demo
-kessel --play games/mover.ux      # arrows move; Z/X = A/B; Return/Space = Start/Select
+kessel --play games/bounce.lua    # a self-animating demo
+kessel --play games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
 ```
 
-`--play` needs no model or API key. It loads a `.ux`/`.asm` file into a standalone
+`--play` needs no model or API key. It loads a `.lua`/`.asm` file into a standalone
 `VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,
 and on a 60 Hz timer calls `tick(buttons)` + `framebuffer_rgba()`, blitting the
 128×128 framebuffer scaled up with nearest-neighbour. The keyboard maps to the

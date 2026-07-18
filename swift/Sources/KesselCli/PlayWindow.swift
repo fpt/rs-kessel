@@ -3,7 +3,7 @@ import Foundation
 import AgentBridge
 
 // Phase 2 of the fantasy-console VM: a native, human-playable window. `kessel
-// --play <file.ux|file.asm>` loads a ROM into a standalone `VmPlayer` (no LLM
+// --play <file.lua|file.asm>` loads a ROM into a standalone `VmPlayer` (no LLM
 // needed) and renders its 128x128 framebuffer scaled up, ticking at 60 Hz and
 // mapping the keyboard to the gamepad. The same ROMs the model authors headless
 // are playable here.

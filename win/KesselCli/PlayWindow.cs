@@ -8,7 +8,7 @@ using uniffi.kessel_core;
 namespace KesselCli;
 
 // Windows analogue of the macOS play window (swift/Sources/KesselCli/PlayWindow.swift).
-// `kessel --play <file.ux|file.asm>` loads a ROM into a standalone VmPlayer (no LLM
+// `kessel --play <file.lua|file.asm>` loads a ROM into a standalone VmPlayer (no LLM
 // needed), opens a WinForms window, and renders the 128x128 framebuffer scaled up
 // with nearest-neighbour at 60 Hz, mapping the keyboard to the gamepad.
 internal static class PlayWindow

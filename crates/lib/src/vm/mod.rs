@@ -15,10 +15,10 @@
 pub mod assembler;
 pub mod device;
 pub mod isa;
+pub mod luax;
 pub mod player;
 pub mod png;
 pub mod tools;
-pub mod uxlang;
 pub mod vm;
 
 use std::collections::HashMap;
@@ -82,18 +82,18 @@ impl VmConsole {
     }
 
     /// Assemble a previously written source. On success the ROM is cached for
-    /// [`load_rom`](Self::load_rom). Sources ending in `.ux` are first compiled
-    /// from the uxlang front-end to assembler, then assembled.
+    /// [`load_rom`](Self::load_rom). Sources ending in `.lua` are first compiled
+    /// from the luax front-end to assembler, then assembled.
     pub fn assemble(&mut self, path: &str) -> Result<assembler::Assembled, String> {
         let src = self
             .sources
             .get(path)
             .ok_or_else(|| format!("no source written at '{path}'"))?;
 
-        // uxlang dialect: compile to assembler first. Compiler diagnostics are
-        // returned in an otherwise-empty `Assembled` so the tool can report them.
-        let built = if is_uxlang(path) {
-            let compiled = uxlang::compile(src);
+        // luax (Lua-ish) dialect: compile to assembler first. Compiler
+        // diagnostics are returned in an otherwise-empty `Assembled`.
+        let built = if is_lua(path) {
+            let compiled = luax::compile(src);
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
                     rom: Vec::new(),
@@ -248,9 +248,9 @@ impl Observation {
     }
 }
 
-/// True if a source path selects the uxlang dialect (`.ux`).
-fn is_uxlang(path: &str) -> bool {
-    path.to_ascii_lowercase().ends_with(".ux")
+/// True if a source path selects the luax (Lua-ish) dialect (`.lua`).
+fn is_lua(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".lua")
 }
 
 /// FNV-1a (64-bit) of the framebuffer, as a hex string.

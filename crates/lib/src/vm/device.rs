@@ -93,6 +93,11 @@ pub struct Devices {
     // pending entity coords
     ex: u16,
     ey: u16,
+    // camera offset (world→screen translation), signed
+    cam_x: i16,
+    cam_y: i16,
+    // flip flags for the next sprite blit: bit0 = flip-x, bit1 = flip-y
+    sprite_flags: u8,
 }
 
 impl Default for Devices {
@@ -122,6 +127,9 @@ impl Devices {
             pg: 0,
             ex: 0,
             ey: 0,
+            cam_x: 0,
+            cam_y: 0,
+            sprite_flags: 0,
         }
     }
 
@@ -165,11 +173,15 @@ impl Devices {
                 0x4 => self.put_pixel(self.sx, self.sy, self.scolor),
                 0x5 => self.blit_sprite(val, mem),
                 0x6 => {
+                    // cls ignores the camera — it clears the whole screen.
                     let c = (val & 0x0f) as u8;
                     for px in self.framebuffer.iter_mut() {
                         *px = c;
                     }
                 }
+                0x7 => self.cam_x = val as i16,
+                0x8 => self.cam_y = val as i16,
+                0x9 => self.sprite_flags = val as u8,
                 _ => {}
             },
             0x3 => {
@@ -209,22 +221,32 @@ impl Devices {
         self.halt_requested = false;
     }
 
+    /// Draw a pixel at world coordinate (x, y). The camera offset translates
+    /// world→screen; off-screen pixels are clipped.
     fn put_pixel(&mut self, x: u16, y: u16, color: u8) {
-        let (x, y) = (x as usize, y as usize);
-        if x < SCREEN_DIM && y < SCREEN_DIM {
-            self.framebuffer[y * SCREEN_DIM + x] = color & 0x0f;
+        let sx = x as i32 - self.cam_x as i32;
+        let sy = y as i32 - self.cam_y as i32;
+        let dim = SCREEN_DIM as i32;
+        if (0..dim).contains(&sx) && (0..dim).contains(&sy) {
+            self.framebuffer[sy as usize * SCREEN_DIM + sx as usize] = color & 0x0f;
         }
     }
 
     /// Blit an 8×8, 4-bits-per-pixel sprite from `mem[addr..addr+32]` at the
     /// current (sx, sy). Two pixels per byte (high nibble = left). Colour 0 is
-    /// transparent.
+    /// transparent. `sprite_flags` bit0/bit1 mirror the source horizontally /
+    /// vertically. The destination position is subject to the camera (via
+    /// `put_pixel`).
     fn blit_sprite(&mut self, addr: u16, mem: &[u8]) {
+        let flip_x = self.sprite_flags & 0x01 != 0;
+        let flip_y = self.sprite_flags & 0x02 != 0;
         for row in 0u16..8 {
             for col in 0u16..8 {
-                let byte_addr = addr.wrapping_add(row * 4 + col / 2) as usize;
+                let src_col = if flip_x { 7 - col } else { col };
+                let src_row = if flip_y { 7 - row } else { row };
+                let byte_addr = addr.wrapping_add(src_row * 4 + src_col / 2) as usize;
                 let byte = mem.get(byte_addr).copied().unwrap_or(0);
-                let ci = if col % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+                let ci = if src_col % 2 == 0 { byte >> 4 } else { byte & 0x0f };
                 if ci != 0 {
                     self.put_pixel(self.sx.wrapping_add(col), self.sy.wrapping_add(row), ci);
                 }
@@ -296,6 +318,44 @@ mod tests {
         assert_eq!(d.framebuffer[2], 3);
         assert_eq!(d.framebuffer[3], 4);
         assert_eq!(d.framebuffer[4], 0); // transparent stays background
+    }
+
+    #[test]
+    fn camera_offset_translates_and_clips() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x17, 10, &mem); // cam_x = 10
+        d.write(0x18, 5, &mem); // cam_y = 5
+        d.write(0x13, 6, &mem); // colour 6
+        // World (12,7) -> screen (2,2).
+        d.write(0x11, 12, &mem);
+        d.write(0x12, 7, &mem);
+        d.write(0x14, 0, &mem); // pixel
+        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 2], 6);
+        // World (0,0) -> screen (-10,-5) -> clipped.
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0x14, 0, &mem);
+        assert_eq!(d.framebuffer[0], 0);
+    }
+
+    #[test]
+    fn sprite_flip_x() {
+        let mut d = Devices::new();
+        // Top row pixels [1,2,3,4,0,0,0,0].
+        let mut mem = [0u8; 64];
+        mem[0] = 0x12;
+        mem[1] = 0x34;
+        d.write(0x19, 0x01, &mem); // flip-x
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0x15, 0, &mem); // sprite
+        // Mirrored: col 7 <- src 0 (=1), col 4 <- src 3 (=4).
+        assert_eq!(d.framebuffer[7], 1);
+        assert_eq!(d.framebuffer[6], 2);
+        assert_eq!(d.framebuffer[5], 3);
+        assert_eq!(d.framebuffer[4], 4);
+        assert_eq!(d.framebuffer[0], 0); // src 7 was transparent
     }
 
     #[test]
