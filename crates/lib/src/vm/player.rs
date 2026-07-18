@@ -9,6 +9,7 @@
 use parking_lot::Mutex;
 
 use super::device::SCREEN_DIM;
+use super::vm::RunOutcome;
 use super::VmConsole;
 
 /// A self-contained console for playing a ROM. Cheap to construct; holds one
@@ -33,14 +34,23 @@ impl VmPlayer {
     /// Compile (`.ux`) or assemble (`.asm`) `source`, load the ROM, and run its
     /// reset vector. Returns an empty string on success, or a human-readable
     /// error / diagnostics listing.
+    ///
+    /// On **any** failure the previously active ROM (if any) is deactivated, so
+    /// `has_rom` reports false and the render loop won't keep showing a stale
+    /// game. A reset that halts/faults/exceeds the instruction cap is reported
+    /// as a load error rather than silently opening a dead game.
     pub fn load(&self, source: String, path: String) -> String {
         let mut c = self.inner.lock();
         c.write_source(&path, &source);
         let built = match c.assemble(&path) {
             Ok(b) => b,
-            Err(e) => return e,
+            Err(e) => {
+                c.rom_loaded = false;
+                return e;
+            }
         };
         if !built.ok() {
+            c.rom_loaded = false;
             return built
                 .diagnostics
                 .iter()
@@ -49,8 +59,22 @@ impl VmPlayer {
                 .join("\n");
         }
         match c.load_rom(&path) {
-            Ok(_) => String::new(),
-            Err(e) => e,
+            Ok(RunOutcome::Completed) => String::new(),
+            Ok(RunOutcome::Halted) => {
+                c.rom_loaded = false;
+                match c.vm.fault.clone() {
+                    Some(f) => format!("reset faulted: {f}"),
+                    None => "reset halted before installing a frame vector".to_string(),
+                }
+            }
+            Ok(RunOutcome::CapExceeded) => {
+                c.rom_loaded = false;
+                "reset exceeded the instruction cap (possible infinite loop)".to_string()
+            }
+            Err(e) => {
+                c.rom_loaded = false;
+                e
+            }
         }
     }
 
@@ -140,6 +164,37 @@ mod tests {
         let p = VmPlayer::new();
         let err = p.load("proc draw() { x = 1; }".to_string(), "bad.ux".to_string());
         assert!(err.contains("unknown variable"), "got: {err}");
+        assert!(!p.has_rom());
+    }
+
+    #[test]
+    fn failed_reload_deactivates_previous_rom() {
+        let p = VmPlayer::new();
+        assert!(p.load(MOVER.to_string(), "mover.ux".to_string()).is_empty());
+        p.tick(0);
+        assert!(p.has_rom());
+        // A subsequent bad load must not leave the old ROM active/rendering.
+        let err = p.load("proc draw() { nope(); }".to_string(), "bad.ux".to_string());
+        assert!(!err.is_empty());
+        assert!(!p.has_rom(), "stale ROM stayed active after a failed reload");
+        assert!(p.framebuffer_rgba().is_none());
+    }
+
+    #[test]
+    fn reset_fault_is_a_load_error() {
+        // Reset vector that immediately HALTs never installs a frame vector.
+        let p = VmPlayer::new();
+        let err = p.load("HALT".to_string(), "halt.asm".to_string());
+        assert!(err.contains("reset halted") || err.contains("faulted"), "got: {err}");
+        assert!(!p.has_rom());
+    }
+
+    #[test]
+    fn reset_infinite_loop_is_a_load_error() {
+        // Reset spins forever -> CapExceeded, reported as a load error.
+        let p = VmPlayer::new();
+        let err = p.load("@spin spin JMP".to_string(), "spin.asm".to_string());
+        assert!(err.contains("instruction cap"), "got: {err}");
         assert!(!p.has_rom());
     }
 
