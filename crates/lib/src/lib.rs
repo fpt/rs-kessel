@@ -26,6 +26,10 @@ pub mod situation;
 pub mod skill;
 mod state_updater;
 pub mod tool;
+/// Tiny fantasy-console VM for the model's write→run→observe→debug loop.
+/// Its `vm_*` tools are registered only in `agent_new` (the standalone app), so
+/// they are absent from `kessel-cli`/app-server.
+pub mod vm;
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -298,6 +302,11 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         capture_bridge.request_tx.clone(),
         capture_bridge.list_result_rx.clone(),
     )));
+
+    // Fantasy-console VM tools (write/assemble/run/observe/debug a small game).
+    // Registered here in `agent_new` only — the standalone kessel app — so they
+    // stay out of `kessel-cli`/app-server, which build their own registries.
+    vm::tools::register_vm_tools(&mut tool_registry);
 
     // Self-pacing hint tool for the ambient loop, sharing the next_check cell.
     let next_check = Arc::new(AtomicU64::new(0));
