@@ -903,6 +903,29 @@ mod tests {
     }
 
     #[test]
+    fn gemma_call_with_braced_source_still_parses() {
+        // Regression for gemma-4-26B leaking raw `<|tool_call>` markup: when a
+        // string arg holds content with `{`/`}`, the whole native call must still
+        // parse through the full chain (JSON → python → gemma fallback),
+        // otherwise the turn is misread as a final text answer. Payload mirrors
+        // the real leaked reply (channel wrapper + braced arg value).
+        let raw = "<|channel>thought<channel|><|tool_call>call:write\
+            {file_path:<|\"|>a.json<|\"|>,content:<|\"|>{ \"loop\": true, \"body\": { \"n\": 3 } }\
+            <|\"|>}<tool_call|>";
+        let calls = LlamaLocalProvider::parse_tool_calls(raw);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write");
+        assert_eq!(calls[0].arguments["file_path"], "a.json");
+        assert!(
+            calls[0].arguments["content"]
+                .as_str()
+                .unwrap()
+                .contains("\"body\": { \"n\": 3 }"),
+            "braced content must survive intact"
+        );
+    }
+
+    #[test]
     fn parses_python_style_bracket_call() {
         let calls = LlamaLocalProvider::parse_tool_calls(r#"[read(file_path="codeword.txt")]"#);
         assert_eq!(calls.len(), 1);
