@@ -14,6 +14,7 @@ foreach (var envFile in DotEnv.Load())
 
 // ── Parse arguments ───────────────────────────────────────────────────────────
 string? configPath = null;
+string? playPath = null;
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -21,11 +22,19 @@ for (int i = 0; i < args.Length; i++)
         case "--config" when i + 1 < args.Length:
             configPath = args[++i];
             break;
+        case "--play" when i + 1 < args.Length:
+            playPath = args[++i];
+            break;
         case "--help" or "-h":
             PrintHelp();
             return 0;
     }
 }
+
+// `--play <file>`: open the fantasy-console game window and play a ROM. No
+// agent/LLM is constructed, so this needs no model or API key.
+if (playPath is not null)
+    return PlayWindow.Run(playPath);
 
 // ── Load configuration ────────────────────────────────────────────────────────
 var (cfg, resolvedConfigPath) = AppConfig.Load(configPath);
@@ -309,6 +318,8 @@ static void PrintHelp()
 
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
+        --play FILE        Open the fantasy-console game window and play a ROM
+                           (.ux or .asm); no model/API key needed
         --help, -h         Show this help message
 
     Modes (interactive only): Shift+Tab cycles text ⇄ listen.
