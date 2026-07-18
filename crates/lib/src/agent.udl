@@ -108,3 +108,25 @@ interface Agent {
     [Throws=AgentError]
     GoalEvaluation evaluate_goal();
 };
+
+// Standalone fantasy-console player: load a game and drive it from a host
+// render loop (60 Hz tick + keyboard->gamepad). No LLM/agent dependency.
+interface VmPlayer {
+    constructor();
+
+    // Compile/assemble `source` (dialect chosen by `path`'s extension),
+    // load the ROM, run reset. "" on success, else an error/diagnostics string.
+    string load(string source, string path);
+
+    // Advance one frame with `buttons` held (bitfield). No-op until a ROM loads.
+    void tick(u8 buttons);
+
+    // Current framebuffer as dim*dim*4 RGBA bytes, or null if no ROM is loaded.
+    bytes? framebuffer_rgba();
+
+    u32 screen_dim();
+
+    boolean has_rom();
+
+    boolean is_halted();
+};

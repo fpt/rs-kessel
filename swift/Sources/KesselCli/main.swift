@@ -57,6 +57,14 @@ func readLineAsync() async -> String? {
 // Run async main. This file is named `main.swift`, so Swift treats it as
 // top-level code and the entry point is the top-level statement below; `@main`
 // can't be used here (it conflicts with top-level code).
+
+// `--play <file>`: open the standalone fantasy-console game window and play a
+// ROM. No agent/LLM is constructed, so this needs no model or API key. Runs the
+// AppKit loop and exits when the window closes (never returns).
+if let pi = CommandLine.arguments.firstIndex(of: "--play"), pi + 1 < CommandLine.arguments.count {
+    runPlayMode(romPath: CommandLine.arguments[pi + 1])
+}
+
 await runMain()
 
 @MainActor
@@ -97,6 +105,8 @@ func printHelp() {
 
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
+        --play FILE        Open the fantasy-console game window and play a ROM
+                           (.ux or .asm); no model/API key needed
         --text, --no-voice Force the text REPL even if the config enables STT/voice
         --prompt, -p TEXT  Run one agent turn with TEXT, print the reply, and exit
         --verbose, -v      Enable verbose logging

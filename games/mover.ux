@@ -1,0 +1,23 @@
+// mover.ux — move a 2x2 block with the arrow keys (Z/X/Return/Space are A/B/
+// Start/Select). Reports itself as entity tag 1 for observation.
+//
+//   kessel --play games/mover.ux
+
+var x: word = 60;
+var y: word = 60;
+
+proc update() {
+    if button(LEFT)  { x = x - 1; }
+    if button(RIGHT) { x = x + 1; }
+    if button(UP)    { y = y - 1; }
+    if button(DOWN)  { y = y + 1; }
+}
+
+proc draw() {
+    clear(0);
+    pixel(x,     y,     11); // green block
+    pixel(x + 1, y,     11);
+    pixel(x,     y + 1, 11);
+    pixel(x + 1, y + 1, 11);
+    entity(x, y, 1);
+}

@@ -341,6 +341,52 @@ RustBuffer uniffi_kessel_core_fn_method_agent_step_with_allowed_tools(void*_Nonn
 void uniffi_kessel_core_fn_method_agent_submit_capture_result(void*_Nonnull ptr, RustBuffer id, RustBuffer image_base64, RustBuffer metadata_json, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_VMPLAYER
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_VMPLAYER
+void*_Nonnull uniffi_kessel_core_fn_clone_vmplayer(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FREE_VMPLAYER
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FREE_VMPLAYER
+void uniffi_kessel_core_fn_free_vmplayer(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CONSTRUCTOR_VMPLAYER_NEW
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CONSTRUCTOR_VMPLAYER_NEW
+void*_Nonnull uniffi_kessel_core_fn_constructor_vmplayer_new(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
+RustBuffer uniffi_kessel_core_fn_method_vmplayer_framebuffer_rgba(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_HAS_ROM
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_HAS_ROM
+int8_t uniffi_kessel_core_fn_method_vmplayer_has_rom(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_IS_HALTED
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_IS_HALTED
+int8_t uniffi_kessel_core_fn_method_vmplayer_is_halted(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_LOAD
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_LOAD
+RustBuffer uniffi_kessel_core_fn_method_vmplayer_load(void*_Nonnull ptr, RustBuffer source, RustBuffer path, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_SCREEN_DIM
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_SCREEN_DIM
+uint32_t uniffi_kessel_core_fn_method_vmplayer_screen_dim(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_TICK
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_TICK
+void uniffi_kessel_core_fn_method_vmplayer_tick(void*_Nonnull ptr, uint8_t buttons, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FUNC_AGENT_NEW
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FUNC_AGENT_NEW
 void*_Nonnull uniffi_kessel_core_fn_func_agent_new(RustBuffer config, RustCallStatus *_Nonnull out_status
@@ -725,6 +771,48 @@ uint16_t uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
 uint16_t uniffi_kessel_core_checksum_method_agent_submit_capture_result(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_framebuffer_rgba(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_HAS_ROM
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_HAS_ROM
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_has_rom(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_IS_HALTED
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_IS_HALTED
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_is_halted(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_LOAD
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_LOAD
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_load(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_SCREEN_DIM
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_SCREEN_DIM
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_screen_dim(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_TICK
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_TICK
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_tick(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_CONSTRUCTOR_VMPLAYER_NEW
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_CONSTRUCTOR_VMPLAYER_NEW
+uint16_t uniffi_kessel_core_checksum_constructor_vmplayer_new(void
     
 );
 #endif
