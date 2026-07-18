@@ -65,6 +65,10 @@ func runMain() async {
 // Parse command line arguments
 let arguments = CommandLine.arguments
 var configPath = "configs/default.yaml"
+// Force the text REPL even when STT is enabled in the config.
+var forceText = false
+// One-shot: run a single agent turn with this prompt, print the reply, exit.
+var oneShotPrompt: String? = nil
 
 for (index, arg) in arguments.enumerated() {
     if arg == "--config" && index + 1 < arguments.count {
@@ -74,6 +78,10 @@ for (index, arg) in arguments.enumerated() {
         exit(0)
     } else if arg == "--verbose" || arg == "-v" {
         Logger.setLevel(.debug)
+    } else if arg == "--text" || arg == "--no-voice" {
+        forceText = true
+    } else if (arg == "--prompt" || arg == "-p") && index + 1 < arguments.count {
+        oneShotPrompt = arguments[index + 1]
     }
 }
 
@@ -89,12 +97,16 @@ func printHelp() {
 
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
+        --text, --no-voice Force the text REPL even if the config enables STT/voice
+        --prompt, -p TEXT  Run one agent turn with TEXT, print the reply, and exit
         --verbose, -v      Enable verbose logging
         --help, -h         Show this help message
 
     Examples:
         \(name)
         \(name) --config custom.yaml
+        \(name) --config configs/openai.yaml --text
+        \(name) --config configs/openai.yaml -p "write a pong game on the VM and run 3 frames"
         \(name) --verbose
     """)
 }
@@ -151,7 +163,9 @@ let audioCapture = AudioCapture(config: AudioCapture.Config(
 var voiceInitialized = false
 var switchToVoice = false
 
-if sttConfig.enabled {
+// Skip STT startup (and its mic-permission prompt) when the user forced text
+// mode or a one-shot prompt — voice can still be entered later via `/listen`.
+if sttConfig.enabled && !forceText && oneShotPrompt == nil {
     logger.info("Initializing SpeechTranscriber...")
     do {
         try await audioCapture.initialize()
@@ -330,9 +344,12 @@ let goalDriver = GoalDriver(
 ambientLoop.runTurn = { prompt in await runLoopTurn(prompt, muteMic: false) }
 goalDriver.runTurn = { prompt in await runLoopTurn(prompt, muteMic: false) }
 
-// Route to voice or text mode. From text mode, `/listen` sets `switchToVoice`
-// and breaks the loop, then we hand off to continuous voice mode.
-if sttConfig.enabled {
+// Route to one-shot, voice, or text mode. `--prompt` runs a single turn and
+// exits; otherwise voice mode runs when STT is enabled and text wasn't forced.
+// From text mode, `/listen` sets `switchToVoice` and hands off to voice mode.
+if let prompt = oneShotPrompt {
+    await runOneShot(prompt)
+} else if sttConfig.enabled && !forceText {
     await runContinuousVoiceMode()
 } else {
     await runTextMode()
@@ -377,6 +394,33 @@ func prepareVoiceMode() async -> Bool {
         logger.error("Cannot start voice mode: \(error)")
         print("Cannot start voice mode: \(error)\n")
         return false
+    }
+}
+
+/// Run a single agent turn non-interactively and return. Used by `--prompt` so
+/// the full `agent_new` tool set (including the `vm_*` fantasy-console tools) can
+/// be driven from the command line and scripts. Reply goes to stdout; logs to
+/// stderr. TTS/ambient loop stay silent here.
+func runOneShot(_ prompt: String) async {
+    logger.info("One-shot turn: \(prompt)")
+    do {
+        // Run off the MainActor so the capture poller can service screen tools.
+        await turnGate.lock()
+        let response: AgentResponse
+        do {
+            response = try await Task.detached { try session.step(prompt) }.value
+        } catch {
+            await turnGate.unlock()
+            throw error
+        }
+        await turnGate.unlock()
+        if let reasoning = response.reasoning {
+            print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
+        }
+        print(session.formatResponse(response.content))
+    } catch {
+        logger.error("Agent error: \(error)")
+        print("Error: \(error)")
     }
 }
 
