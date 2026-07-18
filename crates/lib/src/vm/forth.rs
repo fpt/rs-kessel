@@ -113,6 +113,13 @@ pub fn compile(src: &str) -> Compiled {
                             diagnostics.push(err(*tl, format!("create byte out of range: {v}")));
                             i += 1;
                         }
+                        // Numeric-looking but beyond u16 (e.g. 65536, 0x10000):
+                        // report the range error instead of ending the list and
+                        // mis-parsing it as stray top-level code.
+                        None if looks_numeric(t) => {
+                            diagnostics.push(err(*tl, format!("create byte out of range: '{t}'")));
+                            i += 1;
+                        }
                         None => break,
                     }
                 }
@@ -467,6 +474,15 @@ fn parse_number(s: &str) -> Option<u16> {
     None
 }
 
+/// True if `s` is written as a number (decimal or `0x`-hex), regardless of
+/// magnitude — used to tell "out of range" from "not a number".
+fn looks_numeric(s: &str) -> bool {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
 fn err(line: usize, message: String) -> Diagnostic {
     Diagnostic { line, message }
 }
@@ -590,12 +606,49 @@ mod tests {
         let built = console.assemble("s.forth").unwrap();
         assert!(built.ok(), "{:?}", built.diagnostics);
         console.load_rom("s.forth").unwrap();
-        console.run_frame(0);
-        // Top-left pixels come from the tile's first row.
+        let obs = console.run_frame(0);
+        // Top-left pixels come from the tile's first row — proves ( x y tile )
+        // ordering into the sprite helper.
         assert_eq!(console.vm.devices.framebuffer[0], 1);
         assert_eq!(console.vm.devices.framebuffer[1], 2);
         assert_eq!(console.vm.devices.framebuffer[2], 3);
         assert_eq!(console.vm.devices.framebuffer[3], 4);
+        // The helper is stack-balanced: no leftover operands, no fault/underflow.
+        assert!(obs.fault.is_none(), "sprite helper faulted: {:?}", obs.fault);
+        assert!(obs.data_stack.is_empty(), "sprite helper left {:?} on the stack", obs.data_stack);
+    }
+
+    #[test]
+    fn entity_helper_reports_x_y_tag_in_order() {
+        // `11 22 7 entity` must report {x:11, y:22, tag:7} — pins the ( x y tag )
+        // argument order through the emitted helper.
+        let src = "variable dummy  : draw 11 22 7 entity ;";
+        let mut console = VmConsole::new();
+        console.write_source("e.fth", src);
+        assert!(console.assemble("e.fth").unwrap().ok());
+        console.load_rom("e.fth").unwrap();
+        let obs = console.run_frame(0);
+        assert!(obs.fault.is_none(), "entity helper faulted: {:?}", obs.fault);
+        assert_eq!(obs.entities.len(), 1);
+        assert_eq!(obs.entities[0].x, 11);
+        assert_eq!(obs.entities[0].y, 22);
+        assert_eq!(obs.entities[0].tag, 7);
+        assert!(obs.data_stack.is_empty(), "entity helper left {:?} on the stack", obs.data_stack);
+    }
+
+    #[test]
+    fn create_byte_out_of_range_is_diagnosed() {
+        // > u8 within u16, and > u16 (parse_number returns None) — both must be
+        // the range diagnostic, not a spurious "top-level code" error.
+        for bad in ["create t 256", "create t 65536", "create t 0x10000"] {
+            let c = compile(bad);
+            assert!(!c.ok(), "expected diagnostic for `{bad}`");
+            assert!(
+                c.diagnostics.iter().any(|d| d.message.contains("out of range")),
+                "`{bad}` gave {:?}",
+                c.diagnostics
+            );
+        }
     }
 
     #[test]
