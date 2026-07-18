@@ -58,9 +58,10 @@ impl ToolHandler for WriteSource {
     }
     fn description(&self) -> &str {
         "Write source for the fantasy-console VM to a named file in the VM workspace. \
-         A '.asm' path is stack assembly; a '.ux' path is the higher-level uxlang \
-         dialect (typed Pascal/C-ish: var/proc, if/while, byte/word). Overwrites any \
-         previous source at that path and invalidates its built ROM."
+         A '.asm' path is stack assembly; a '.lua' path is the higher-level Lua-ish \
+         dialect (function/end, local, if/for, records + arrays, game builtins like \
+         cls/pset/spr/btn/entity). Overwrites any previous source at that path and \
+         invalidates its built ROM."
     }
     fn parameters_schema(&self) -> Value {
         json!({
@@ -89,8 +90,8 @@ impl ToolHandler for Assemble {
         "vm_assemble"
     }
     fn description(&self) -> &str {
-        "Assemble a previously written source file into a ROM. A '.ux' file is \
-         compiled from the uxlang dialect to assembly first. Returns diagnostics \
+        "Assemble a previously written source file into a ROM. A '.lua' file is \
+         compiled from the Lua-ish dialect to assembly first. Returns diagnostics \
          with line numbers on error, or the byte size and labels on success."
     }
     fn parameters_schema(&self) -> Value {

@@ -319,7 +319,7 @@ static void PrintHelp()
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
         --play FILE        Open the fantasy-console game window and play a ROM
-                           (.ux or .asm); no model/API key needed
+                           (.lua or .asm); no model/API key needed
         --help, -h         Show this help message
 
     Modes (interactive only): Shift+Tab cycles text ⇄ listen.

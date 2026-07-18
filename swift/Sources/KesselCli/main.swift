@@ -106,7 +106,7 @@ func printHelp() {
     Options:
         --config PATH      Path to configuration file (default: configs/default.yaml)
         --play FILE        Open the fantasy-console game window and play a ROM
-                           (.ux or .asm); no model/API key needed
+                           (.lua or .asm); no model/API key needed
         --text, --no-voice Force the text REPL even if the config enables STT/voice
         --prompt, -p TEXT  Run one agent turn with TEXT, print the reply, and exit
         --verbose, -v      Enable verbose logging

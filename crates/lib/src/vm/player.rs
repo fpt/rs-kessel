@@ -119,15 +119,15 @@ mod tests {
     use crate::vm::device::{BTN_RIGHT, SCREEN_PIXELS};
 
     const MOVER: &str = r#"
-        var player_x: word = 32;
-        proc update() {
-            if button(RIGHT) { player_x = player_x + 1; }
-        }
-        proc draw() {
-            clear(0);
-            pixel(player_x, 60, 7);
-            entity(player_x, 60, 1);
-        }
+        local player_x = 32
+        function update()
+          if btn(RIGHT) then player_x = player_x + 1 end
+        end
+        function draw()
+          cls(0)
+          pset(player_x, 60, 7)
+          entity(player_x, 60, 1)
+        end
     "#;
 
     #[test]
@@ -136,7 +136,7 @@ mod tests {
         assert!(!p.has_rom());
         assert!(p.framebuffer_rgba().is_none());
 
-        let err = p.load(MOVER.to_string(), "mover.ux".to_string());
+        let err = p.load(MOVER.to_string(), "mover.lua".to_string());
         assert!(err.is_empty(), "load error: {err}");
         assert!(p.has_rom());
         assert_eq!(p.screen_dim(), SCREEN_DIM as u32);
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn load_reports_diagnostics() {
         let p = VmPlayer::new();
-        let err = p.load("proc draw() { x = 1; }".to_string(), "bad.ux".to_string());
+        let err = p.load("function draw() x = 1 end".to_string(), "bad.lua".to_string());
         assert!(err.contains("unknown variable"), "got: {err}");
         assert!(!p.has_rom());
     }
@@ -170,11 +170,11 @@ mod tests {
     #[test]
     fn failed_reload_deactivates_previous_rom() {
         let p = VmPlayer::new();
-        assert!(p.load(MOVER.to_string(), "mover.ux".to_string()).is_empty());
+        assert!(p.load(MOVER.to_string(), "mover.lua".to_string()).is_empty());
         p.tick(0);
         assert!(p.has_rom());
         // A subsequent bad load must not leave the old ROM active/rendering.
-        let err = p.load("proc draw() { nope(); }".to_string(), "bad.ux".to_string());
+        let err = p.load("function draw() nope() end".to_string(), "bad.lua".to_string());
         assert!(!err.is_empty());
         assert!(!p.has_rom(), "stale ROM stayed active after a failed reload");
         assert!(p.framebuffer_rgba().is_none());
@@ -202,8 +202,8 @@ mod tests {
     fn shipped_sample_games_load() {
         // The games/ assets shipped for `kessel --play` must stay valid.
         for (src, name) in [
-            (include_str!("../../../../games/bounce.ux"), "bounce.ux"),
-            (include_str!("../../../../games/mover.ux"), "mover.ux"),
+            (include_str!("../../../../games/bounce.lua"), "bounce.lua"),
+            (include_str!("../../../../games/mover.lua"), "mover.lua"),
         ] {
             let p = VmPlayer::new();
             let err = p.load(src.to_string(), name.to_string());
