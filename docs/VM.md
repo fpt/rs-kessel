@@ -141,57 +141,63 @@ RET
 @player-x .res 2
 ```
 
-## Forth-ish dialect (`.fth` / `.forth`)
+Note: the example wraps `@skip-left`/`@skip-right` as labels **after** the branch
+so `JZ` skips the movement block — labels mark addresses, no jump is needed to
+"fall through" into them.
 
-A higher-level, more writable front-end that **compiles to the assembler above**.
-Select it by giving the source a `.fth`/`.forth` path — `vm_assemble` compiles it
-to assembly, then assembles. Everything downstream (load, run, observe) is
-identical.
+## uxlang dialect (`.ux`)
 
-Structure: the top level holds only declarations and word definitions. Entry
-points are conventional — `init` runs once at reset; `update` then `draw` run
-each frame (or a single `frame` word if neither is defined).
+A small, LL(1), typed **Pascal/C-ish** language that **compiles to the assembler
+above** — a more conventional, readable alternative to raw stack code. Give the
+source a `.ux` path and `vm_assemble` compiles it to assembly, then assembles.
+Everything downstream (load, run, observe) is identical.
 
-```forth
-variable player-x
+Structure: the top level holds `const` / `var` declarations and `proc`
+definitions. Entry points are conventional (the VM is vector-driven, so there is
+no `main(){ loop … }`): `init` runs once at reset; `update` then `draw` run each
+frame (or a single `frame` proc). Locals/params use static slots, so **recursion
+is not supported**.
 
-\ an 8x8 sprite, 32 bytes / 4bpp (2 pixels per byte, hi-nibble = left)
-create ball 0x11 0x11 0x11 0x11  0 0 0 0  ( ...32 bytes... )
+```c
+const SCREEN_W = 128;
+var player_x: word = 32;
+var vx: word = 1;
 
-: init  32 player-x ! ;
+var ball: [32]byte;              // 8x8 sprite, 4bpp (2 px/byte, hi-nibble = left)
 
-: update
-    buttons BTN-LEFT  and if player-x @ 1- player-x ! then
-    buttons BTN-RIGHT and if player-x @ 1+ player-x ! then ;
+proc init() {
+    ball[0] = 0x11; ball[1] = 0x11;   // fill a couple of rows...
+}
 
-: draw
-    0 cls
-    player-x @ 60 ball sprite     \ ( x y tile-addr -- )
-    player-x @ 60 1   entity ;    \ ( x y tag -- ) report for observation
+proc update() {
+    if button(LEFT)  { player_x = player_x - 1; }
+    if button(RIGHT) { player_x = player_x + 1; }
+    if player_x >= SCREEN_W - 8 { vx = 0 - vx; }
+}
+
+proc draw() {
+    clear(0);
+    sprite(ball, player_x, 60);   // ( tile x y )
+    entity(player_x, 60, 1);      // ( x y tag ) — report for observation
+}
 ```
 
-- **Declarations**: `variable name` (one 16-bit cell), `create name b0 b1 …`
-  (labelled bytes — sprite/tile data), `<n> constant NAME`.
-- **Control flow**: `if … then`, `if … else … then`, `begin … until`,
-  `begin … again`.
-- **Memory**: `@` / `!` are 16-bit load/store; `c@` / `c!` are 8-bit. A bare
-  variable/`create` name pushes its address.
-- **Primitives**: `+ - * / mod`, `and or xor lshift rshift`, `= <> < >`,
-  `dup drop swap over rot nip`, `1+ 1- 2* 2/ negate`.
-- **Device words**: `cls` `( c -- )`, `set-x` `set-y` `set-color` `( v -- )`,
-  `pixel` `( -- )`, `buttons` `rnd` `( -- v )`, `sprite` `( x y tile -- )`,
-  `entity` `( x y tag -- )`, plus raw `dei` / `deo`.
-- **Button constants**: `BTN-LEFT BTN-RIGHT BTN-UP BTN-DOWN BTN-A BTN-B
-  BTN-START BTN-SELECT`.
-- Comments: `( … )` block, `\ …` to end of line.
+- **Types**: `byte` (8-bit), `word`/`bool` (16-bit); fixed arrays `[N]byte` /
+  `[N]word`. A bare array name is its base address.
+- **Declarations**: `const NAME = <const-expr>;`, `var name: type [= const];`,
+  `proc name(a: type, …)[: type] { … }`.
+- **Statements**: `var`, assignment (`x = e;`, `a[i] = e;`), `if/else`, `while`,
+  `loop`, `break`, `return`, and calls.
+- **Operators**: `+ - * / %`, `& | ^ << >>`, `== != < <= > >=`, `and or not`,
+  unary `-` `~`. Assignment is a statement (no `a = b = c`).
+- **Builtins**: `clear(c)`, `pixel(x,y,c)`, `sprite(tile,x,y)`,
+  `entity(x,y,tag)`, `button(mask)→0/1`, `buttons()`, `rnd()`,
+  `peek8/peek16(addr)`, `poke8/poke16(addr,val)`.
+- **Button constants**: `LEFT RIGHT UP DOWN A B START SELECT`.
+- Comments: `//` to end of line, `/* … */` block.
 
 ## Phase 2 (planned)
 
 A macOS AppKit window drives the same `VmConsole` at 60 Hz (framebuffer → image,
 keyboard → gamepad) so the AI-authored ROM is human-playable. Windows C# mirrors
 it.
-```
-
-Note: the example wraps `@skip-left`/`@skip-right` as labels **after** the branch
-so `JZ` skips the movement block — labels mark addresses, no jump is needed to
-"fall through" into them.

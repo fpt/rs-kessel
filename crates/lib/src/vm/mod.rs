@@ -14,10 +14,10 @@
 
 pub mod assembler;
 pub mod device;
-pub mod forth;
 pub mod isa;
 pub mod png;
 pub mod tools;
+pub mod uxlang;
 pub mod vm;
 
 use std::collections::HashMap;
@@ -81,18 +81,18 @@ impl VmConsole {
     }
 
     /// Assemble a previously written source. On success the ROM is cached for
-    /// [`load_rom`](Self::load_rom). Sources ending in `.fth`/`.forth` are first
-    /// compiled from the Forth-ish front-end to assembler, then assembled.
+    /// [`load_rom`](Self::load_rom). Sources ending in `.ux` are first compiled
+    /// from the uxlang front-end to assembler, then assembled.
     pub fn assemble(&mut self, path: &str) -> Result<assembler::Assembled, String> {
         let src = self
             .sources
             .get(path)
             .ok_or_else(|| format!("no source written at '{path}'"))?;
 
-        // Forth dialect: compile to assembler first. Compiler diagnostics are
+        // uxlang dialect: compile to assembler first. Compiler diagnostics are
         // returned in an otherwise-empty `Assembled` so the tool can report them.
-        let built = if is_forth(path) {
-            let compiled = forth::compile(src);
+        let built = if is_uxlang(path) {
+            let compiled = uxlang::compile(src);
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
                     rom: Vec::new(),
@@ -247,10 +247,9 @@ impl Observation {
     }
 }
 
-/// True if a source path selects the Forth-ish dialect (`.fth`/`.forth`).
-fn is_forth(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    p.ends_with(".fth") || p.ends_with(".forth")
+/// True if a source path selects the uxlang dialect (`.ux`).
+fn is_uxlang(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".ux")
 }
 
 /// FNV-1a (64-bit) of the framebuffer, as a hex string.
