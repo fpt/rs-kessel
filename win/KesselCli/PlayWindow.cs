@@ -155,6 +155,15 @@ internal sealed class PlayForm : Form
         else base.OnKeyUp(e);
     }
 
+    // Clear held keys when the window loses focus, so a key held during a focus
+    // switch (whose key-up may never arrive) can't stay latched. Mirrors the
+    // macOS window's resignFirstResponder.
+    protected override void OnDeactivate(EventArgs e)
+    {
+        _pressed = 0;
+        base.OnDeactivate(e);
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _timer.Stop();
