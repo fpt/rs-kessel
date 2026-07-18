@@ -57,8 +57,10 @@ impl ToolHandler for WriteSource {
         "vm_write_source"
     }
     fn description(&self) -> &str {
-        "Write assembly source for the fantasy-console VM to a named file in the VM workspace. \
-         Overwrites any previous source at that path and invalidates its built ROM."
+        "Write source for the fantasy-console VM to a named file in the VM workspace. \
+         A '.asm' path is stack assembly; a '.fth'/'.forth' path is the higher-level \
+         Forth-ish dialect (word definitions, if/then, @/!). Overwrites any previous \
+         source at that path and invalidates its built ROM."
     }
     fn parameters_schema(&self) -> Value {
         json!({
@@ -87,7 +89,8 @@ impl ToolHandler for Assemble {
         "vm_assemble"
     }
     fn description(&self) -> &str {
-        "Assemble a previously written source file into a ROM. Returns diagnostics \
+        "Assemble a previously written source file into a ROM. A '.fth'/'.forth' file \
+         is compiled from the Forth-ish dialect to assembly first. Returns diagnostics \
          with line numbers on error, or the byte size and labels on success."
     }
     fn parameters_schema(&self) -> Value {

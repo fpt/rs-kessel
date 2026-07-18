@@ -14,6 +14,7 @@
 
 pub mod assembler;
 pub mod device;
+pub mod forth;
 pub mod isa;
 pub mod png;
 pub mod tools;
@@ -80,13 +81,30 @@ impl VmConsole {
     }
 
     /// Assemble a previously written source. On success the ROM is cached for
-    /// [`load_rom`](Self::load_rom).
+    /// [`load_rom`](Self::load_rom). Sources ending in `.fth`/`.forth` are first
+    /// compiled from the Forth-ish front-end to assembler, then assembled.
     pub fn assemble(&mut self, path: &str) -> Result<assembler::Assembled, String> {
         let src = self
             .sources
             .get(path)
             .ok_or_else(|| format!("no source written at '{path}'"))?;
-        let built = assembler::assemble(src);
+
+        // Forth dialect: compile to assembler first. Compiler diagnostics are
+        // returned in an otherwise-empty `Assembled` so the tool can report them.
+        let built = if is_forth(path) {
+            let compiled = forth::compile(src);
+            if !compiled.ok() {
+                return Ok(assembler::Assembled {
+                    rom: Vec::new(),
+                    diagnostics: compiled.diagnostics,
+                    labels: Default::default(),
+                });
+            }
+            assembler::assemble(&compiled.asm)
+        } else {
+            assembler::assemble(src)
+        };
+
         if built.ok() {
             self.roms.insert(path.to_string(), built.rom.clone());
         }
@@ -227,6 +245,12 @@ impl Observation {
             })).collect::<Vec<_>>(),
         })
     }
+}
+
+/// True if a source path selects the Forth-ish dialect (`.fth`/`.forth`).
+fn is_forth(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    p.ends_with(".fth") || p.ends_with(".forth")
 }
 
 /// FNV-1a (64-bit) of the framebuffer, as a hex string.
