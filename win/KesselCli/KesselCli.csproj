@@ -12,6 +12,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- WinForms for the `--play` fantasy-console game window (PlayWindow.cs). -->
+    <UseWindowsForms>true</UseWindowsForms>
     <!-- The uniffi P/Invoke targets the native x64 kessel_core.dll. -->
     <PlatformTarget>x64</PlatformTarget>
     <!-- Full globalization (ICU) is required: CultureInfo("en-US") for picking

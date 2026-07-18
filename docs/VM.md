@@ -214,5 +214,9 @@ gamepad. `games/` holds sample ROMs.
 
 Under the hood the render loop is just: expand the palette-indexed framebuffer to
 RGBA (`Devices::framebuffer_rgba`), hand it to a `CGImage`, and draw it with
-interpolation off. On Windows the same `VmPlayer` interface can back a WinForms/
-WPF bitmap (not yet implemented).
+interpolation off.
+
+**Windows** mirrors this: `kessel --play <file>` in the C# frontend
+(`win/KesselCli/PlayWindow.cs`) opens a WinForms window backed by the same
+`VmPlayer`, blitting the framebuffer into a `Bitmap` (RGBA→BGRA) drawn with
+`InterpolationMode.NearestNeighbor` on a 60 Hz timer, same keyboard mapping.
