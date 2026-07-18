@@ -34,7 +34,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 | `gallium-models/` | Hand-written GPT-OSS / Qwen 3.5 / Gemma 4 / LFM2.5 model implementations — vendored from rs-gallium |
 | `lib/src/react.rs` | Provider-agnostic ReAct loop |
 | `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools, ToolSession (read-tracking + permissions) |
-| `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + `vm_*` tools for the model's write→assemble→run→observe→debug loop — registered **only** in `agent_new` (standalone app), absent from `kessel-cli`/app-server. See **[docs/VM.md](docs/VM.md)** |
+| `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + a Forth-ish front-end (`forth.rs`, `.fth`/`.forth` → assembler) + `vm_*` tools for the model's write→assemble→run→observe→debug loop — registered **only** in `agent_new` (standalone app), absent from `kessel-cli`/app-server. See **[docs/VM.md](docs/VM.md)** |
 | `lib/src/skill.rs` | SkillRegistry, lookup_skill tool |
 | `lib/src/memory.rs` | ConversationMemory (thread-safe) |
 | `lib/src/state_capsule.rs` | State capsule for context injection |

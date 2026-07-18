@@ -141,12 +141,55 @@ RET
 @player-x .res 2
 ```
 
+## Forth-ish dialect (`.fth` / `.forth`)
+
+A higher-level, more writable front-end that **compiles to the assembler above**.
+Select it by giving the source a `.fth`/`.forth` path — `vm_assemble` compiles it
+to assembly, then assembles. Everything downstream (load, run, observe) is
+identical.
+
+Structure: the top level holds only declarations and word definitions. Entry
+points are conventional — `init` runs once at reset; `update` then `draw` run
+each frame (or a single `frame` word if neither is defined).
+
+```forth
+variable player-x
+
+\ an 8x8 sprite, 32 bytes / 4bpp (2 pixels per byte, hi-nibble = left)
+create ball 0x11 0x11 0x11 0x11  0 0 0 0  ( ...32 bytes... )
+
+: init  32 player-x ! ;
+
+: update
+    buttons BTN-LEFT  and if player-x @ 1- player-x ! then
+    buttons BTN-RIGHT and if player-x @ 1+ player-x ! then ;
+
+: draw
+    0 cls
+    player-x @ 60 ball sprite     \ ( x y tile-addr -- )
+    player-x @ 60 1   entity ;    \ ( x y tag -- ) report for observation
+```
+
+- **Declarations**: `variable name` (one 16-bit cell), `create name b0 b1 …`
+  (labelled bytes — sprite/tile data), `<n> constant NAME`.
+- **Control flow**: `if … then`, `if … else … then`, `begin … until`,
+  `begin … again`.
+- **Memory**: `@` / `!` are 16-bit load/store; `c@` / `c!` are 8-bit. A bare
+  variable/`create` name pushes its address.
+- **Primitives**: `+ - * / mod`, `and or xor lshift rshift`, `= <> < >`,
+  `dup drop swap over rot nip`, `1+ 1- 2* 2/ negate`.
+- **Device words**: `cls` `( c -- )`, `set-x` `set-y` `set-color` `( v -- )`,
+  `pixel` `( -- )`, `buttons` `rnd` `( -- v )`, `sprite` `( x y tile -- )`,
+  `entity` `( x y tag -- )`, plus raw `dei` / `deo`.
+- **Button constants**: `BTN-LEFT BTN-RIGHT BTN-UP BTN-DOWN BTN-A BTN-B
+  BTN-START BTN-SELECT`.
+- Comments: `( … )` block, `\ …` to end of line.
+
 ## Phase 2 (planned)
 
 A macOS AppKit window drives the same `VmConsole` at 60 Hz (framebuffer → image,
 keyboard → gamepad) so the AI-authored ROM is human-playable. Windows C# mirrors
-it. Then an optional thin Forth-ish front-end (`: word … ;`, `if/then`, `@`/`!`)
-compiles to this assembler.
+it.
 ```
 
 Note: the example wraps `@skip-left`/`@skip-right` as labels **after** the branch
