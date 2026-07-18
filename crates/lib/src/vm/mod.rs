@@ -15,6 +15,7 @@
 pub mod assembler;
 pub mod device;
 pub mod isa;
+pub mod player;
 pub mod png;
 pub mod tools;
 pub mod uxlang;

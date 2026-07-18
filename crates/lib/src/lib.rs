@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub use capture::CaptureRequest;
+pub use vm::player::VmPlayer;
 pub use harmony::HarmonyTemplate;
 pub use llm::{create_provider, ChatMessage, ChatRole, TokenUsage};
 use tool::ToolAccess;

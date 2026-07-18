@@ -196,8 +196,23 @@ proc draw() {
 - **Button constants**: `LEFT RIGHT UP DOWN A B START SELECT`.
 - Comments: `//` to end of line, `/* … */` block.
 
-## Phase 2 (planned)
+## Playing a game (`kessel --play`)
 
-A macOS AppKit window drives the same `VmConsole` at 60 Hz (framebuffer → image,
-keyboard → gamepad) so the AI-authored ROM is human-playable. Windows C# mirrors
-it.
+The standalone `kessel` app can render a ROM in a native window, so the games the
+model authors are **human-playable**:
+
+```bash
+kessel --play games/bounce.ux     # a self-animating demo
+kessel --play games/mover.ux      # arrows move; Z/X = A/B; Return/Space = Start/Select
+```
+
+`--play` needs no model or API key. It loads a `.ux`/`.asm` file into a standalone
+`VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,
+and on a 60 Hz timer calls `tick(buttons)` + `framebuffer_rgba()`, blitting the
+128×128 framebuffer scaled up with nearest-neighbour. The keyboard maps to the
+gamepad. `games/` holds sample ROMs.
+
+Under the hood the render loop is just: expand the palette-indexed framebuffer to
+RGBA (`Devices::framebuffer_rgba`), hand it to a `CGImage`, and draw it with
+interpolation off. On Windows the same `VmPlayer` interface can back a WinForms/
+WPF bitmap (not yet implemented).

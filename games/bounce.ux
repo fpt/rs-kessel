@@ -1,0 +1,32 @@
+// bounce.ux — a self-animating demo (no input needed): a 3x3 block bouncing
+// around the screen. Good for verifying the play window renders and animates.
+//
+//   kessel --play games/bounce.ux
+
+var x: word = 20;
+var y: word = 30;
+var vx: word = 1;
+var vy: word = 1;
+
+proc update() {
+    x = x + vx;
+    y = y + vy;
+    // vx/vy are u16; "0 - v" wraps to the negative step, so the block reverses.
+    if x >= 118 { vx = 0 - vx; }
+    if x <= 2   { vx = 0 - vx; }
+    if y >= 118 { vy = 0 - vy; }
+    if y <= 2   { vy = 0 - vy; }
+}
+
+proc draw() {
+    clear(1);              // dark-blue background
+    pixel(x,     y,     8); // a 3x3 red block
+    pixel(x + 1, y,     8);
+    pixel(x + 2, y,     8);
+    pixel(x,     y + 1, 8);
+    pixel(x + 1, y + 1, 8);
+    pixel(x + 2, y + 1, 8);
+    pixel(x,     y + 2, 8);
+    pixel(x + 1, y + 2, 8);
+    pixel(x + 2, y + 2, 8);
+}

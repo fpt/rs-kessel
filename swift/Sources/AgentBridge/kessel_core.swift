@@ -399,6 +399,22 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -522,6 +538,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -789,6 +823,180 @@ public func FfiConverterTypeAgent_lift(_ pointer: UnsafeMutableRawPointer) throw
 #endif
 public func FfiConverterTypeAgent_lower(_ value: Agent) -> UnsafeMutableRawPointer {
     return FfiConverterTypeAgent.lower(value)
+}
+
+
+
+
+public protocol VmPlayerProtocol : AnyObject {
+    
+    func framebufferRgba()  -> Data?
+    
+    func hasRom()  -> Bool
+    
+    func isHalted()  -> Bool
+    
+    func load(source: String, path: String)  -> String
+    
+    func screenDim()  -> UInt32
+    
+    func tick(buttons: UInt8) 
+    
+}
+
+open class VmPlayer:
+    VmPlayerProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_kessel_core_fn_clone_vmplayer(self.pointer, $0) }
+    }
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_kessel_core_fn_constructor_vmplayer_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_kessel_core_fn_free_vmplayer(pointer, $0) }
+    }
+
+    
+
+    
+open func framebufferRgba() -> Data? {
+    return try!  FfiConverterOptionData.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_framebuffer_rgba(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func hasRom() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_has_rom(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func isHalted() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_is_halted(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func load(source: String, path: String) -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_load(self.uniffiClonePointer(),
+        FfiConverterString.lower(source),
+        FfiConverterString.lower(path),$0
+    )
+})
+}
+    
+open func screenDim() -> UInt32 {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_screen_dim(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func tick(buttons: UInt8) {try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_tick(self.uniffiClonePointer(),
+        FfiConverterUInt8.lower(buttons),$0
+    )
+}
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVmPlayer: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = VmPlayer
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> VmPlayer {
+        return VmPlayer(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: VmPlayer) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VmPlayer {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: VmPlayer, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVmPlayer_lift(_ pointer: UnsafeMutableRawPointer) throws -> VmPlayer {
+    return try FfiConverterTypeVmPlayer.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVmPlayer_lower(_ value: VmPlayer) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeVmPlayer.lower(value)
 }
 
 
@@ -1621,6 +1829,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeGoalStatus: FfiConverterRustBuffer {
     typealias SwiftType = GoalStatus?
 
@@ -1812,6 +2044,27 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 47839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_framebuffer_rgba() != 34844) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_has_rom() != 43393) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_is_halted() != 6751) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_load() != 24897) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_screen_dim() != 46881) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_tick() != 11299) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_constructor_vmplayer_new() != 36995) {
         return InitializationResult.apiChecksumMismatch
     }
 
