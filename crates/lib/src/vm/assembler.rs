@@ -115,21 +115,48 @@ pub fn assemble(src: &str) -> Assembled {
                         items.push(Item::Bytes(bytes));
                     }
                 }
-                "word" => match tokens.get(i).and_then(|t| parse_number(&t.0)) {
-                    Some(v) => {
+                "word" => match tokens.get(i) {
+                    Some(t) if parse_number(&t.0).is_some() => {
+                        let v = parse_number(&t.0).unwrap();
                         i += 1;
                         addr += 2;
                         items.push(Item::Bytes(v.to_be_bytes().to_vec()));
                     }
-                    None => diagnostics.push(err(line, ".word needs a 16-bit value".into())),
-                },
-                "res" => match tokens.get(i).and_then(|t| parse_number(&t.0)) {
-                    Some(n) => {
+                    // Present and numeric-looking but out of range — report it as
+                    // such rather than silently truncating or "missing".
+                    Some(t) if looks_numeric(&t.0) => {
+                        diagnostics.push(err(
+                            t.1,
+                            format!(".word value out of range (0..=0xffff): '{}'", t.0),
+                        ));
                         i += 1;
-                        addr += n as usize;
-                        items.push(Item::Bytes(vec![0u8; n as usize]));
                     }
-                    None => diagnostics.push(err(line, ".res needs a length".into())),
+                    _ => diagnostics.push(err(line, ".word needs a 16-bit value".into())),
+                },
+                "res" => match tokens.get(i) {
+                    Some(t) if parse_number(&t.0).is_some() => {
+                        let n = parse_number(&t.0).unwrap() as usize;
+                        i += 1;
+                        // Guard the allocation: reject a reservation that would
+                        // run past the 64 KiB space *before* materializing it, so
+                        // an oversized `.res` can't consume memory or yield a ROM.
+                        if addr + n > 0x1_0000 {
+                            diagnostics.push(err(
+                                t.1,
+                                format!(
+                                    ".res {n} exceeds the 64 KiB address space at 0x{addr:04X}"
+                                ),
+                            ));
+                        } else {
+                            addr += n;
+                            items.push(Item::Bytes(vec![0u8; n]));
+                        }
+                    }
+                    Some(t) if looks_numeric(&t.0) => {
+                        diagnostics.push(err(t.1, format!(".res length out of range: '{}'", t.0)));
+                        i += 1;
+                    }
+                    _ => diagnostics.push(err(line, ".res needs a length".into())),
                 },
                 other => diagnostics.push(err(line, format!("unknown directive '.{other}'"))),
             }
@@ -244,6 +271,15 @@ fn is_ident(s: &str) -> bool {
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         && s.chars().next().is_some_and(|c| !c.is_ascii_digit())
+}
+
+/// True if `s` is written as a number (decimal or `0x`-hex) regardless of
+/// magnitude — used to tell "out of range" from "not a number" in diagnostics.
+fn looks_numeric(s: &str) -> bool {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Parse a decimal or `0x`-hex number in `0..=0xffff`.
@@ -383,5 +419,41 @@ mod tests {
         let a = assemble(".byte 1 2 3 .word 0x0102");
         assert!(a.ok(), "{:?}", a.diagnostics);
         assert_eq!(a.rom, vec![1, 2, 3, 0x01, 0x02]);
+    }
+
+    #[test]
+    fn word_out_of_range_is_diagnosed() {
+        let a = assemble(".word 65536");
+        assert!(!a.ok());
+        assert!(a.diagnostics[0].message.contains("out of range"), "{:?}", a.diagnostics);
+    }
+
+    #[test]
+    fn oversized_res_is_rejected_without_allocating() {
+        // .res 65535 from origin 0x0100 runs past 64 KiB — must be a diagnostic,
+        // and must NOT materialize a giant ROM.
+        let a = assemble(".res 65535");
+        assert!(!a.ok());
+        assert!(
+            a.diagnostics[0].message.contains("address space"),
+            "{:?}",
+            a.diagnostics
+        );
+        assert!(a.rom.len() < 1024, "oversized .res was materialized: {} bytes", a.rom.len());
+    }
+
+    #[test]
+    fn res_length_out_of_range_is_diagnosed() {
+        let a = assemble(".res 70000");
+        assert!(!a.ok());
+        assert!(a.diagnostics[0].message.contains("out of range"), "{:?}", a.diagnostics);
+    }
+
+    #[test]
+    fn small_res_still_works() {
+        let a = assemble("@v .res 4");
+        assert!(a.ok(), "{:?}", a.diagnostics);
+        assert_eq!(a.rom, vec![0, 0, 0, 0]);
+        assert_eq!(*a.labels.get("v").unwrap(), 0x0100);
     }
 }

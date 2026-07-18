@@ -88,8 +88,11 @@ impl Vm {
     }
 
     /// Load ROM bytes at `ROM_ORIGIN` and run the reset vector once (init).
-    /// Clears any previous fault/halt but keeps the caller's chosen memory
-    /// origin clean by zeroing memory first.
+    /// This is a full power-on: memory is zeroed, both stacks and the CPU flags
+    /// are cleared, **and the device layer is reset** — otherwise the previous
+    /// ROM's frame vector, framebuffer, storage, and palette would leak into the
+    /// new program (e.g. a ROM that installs no frame vector would keep running
+    /// the old one's frame code).
     pub fn load_rom(&mut self, rom: &[u8]) -> RunOutcome {
         for b in self.mem.iter_mut() {
             *b = 0;
@@ -102,6 +105,7 @@ impl Vm {
         self.cycle = 0;
         self.halted = false;
         self.fault = None;
+        self.devices = Devices::new();
         self.run_vector(ROM_ORIGIN, cap())
     }
 
@@ -117,29 +121,40 @@ impl Vm {
 
     /// Push `entry` as a call, then step until the matching `RET` pops the
     /// sentinel back into `pc`, the machine halts, or the cap is hit.
+    ///
+    /// A well-formed vector ends by returning to the sentinel, whose `RET`
+    /// already pops it — so the return stack is balanced. But an abandoned frame
+    /// (cap exceeded, or a `HALT`/fault mid-frame) leaves the sentinel and any
+    /// partial call frames behind. To keep those from accumulating across frames
+    /// we record the return-stack depth on entry and truncate back to it on
+    /// every exit path.
     fn run_vector(&mut self, entry: u16, cap_cycles: u64) -> RunOutcome {
         if self.halted {
             return RunOutcome::Halted;
         }
+        let base_rsp = self.ret.sp;
         // Set up the sentinel frame.
         if !self.rpush(FRAME_DONE) {
             return RunOutcome::Halted;
         }
         self.pc = entry;
         let mut local: u64 = 0;
-        loop {
+        let outcome = loop {
             if self.halted {
-                return RunOutcome::Halted;
+                break RunOutcome::Halted;
             }
             if self.pc == FRAME_DONE {
-                return RunOutcome::Completed;
+                break RunOutcome::Completed;
             }
             if local >= cap_cycles {
-                return RunOutcome::CapExceeded;
+                break RunOutcome::CapExceeded;
             }
             self.step();
             local += 1;
-        }
+        };
+        // Drop the sentinel and any partial frames left by an abandoned vector.
+        self.ret.sp = base_rsp;
+        outcome
     }
 
     /// Free-run up to `n` instructions (sub-frame debugging). Stops early on
@@ -488,6 +503,46 @@ mod tests {
         let vm = run(&rom);
         assert!(vm.halted);
         assert_eq!(vm.data_stack(), vec![1]);
+    }
+
+    #[test]
+    fn load_rom_resets_device_state() {
+        use crate::vm::assembler::assemble;
+        // ROM A installs a frame vector that clears the screen to colour 5.
+        let a = assemble("on-frame #10 DEO RET  @on-frame  #05 #16 DEO RET");
+        assert!(a.ok(), "{:?}", a.diagnostics);
+        let mut vm = Vm::new();
+        vm.load_rom(&a.rom);
+        vm.run_frame(0, cap());
+        assert_ne!(vm.devices.frame_vector, 0);
+        assert!(vm.devices.framebuffer.iter().all(|&p| p == 5));
+
+        // ROM B installs NO frame vector and is just RET. After load, the old
+        // vector and framebuffer must be gone.
+        let b = assemble("RET");
+        assert!(b.ok());
+        vm.load_rom(&b.rom);
+        assert_eq!(vm.devices.frame_vector, 0, "stale frame vector leaked");
+        assert!(vm.devices.framebuffer.iter().all(|&p| p == 0), "stale framebuffer leaked");
+        // Running a frame does nothing (no vector) — old frame code must not run.
+        assert_eq!(vm.run_frame(0, cap()), RunOutcome::Completed);
+        assert!(vm.devices.framebuffer.iter().all(|&p| p == 0));
+    }
+
+    #[test]
+    fn abandoned_frame_does_not_leak_return_stack() {
+        use crate::vm::assembler::assemble;
+        // Frame vector is an infinite loop (never RETs) so every frame hits the
+        // cap. The sentinel/partial frames must be cleaned up each time, keeping
+        // the return stack from growing across frames.
+        let a = assemble("on-frame #10 DEO RET  @on-frame  on-frame JMP");
+        assert!(a.ok(), "{:?}", a.diagnostics);
+        let mut vm = Vm::new();
+        vm.load_rom(&a.rom);
+        for _ in 0..5 {
+            assert_eq!(vm.run_frame(0, 1000), RunOutcome::CapExceeded);
+            assert_eq!(vm.return_stack_depth(), 0, "return stack leaked across frames");
+        }
     }
 
     #[test]
