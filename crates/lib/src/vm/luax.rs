@@ -1303,8 +1303,11 @@ impl Compiler {
 
     fn gen_call(&mut self, name: &str, args: &[Expr], out: &mut Vec<String>, d: &mut Vec<Diagnostic>, line: usize) -> bool {
         if let Some((argc, yields)) = builtin(name) {
+            // On an arity mismatch, report it and emit nothing — a partial call
+            // would leave the data stack unbalanced.
             if args.len() != argc {
                 d.push(err(line, format!("{name}() takes {argc} argument(s), got {}", args.len())));
+                return yields;
             }
             for a in args {
                 self.gen_expr(a, out, d);
@@ -1316,6 +1319,7 @@ impl Compiler {
             let (argc, yields) = (sig.params.len(), sig.has_ret);
             if args.len() != argc {
                 d.push(err(line, format!("{name}() takes {argc} argument(s), got {}", args.len())));
+                return yields;
             }
             for a in args {
                 self.gen_expr(a, out, d);
@@ -1608,6 +1612,25 @@ mod tests {
         let o = c.run_frame(0);
         assert_eq!(o.entities[0].x, 12);
         assert_eq!(o.entities[1].tag, 2); // overlap reported
+    }
+
+    #[test]
+    fn min_max_both_argument_orders() {
+        // Pins min/max branch direction: correct in both operand orders.
+        let src = r#"
+            function draw()
+              entity(min(7, 3), 0, 1)   -- 3
+              entity(min(3, 7), 0, 2)   -- 3
+              entity(max(2, 9), 0, 3)   -- 9
+              entity(max(9, 2), 0, 4)   -- 9
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 3);
+        assert_eq!(o.entities[1].x, 3);
+        assert_eq!(o.entities[2].x, 9);
+        assert_eq!(o.entities[3].x, 9);
     }
 
     #[test]
