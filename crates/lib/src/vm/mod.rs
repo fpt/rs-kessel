@@ -154,6 +154,7 @@ impl VmConsole {
             data_stack: self.vm.data_stack(),
             return_stack_depth: self.vm.return_stack_depth(),
             entities: self.vm.devices.entities.clone(),
+            sound: self.vm.devices.sound.clone(),
             halted: self.vm.halted,
         }
     }
@@ -222,6 +223,7 @@ pub struct Observation {
     pub data_stack: Vec<u16>,
     pub return_stack_depth: usize,
     pub entities: Vec<device::Entity>,
+    pub sound: Vec<device::SoundEvent>,
     pub halted: bool,
 }
 
@@ -243,6 +245,14 @@ impl Observation {
             },
             "entities": self.entities.iter().map(|e| serde_json::json!({
                 "tag": e.tag, "x": e.x, "y": e.y,
+            })).collect::<Vec<_>>(),
+            "sound": self.sound.iter().map(|s| serde_json::json!({
+                "kind": match s.kind {
+                    device::SoundKind::Sfx => "sfx",
+                    device::SoundKind::Music => "music",
+                    device::SoundKind::MusicStop => "music_stop",
+                },
+                "id": s.id,
             })).collect::<Vec<_>>(),
         })
     }

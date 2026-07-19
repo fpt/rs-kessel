@@ -1021,6 +1021,9 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "touching_floor" => (5, true),
         "touching_ceiling" => (5, true),
         "number" => (4, false),
+        "sfx" => (1, false),
+        "music" => (1, false),
+        "music_stop" => (0, false),
         _ => return None,
     })
 }
@@ -1777,6 +1780,9 @@ impl Compiler {
             "btnp" => "#21 DEI AND #00 NE", // just-pressed this frame
             "btnr" => "#22 DEI AND #00 NE", // just-released this frame
             "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
+            "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
+            "music" => "#91 DEO",           // ( id ) start a music track
+            "music_stop" => "#00 #92 DEO",  // stop music
             "rnd" => "#30 DEI SWAP MOD", // ( n ) -> rand % n
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
@@ -2208,7 +2214,7 @@ fn fn_has_return(decl: &Decl) -> bool {
 mod tests {
     use super::*;
     use crate::vm::assembler::assemble;
-    use crate::vm::device::{BTN_A, BTN_LEFT, BTN_RIGHT};
+    use crate::vm::device::{SoundKind, BTN_A, BTN_LEFT, BTN_RIGHT};
     use crate::vm::VmConsole;
 
     fn compile_ok(src: &str) -> String {
@@ -2886,6 +2892,30 @@ mod tests {
         let c = compile("local x: word function draw() clear(x) end");
         assert!(!c.ok());
         assert!(c.diagnostics.iter().any(|d| d.message.contains("clear()")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn sound_triggers_reported_and_cleared() {
+        let src = r#"
+            local t: word
+            function update()
+              t = t + 1
+              if t == 1 then sfx(3) end
+              if t == 2 then music(1)  music_stop() end
+            end
+            function draw() end
+        "#;
+        let mut c = load(src);
+        let o1 = c.run_frame(0);
+        assert_eq!(o1.sound.len(), 1);
+        assert_eq!(o1.sound[0].kind, SoundKind::Sfx);
+        assert_eq!(o1.sound[0].id, 3);
+        let o2 = c.run_frame(0);
+        assert_eq!(o2.sound.len(), 2); // music then music_stop, in order
+        assert_eq!(o2.sound[0].kind, SoundKind::Music);
+        assert_eq!(o2.sound[1].kind, SoundKind::MusicStop);
+        let o3 = c.run_frame(0);
+        assert!(o3.sound.is_empty()); // cleared each frame
     }
 
     #[test]

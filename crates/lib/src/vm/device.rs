@@ -15,6 +15,7 @@
 //! | 0x6 | console | 0 write-byte |
 //! | 0x7 | tilemap | 0 base · 1 width · 2 tx · 3 ty · 4 sx · 5 sy · 6 tw · 7 th · 8 draw |
 //! | 0x8 | time    | 0 frame-count (read) |
+//! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop (recorded, no audio yet) |
 //! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 
 /// Screen edge length in pixels (square framebuffer).
@@ -93,6 +94,24 @@ pub struct Entity {
     pub y: u16,
 }
 
+/// What a game asked the (silent, for now) sound device to do this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundKind {
+    Sfx,
+    Music,
+    MusicStop,
+}
+
+/// A sound trigger the running game emitted this frame. The VM stays
+/// deterministic and headless — these are recorded for the observation record
+/// (so the agent sees that a sound "played") and for a future host audio path;
+/// nothing is synthesized yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoundEvent {
+    pub kind: SoundKind,
+    pub id: u16,
+}
+
 /// The default 16-colour palette (PICO-8's), RGB. Index 0 is treated as
 /// transparent when blitting sprites.
 pub const DEFAULT_PALETTE: [(u8, u8, u8); 16] = [
@@ -135,6 +154,9 @@ pub struct Devices {
     pub entities: Vec<Entity>,
     /// Bytes written to the console this frame (cleared each frame).
     pub console: Vec<u8>,
+    /// Sound triggers emitted this frame (cleared each frame). Recorded only;
+    /// no audio is synthesized yet.
+    pub sound: Vec<SoundEvent>,
     /// Persistent storage (survives resets? no — power-on state, but survives frames).
     pub storage: [u8; 256],
 
@@ -192,6 +214,7 @@ impl Devices {
             halt_requested: false,
             entities: Vec::new(),
             console: Vec::new(),
+            sound: Vec::new(),
             storage: [0u8; 256],
             rng_state: 0x1234_5678,
             storage_addr: 0,
@@ -327,6 +350,13 @@ impl Devices {
                 0x8 => self.draw_map(mem),
                 _ => {}
             },
+            // Sound device: record a trigger (no audio synthesized yet).
+            0x9 => match reg {
+                0x0 => self.sound.push(SoundEvent { kind: SoundKind::Sfx, id: val }),
+                0x1 => self.sound.push(SoundEvent { kind: SoundKind::Music, id: val }),
+                0x2 => self.sound.push(SoundEvent { kind: SoundKind::MusicStop, id: 0 }),
+                _ => {}
+            },
             // Composite-sprite device: draw a w×h block of sheet tiles at the
             // pending screen (sx,sy) with the current sprite flags.
             0xa => match reg {
@@ -412,6 +442,7 @@ impl Devices {
         self.frame_count = self.frame_count.wrapping_add(1);
         self.entities.clear();
         self.console.clear();
+        self.sound.clear();
         self.halt_requested = false;
     }
 

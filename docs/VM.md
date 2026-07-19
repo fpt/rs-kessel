@@ -83,6 +83,7 @@ Port byte = `(device << 4) | register`.
 | `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
 | `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
+| `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop (recorded, no audio yet) |
 | `0x40` `0x41` `0x42` | out/in/out | storage addr / read / write (256 bytes) |
 | `0x50` `0x51` `0x52` | out | debug entity: x, y, commit(tag) — reported in the observation |
 | `0x60` | out | console: write a byte to the text buffer |
@@ -106,7 +107,8 @@ game-reported `entities` for black-box tasks):
   "framebuffer_hash": "…", "changed_pixels_bbox": [31,60,31,60],
   "console": "", "fault": null, "halted": false,
   "vm": { "pc": 65535, "data_stack": [], "return_stack_depth": 0 },
-  "entities": [ {"tag": 1, "x": 31, "y": 60} ] }
+  "entities": [ {"tag": 1, "x": 31, "y": 60} ],
+  "sound": [ {"kind": "sfx", "id": 3} ] }
 ```
 
 ## Example: move a pixel with LEFT / RIGHT
@@ -254,6 +256,11 @@ end
   size instead of a hand-written bound. `clear(x)` zeroes a record or whole array
   in place (`clear(bullets)` resets a pool; `clear(bullets[i])` one element) —
   cheaper and less error-prone than field-by-field reinitialization.
+- **Sound:** `sfx(id)`, `music(id)`, `music_stop()` fire sound triggers. The VM
+  is deterministic and headless, so nothing is synthesized yet — the triggers
+  are recorded and surfaced in the observation's `sound` array (so the agent
+  sees a sound "played"); host audio in the play windows is a follow-up. The
+  luax API is final.
 - **On-screen text:** `text("LITERAL", x, y, color)` draws a compile-time string
   in a built-in 3×5 font (uppercase `A-Z`, `0-9`, space, `: ! . -`; lowercase
   folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,
