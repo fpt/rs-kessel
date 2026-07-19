@@ -222,6 +222,21 @@ end
   `(sx,sy)`. Per-tile flag bits: `fset(tile,flag,v)` / `fget(tile,flag)→0/1`;
   `solid(px,py)→0/1` is `fget(mget(px/8,py/8), SOLID)` — the platformer collision
   primitive. Flag constants: `SOLID` (0), `FLAG1..FLAG3`.
+- **Tilemap collision (phase 2):** higher-level helpers so the model doesn't
+  re-derive corner-sampling and snap-to-grid every game (all take a rect
+  `x,y,w,h` and a tile `flag`):
+  - `map_rect_overlap(x,y,w,h,flag)→bool` — does the rect touch any tile with
+    `flag` set? (Samples the four corners: exact for boxes up to one tile.)
+  - `collide_x(x,y,w,h,dx,flag)→new_x` / `collide_y(x,y,w,h,dy,flag)→new_y` —
+    move the box by a signed `dx`/`dy` and return the coordinate snapped flush
+    against the first flagged tile in the way (or the full move if clear).
+    Resolve one axis at a time: `nx = collide_x(x,y,w,h,vx,SOLID)` then
+    `ny = collide_y(nx,y,w,h,vy,SOLID)`. Assumes the box starts in a clear cell
+    and the step is smaller than a tile (no tunneling).
+  - `touching_left|right|floor|ceiling(x,y,w,h,flag)→bool` — is a flagged tile
+    directly against that edge? (Grounded checks, wall-slides, ceiling bonks.)
+  Jump *feel* (coyote time, jump buffering, double/wall-jump counters) stays in
+  luax — see `games/wall.lua`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
   `id`; flags bit0/1 = flip x/y), `sspr(addr,x,y,flags)` (blit a raw 32-byte tile
   at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
@@ -296,6 +311,7 @@ kessel --play games/shooter.lua   # vertical shooter — arrows move, A fires
 kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
 kessel --play games/rogue.lua     # top-down roguelike — arrows move, bump orcs to fight
 kessel --play games/platform.lua  # tile platformer — arrows move, A jumps
+kessel --play games/wall.lua      # platformer — collide_x/y + touching_* + btnp double/wall-jump
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:

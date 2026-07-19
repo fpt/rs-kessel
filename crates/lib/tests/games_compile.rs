@@ -83,4 +83,5 @@ games_ok! {
     shooter_ok => "shooter",
     rogue_ok => "rogue",
     tetris_ok => "tetris",
+    wall_ok => "wall",
 }

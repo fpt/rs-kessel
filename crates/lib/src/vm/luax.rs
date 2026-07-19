@@ -925,6 +925,11 @@ struct Helpers {
     fget: bool,
     fset: bool,
     solid: bool,
+    flagat: bool,  // @lx_flagat ( px py flag -- bit ): bounds-checked fget(mget(...))
+    maprect: bool, // @lx_maprect: rect vs tilemap overlap
+    touch: bool,   // @lx_touch_*: edge contact predicates
+    collx: bool,   // @lx_collx: axis-resolving X movement
+    colly: bool,   // @lx_colly: axis-resolving Y movement
 }
 
 const BUTTON_CONSTS: &[(&str, i64)] = &[
@@ -977,6 +982,13 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "fget" => (2, true),
         "fset" => (3, false),
         "solid" => (2, true),
+        "map_rect_overlap" => (5, true),
+        "collide_x" => (6, true),
+        "collide_y" => (6, true),
+        "touching_left" => (5, true),
+        "touching_right" => (5, true),
+        "touching_floor" => (5, true),
+        "touching_ceiling" => (5, true),
         _ => return None,
     })
 }
@@ -1593,10 +1605,24 @@ impl Compiler {
         false
     }
 
+    /// Enable `lx_flagat` and its dependencies (the flags table + `fget`), which
+    /// every tilemap-collision helper builds on.
+    fn need_flagat(&mut self) {
+        self.helpers.flagat = true;
+        self.helpers.flags = true;
+        self.helpers.fget = true;
+    }
+
     fn gen_builtin(&mut self, name: &str, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
         // Tilemap builtins need the single declared map (label + width). `mget`
-        // computes `map + ty*W + tx` and loads the tile id.
-        if matches!(name, "mget" | "mset" | "map" | "solid") {
+        // computes `map + ty*W + tx` and loads the tile id. The collision helpers
+        // reach the map through `lx_flagat` (which bakes in the map/width), so
+        // they only need the declaration to exist.
+        if matches!(
+            name,
+            "mget" | "mset" | "map" | "solid" | "map_rect_overlap" | "collide_x" | "collide_y"
+            | "touching_left" | "touching_right" | "touching_floor" | "touching_ceiling"
+        ) {
             let (map, w) = match &self.tilemap {
                 Some((l, w, _)) => (l.clone(), *w),
                 None => {
@@ -1621,6 +1647,26 @@ impl Compiler {
                     self.helpers.flags = true;
                     self.helpers.fget = true;
                     out.push("lx_solid CALL".to_string()); // ( px py -- 0/1 )
+                }
+                "map_rect_overlap" => {
+                    self.need_flagat();
+                    self.helpers.maprect = true;
+                    out.push("lx_maprect CALL".to_string()); // ( x y w h flag -- bool )
+                }
+                "collide_x" => {
+                    self.need_flagat();
+                    self.helpers.collx = true;
+                    out.push("lx_collx CALL".to_string()); // ( x y w h dx flag -- new_x )
+                }
+                "collide_y" => {
+                    self.need_flagat();
+                    self.helpers.colly = true;
+                    out.push("lx_colly CALL".to_string()); // ( x y w h dy flag -- new_y )
+                }
+                "touching_left" | "touching_right" | "touching_floor" | "touching_ceiling" => {
+                    self.need_flagat();
+                    self.helpers.touch = true;
+                    out.push(format!("lx_{name} CALL")); // ( x y w h flag -- bool )
                 }
                 _ => {}
             }
@@ -1821,6 +1867,120 @@ impl Compiler {
                 ));
             }
         }
+        // flagat ( px py flag -- bit ): the generalized `solid` — is bit `flag`
+        // set on the tile under pixel (px,py)? Off-map pixels (unsigned bounds
+        // check fails a wrapped-negative coord) read as 0. The rect/edge/collision
+        // helpers below all sample the map through this.
+        if self.helpers.flagat {
+            if let Some((map, w, h)) = self.tilemap.clone() {
+                let pw = w as u32 * 8;
+                let ph = h as u32 * 8;
+                out.push_str(&format!(
+                    "@lx_flagat\n  lx_fa_f STORE16 lx_fa_y STORE16 lx_fa_x STORE16 \
+                     lx_fa_x LOAD16 {pw} LT lx_fa_y LOAD16 {ph} LT AND lx_flagat_ok JNZ \
+                     #00 RET \
+                     @lx_flagat_ok \
+                     lx_fa_x LOAD16 #03 SHR lx_fa_y LOAD16 #03 SHR {w} MUL ADD {map} ADD LOAD8 \
+                     lx_fa_f LOAD16 lx_fget CALL RET\n"
+                ));
+            }
+        }
+        // map_rect_overlap ( x y w h flag -- bool ): OR of `flagat` at the rect's
+        // four corners. Exact for rects up to one tile; larger rects sample only
+        // the corners (a tile fully inside an edge is not seen).
+        if self.helpers.maprect {
+            out.push_str(
+                "@lx_maprect\n  lx_mr_f STORE16 lx_mr_h STORE16 lx_mr_w STORE16 \
+                 lx_mr_y STORE16 lx_mr_x STORE16 \
+                 lx_mr_x LOAD16 lx_mr_y LOAD16 lx_mr_f LOAD16 lx_flagat CALL \
+                 lx_mr_x LOAD16 lx_mr_w LOAD16 ADD #01 SUB lx_mr_y LOAD16 lx_mr_f LOAD16 lx_flagat CALL OR \
+                 lx_mr_x LOAD16 lx_mr_y LOAD16 lx_mr_h LOAD16 ADD #01 SUB lx_mr_f LOAD16 lx_flagat CALL OR \
+                 lx_mr_x LOAD16 lx_mr_w LOAD16 ADD #01 SUB lx_mr_y LOAD16 lx_mr_h LOAD16 ADD #01 SUB \
+                 lx_mr_f LOAD16 lx_flagat CALL OR RET\n",
+            );
+        }
+        // touching_* ( x y w h flag -- bool ): sample `flagat` at the two corners
+        // one pixel OUTSIDE the named edge. Shared scratch (they never nest).
+        if self.helpers.touch {
+            out.push_str(
+                "@lx_touching_left\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 #01 SUB lx_tc_y LOAD16 lx_tc_f LOAD16 lx_flagat CALL \
+                 lx_tc_x LOAD16 #01 SUB lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+            );
+            out.push_str(
+                "@lx_touching_right\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD lx_tc_y LOAD16 lx_tc_f LOAD16 lx_flagat CALL \
+                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+            );
+            out.push_str(
+                "@lx_touching_floor\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 lx_tc_y LOAD16 lx_tc_h LOAD16 ADD lx_tc_f LOAD16 lx_flagat CALL \
+                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 lx_tc_h LOAD16 ADD lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+            );
+            out.push_str(
+                "@lx_touching_ceiling\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 lx_tc_y LOAD16 #01 SUB lx_tc_f LOAD16 lx_flagat CALL \
+                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 #01 SUB lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+            );
+        }
+        // collide_x ( x y w h dx flag -- new_x ): move by signed dx; if the
+        // leading vertical edge (right corners if dx>0, left if dx<0) hits a
+        // flagged tile, snap to the tile boundary. Assumes the rect starts in a
+        // clear cell and dx is small (no tunneling past a tile in one step).
+        if self.helpers.collx {
+            out.push_str(
+                "@lx_collx\n  lx_cx_f STORE16 lx_cx_dx STORE16 lx_cx_h STORE16 lx_cx_w STORE16 \
+                 lx_cx_y STORE16 lx_cx_x STORE16 \
+                 lx_cx_x LOAD16 lx_cx_dx LOAD16 ADD lx_cx_t STORE16 \
+                 lx_cx_dx LOAD16 #8000 XOR #8000 GT lx_collx_right JNZ \
+                 lx_cx_dx LOAD16 #8000 XOR #8000 LT lx_collx_left JNZ \
+                 lx_cx_t LOAD16 RET \
+                 @lx_collx_right \
+                 lx_cx_t LOAD16 lx_cx_w LOAD16 ADD #01 SUB lx_cx_lead STORE16 \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_f LOAD16 lx_flagat CALL \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB lx_cx_f LOAD16 lx_flagat CALL OR \
+                 lx_collx_rhit JNZ \
+                 lx_cx_t LOAD16 RET \
+                 @lx_collx_rhit lx_cx_lead LOAD16 #03 SHR #03 SHL lx_cx_w LOAD16 SUB RET \
+                 @lx_collx_left \
+                 lx_cx_t LOAD16 lx_cx_lead STORE16 \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_f LOAD16 lx_flagat CALL \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB lx_cx_f LOAD16 lx_flagat CALL OR \
+                 lx_collx_lhit JNZ \
+                 lx_cx_t LOAD16 RET \
+                 @lx_collx_lhit lx_cx_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
+            );
+        }
+        // collide_y ( x y w h dy flag -- new_y ): the Y-axis mirror of collide_x
+        // (leading edge = bottom corners if dy>0, top if dy<0).
+        if self.helpers.colly {
+            out.push_str(
+                "@lx_colly\n  lx_cy_f STORE16 lx_cy_dy STORE16 lx_cy_h STORE16 lx_cy_w STORE16 \
+                 lx_cy_y STORE16 lx_cy_x STORE16 \
+                 lx_cy_y LOAD16 lx_cy_dy LOAD16 ADD lx_cy_t STORE16 \
+                 lx_cy_dy LOAD16 #8000 XOR #8000 GT lx_colly_down JNZ \
+                 lx_cy_dy LOAD16 #8000 XOR #8000 LT lx_colly_up JNZ \
+                 lx_cy_t LOAD16 RET \
+                 @lx_colly_down \
+                 lx_cy_t LOAD16 lx_cy_h LOAD16 ADD #01 SUB lx_cy_lead STORE16 \
+                 lx_cy_x LOAD16 lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL \
+                 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL OR \
+                 lx_colly_dhit JNZ \
+                 lx_cy_t LOAD16 RET \
+                 @lx_colly_dhit lx_cy_lead LOAD16 #03 SHR #03 SHL lx_cy_h LOAD16 SUB RET \
+                 @lx_colly_up \
+                 lx_cy_t LOAD16 lx_cy_lead STORE16 \
+                 lx_cy_x LOAD16 lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL \
+                 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL OR \
+                 lx_colly_uhit JNZ \
+                 lx_cy_t LOAD16 RET \
+                 @lx_colly_uhit lx_cy_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
+            );
+        }
 
         // Data section.
         for line in &self.data {
@@ -1843,6 +2003,31 @@ impl Compiler {
         }
         if self.helpers.solid {
             out.push_str("@lx_sx .res 2\n@lx_sy .res 2\n");
+        }
+        if self.helpers.flagat {
+            out.push_str("@lx_fa_x .res 2\n@lx_fa_y .res 2\n@lx_fa_f .res 2\n");
+        }
+        if self.helpers.maprect {
+            out.push_str(
+                "@lx_mr_x .res 2\n@lx_mr_y .res 2\n@lx_mr_w .res 2\n@lx_mr_h .res 2\n@lx_mr_f .res 2\n",
+            );
+        }
+        if self.helpers.touch {
+            out.push_str(
+                "@lx_tc_x .res 2\n@lx_tc_y .res 2\n@lx_tc_w .res 2\n@lx_tc_h .res 2\n@lx_tc_f .res 2\n",
+            );
+        }
+        if self.helpers.collx {
+            out.push_str(
+                "@lx_cx_x .res 2\n@lx_cx_y .res 2\n@lx_cx_w .res 2\n@lx_cx_h .res 2\n\
+                 @lx_cx_dx .res 2\n@lx_cx_f .res 2\n@lx_cx_t .res 2\n@lx_cx_lead .res 2\n",
+            );
+        }
+        if self.helpers.colly {
+            out.push_str(
+                "@lx_cy_x .res 2\n@lx_cy_y .res 2\n@lx_cy_w .res 2\n@lx_cy_h .res 2\n\
+                 @lx_cy_dy .res 2\n@lx_cy_f .res 2\n@lx_cy_t .res 2\n@lx_cy_lead .res 2\n",
+            );
         }
         // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
         if !self.sprites.is_empty() {
@@ -2302,6 +2487,98 @@ mod tests {
         let c = compile("local x: word function draw() entity(len(x), 0, 1) end");
         assert!(!c.ok());
         assert!(c.diagnostics.iter().any(|d| d.message.contains("len()")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn map_rect_overlap_corners() {
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init()
+              fset(5, SOLID, 1)
+              mset(2, 2, 5)                 -- solid tile at cell (2,2) = pixels 16..23
+            end
+            function draw()
+              out = 0
+              if map_rect_overlap(14, 14, 8, 8, SOLID) then out = out + 1 end  -- SE corner hits
+              if map_rect_overlap(0, 0, 8, 8, SOLID) then out = out + 2 end      -- clear
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn collide_x_stops_at_wall() {
+        // A solid wall column at cell x=4 (pixels 32..). An 8-px rect starting at
+        // x=20 and moving +5/frame must stop flush against the wall at x=24.
+        let src = r#"
+            tilemap level(8, 8)
+            local px: word
+            function init()
+              fset(5, SOLID, 1)
+              for y = 0, 7 do mset(4, y, 5) end
+              px = 20
+            end
+            function draw()
+              px = collide_x(px, 40, 8, 8, 5, SOLID)
+              entity(px, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 24); // snapped to the wall
+        assert_eq!(c.run_frame(0).entities[0].x, 24); // stays pinned
+    }
+
+    #[test]
+    fn collide_y_lands_on_floor() {
+        // Floor row at cell y=6 (pixels 48..). A rect falling +5/frame from y=30
+        // lands at y=40 (bottom edge 47, flush above the floor).
+        let src = r#"
+            tilemap level(8, 8)
+            local py: word
+            function init()
+              fset(5, SOLID, 1)
+              for x = 0, 7 do mset(x, 6, 5) end
+              py = 30
+            end
+            function draw()
+              py = collide_y(20, py, 8, 8, 5, SOLID)
+              entity(20, py, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].y, 35);
+        assert_eq!(c.run_frame(0).entities[0].y, 40); // reaches the floor
+        assert_eq!(c.run_frame(0).entities[0].y, 40); // and stops
+    }
+
+    #[test]
+    fn touching_floor_detects_ground() {
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init()
+              fset(5, SOLID, 1)
+              for x = 0, 7 do mset(x, 6, 5) end   -- floor row at cell y=6 (pixels 48..)
+            end
+            function draw()
+              out = 0
+              if touching_floor(20, 40, 8, 8, SOLID) then out = out + 1 end  -- bottom edge 47, floor below
+              if touching_floor(20, 20, 8, 8, SOLID) then out = out + 2 end   -- airborne
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn collision_helpers_need_tilemap() {
+        let c = compile("function draw() if collide_x(0,0,8,8,1,SOLID) > 0 then end end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("tilemap")), "{:?}", c.diagnostics);
     }
 
     #[test]
