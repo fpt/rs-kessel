@@ -228,13 +228,16 @@ end
   re-derive corner-sampling and snap-to-grid every game (all take a rect
   `x,y,w,h` and a tile `flag`):
   - `map_rect_overlap(x,y,w,h,flag)→bool` — does the rect touch any tile with
-    `flag` set? (Samples the four corners: exact for boxes up to one tile.)
+    `flag` set? Scans every tile the rect covers (one sample per 8-px cell), so
+    boxes larger than a tile don't miss an interior tile.
   - `collide_x(x,y,w,h,dx,flag)→new_x` / `collide_y(x,y,w,h,dy,flag)→new_y` —
     move the box by a signed `dx`/`dy` and return the coordinate snapped flush
-    against the first flagged tile in the way (or the full move if clear).
-    Resolve one axis at a time: `nx = collide_x(x,y,w,h,vx,SOLID)` then
-    `ny = collide_y(nx,y,w,h,vy,SOLID)`. Assumes the box starts in a clear cell
-    and the step is smaller than a tile (no tunneling).
+    against the first flagged tile in the way (or the full move if clear). The
+    whole leading edge is scanned tile-by-tile, so a box taller/wider than a tile
+    can't slip past a tile between its corners. Resolve one axis at a time:
+    `nx = collide_x(x,y,w,h,vx,SOLID)` then `ny = collide_y(nx,y,w,h,vy,SOLID)`.
+    Assumes the box starts in a clear cell and the per-step move is smaller than a
+    tile (no tunneling across a full tile in one frame).
   - `touching_left|right|floor|ceiling(x,y,w,h,flag)→bool` — is a flagged tile
     directly against that edge? (Grounded checks, wall-slides, ceiling bonks.)
   Jump *feel* (coyote time, jump buffering, double/wall-jump counters) stays in

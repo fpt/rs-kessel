@@ -953,6 +953,8 @@ struct Helpers {
     fset: bool,
     solid: bool,
     flagat: bool,  // @lx_flagat ( px py flag -- bit ): bounds-checked fget(mget(...))
+    vscan: bool,   // @lx_vscan: scan a vertical edge, one sample per tile
+    hscan: bool,   // @lx_hscan: scan a horizontal edge, one sample per tile
     maprect: bool, // @lx_maprect: rect vs tilemap overlap
     touch: bool,   // @lx_touch_*: edge contact predicates
     collx: bool,   // @lx_collx: axis-resolving X movement
@@ -1743,21 +1745,28 @@ impl Compiler {
                 }
                 "map_rect_overlap" => {
                     self.need_flagat();
+                    self.helpers.hscan = true; // scans each row of the rect
                     self.helpers.maprect = true;
                     out.push("lx_maprect CALL".to_string()); // ( x y w h flag -- bool )
                 }
                 "collide_x" => {
                     self.need_flagat();
+                    self.helpers.vscan = true; // scans the vertical leading edge
                     self.helpers.collx = true;
                     out.push("lx_collx CALL".to_string()); // ( x y w h dx flag -- new_x )
                 }
                 "collide_y" => {
                     self.need_flagat();
+                    self.helpers.hscan = true; // scans the horizontal leading edge
                     self.helpers.colly = true;
                     out.push("lx_colly CALL".to_string()); // ( x y w h dy flag -- new_y )
                 }
                 "touching_left" | "touching_right" | "touching_floor" | "touching_ceiling" => {
                     self.need_flagat();
+                    // The four touching_* subroutines are emitted together, so
+                    // enable both scans regardless of which direction is used.
+                    self.helpers.vscan = true;
+                    self.helpers.hscan = true;
                     self.helpers.touch = true;
                     out.push(format!("lx_{name} CALL")); // ( x y w h flag -- bool )
                 }
@@ -1987,52 +1996,96 @@ impl Compiler {
                 ));
             }
         }
-        // map_rect_overlap ( x y w h flag -- bool ): OR of `flagat` at the rect's
-        // four corners. Exact for rects up to one tile; larger rects sample only
-        // the corners (a tile fully inside an edge is not seen).
+        // vscan ( px y0 y1 flag -- bit ): 1 if any tile with `flag` is set along
+        // the vertical segment x=px, y in [y0,y1]. Steps one sample per tile
+        // (every 8 px) and always samples the far end y1, so a tile between the
+        // endpoints of a tall box can't be skipped.
+        if self.helpers.vscan {
+            out.push_str(
+                "@lx_vscan\n  lx_vs_f STORE16 lx_vs_y1 STORE16 lx_vs_py STORE16 lx_vs_px STORE16 \
+                 #00 lx_vs_acc STORE16 \
+                 @lx_vscan_lp \
+                 lx_vs_px LOAD16 lx_vs_py LOAD16 lx_vs_f LOAD16 lx_flagat CALL \
+                 lx_vs_acc LOAD16 OR lx_vs_acc STORE16 \
+                 lx_vs_py LOAD16 lx_vs_y1 LOAD16 LT #00 EQ lx_vscan_done JNZ \
+                 lx_vs_py LOAD16 #08 ADD lx_vs_py STORE16 \
+                 lx_vs_py LOAD16 lx_vs_y1 LOAD16 GT lx_vscan_clamp JNZ \
+                 lx_vscan_lp JMP \
+                 @lx_vscan_clamp lx_vs_y1 LOAD16 lx_vs_py STORE16 lx_vscan_lp JMP \
+                 @lx_vscan_done lx_vs_acc LOAD16 RET\n",
+            );
+        }
+        // hscan ( x0 x1 py flag -- bit ): the horizontal mirror of vscan.
+        if self.helpers.hscan {
+            out.push_str(
+                "@lx_hscan\n  lx_hs_f STORE16 lx_hs_py STORE16 lx_hs_x1 STORE16 lx_hs_px STORE16 \
+                 #00 lx_hs_acc STORE16 \
+                 @lx_hscan_lp \
+                 lx_hs_px LOAD16 lx_hs_py LOAD16 lx_hs_f LOAD16 lx_flagat CALL \
+                 lx_hs_acc LOAD16 OR lx_hs_acc STORE16 \
+                 lx_hs_px LOAD16 lx_hs_x1 LOAD16 LT #00 EQ lx_hscan_done JNZ \
+                 lx_hs_px LOAD16 #08 ADD lx_hs_px STORE16 \
+                 lx_hs_px LOAD16 lx_hs_x1 LOAD16 GT lx_hscan_clamp JNZ \
+                 lx_hscan_lp JMP \
+                 @lx_hscan_clamp lx_hs_x1 LOAD16 lx_hs_px STORE16 lx_hscan_lp JMP \
+                 @lx_hscan_done lx_hs_acc LOAD16 RET\n",
+            );
+        }
+        // map_rect_overlap ( x y w h flag -- bool ): scan every tile row the rect
+        // covers (hscan per row, one sample per tile) so an interior tile can't be
+        // missed. Returns on the first flagged row.
         if self.helpers.maprect {
             out.push_str(
                 "@lx_maprect\n  lx_mr_f STORE16 lx_mr_h STORE16 lx_mr_w STORE16 \
                  lx_mr_y STORE16 lx_mr_x STORE16 \
-                 lx_mr_x LOAD16 lx_mr_y LOAD16 lx_mr_f LOAD16 lx_flagat CALL \
-                 lx_mr_x LOAD16 lx_mr_w LOAD16 ADD #01 SUB lx_mr_y LOAD16 lx_mr_f LOAD16 lx_flagat CALL OR \
-                 lx_mr_x LOAD16 lx_mr_y LOAD16 lx_mr_h LOAD16 ADD #01 SUB lx_mr_f LOAD16 lx_flagat CALL OR \
-                 lx_mr_x LOAD16 lx_mr_w LOAD16 ADD #01 SUB lx_mr_y LOAD16 lx_mr_h LOAD16 ADD #01 SUB \
-                 lx_mr_f LOAD16 lx_flagat CALL OR RET\n",
+                 lx_mr_y LOAD16 lx_mr_py STORE16 \
+                 lx_mr_y LOAD16 lx_mr_h LOAD16 ADD #01 SUB lx_mr_y1 STORE16 \
+                 @lx_maprect_lp \
+                 lx_mr_x LOAD16 lx_mr_x LOAD16 lx_mr_w LOAD16 ADD #01 SUB \
+                 lx_mr_py LOAD16 lx_mr_f LOAD16 lx_hscan CALL \
+                 lx_maprect_hit JNZ \
+                 lx_mr_py LOAD16 lx_mr_y1 LOAD16 LT #00 EQ lx_maprect_miss JNZ \
+                 lx_mr_py LOAD16 #08 ADD lx_mr_py STORE16 \
+                 lx_mr_py LOAD16 lx_mr_y1 LOAD16 GT lx_maprect_clamp JNZ \
+                 lx_maprect_lp JMP \
+                 @lx_maprect_clamp lx_mr_y1 LOAD16 lx_mr_py STORE16 lx_maprect_lp JMP \
+                 @lx_maprect_hit #01 RET \
+                 @lx_maprect_miss #00 RET\n",
             );
         }
-        // touching_* ( x y w h flag -- bool ): sample `flagat` at the two corners
-        // one pixel OUTSIDE the named edge. Shared scratch (they never nest).
+        // touching_* ( x y w h flag -- bool ): scan the whole edge one pixel
+        // OUTSIDE the box (vscan for the vertical sides, hscan for top/bottom), so
+        // a box taller/wider than a tile still reports contact. Shared scratch.
         if self.helpers.touch {
             out.push_str(
                 "@lx_touching_left\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
                  lx_tc_y STORE16 lx_tc_x STORE16 \
-                 lx_tc_x LOAD16 #01 SUB lx_tc_y LOAD16 lx_tc_f LOAD16 lx_flagat CALL \
-                 lx_tc_x LOAD16 #01 SUB lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+                 lx_tc_x LOAD16 #01 SUB lx_tc_y LOAD16 lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB \
+                 lx_tc_f LOAD16 lx_vscan CALL RET\n",
             );
             out.push_str(
                 "@lx_touching_right\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
                  lx_tc_y STORE16 lx_tc_x STORE16 \
-                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD lx_tc_y LOAD16 lx_tc_f LOAD16 lx_flagat CALL \
-                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD lx_tc_y LOAD16 lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB \
+                 lx_tc_f LOAD16 lx_vscan CALL RET\n",
             );
             out.push_str(
                 "@lx_touching_floor\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
                  lx_tc_y STORE16 lx_tc_x STORE16 \
-                 lx_tc_x LOAD16 lx_tc_y LOAD16 lx_tc_h LOAD16 ADD lx_tc_f LOAD16 lx_flagat CALL \
-                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 lx_tc_h LOAD16 ADD lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+                 lx_tc_x LOAD16 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 lx_tc_h LOAD16 ADD \
+                 lx_tc_f LOAD16 lx_hscan CALL RET\n",
             );
             out.push_str(
                 "@lx_touching_ceiling\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
                  lx_tc_y STORE16 lx_tc_x STORE16 \
-                 lx_tc_x LOAD16 lx_tc_y LOAD16 #01 SUB lx_tc_f LOAD16 lx_flagat CALL \
-                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 #01 SUB lx_tc_f LOAD16 lx_flagat CALL OR RET\n",
+                 lx_tc_x LOAD16 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 #01 SUB \
+                 lx_tc_f LOAD16 lx_hscan CALL RET\n",
             );
         }
-        // collide_x ( x y w h dx flag -- new_x ): move by signed dx; if the
-        // leading vertical edge (right corners if dx>0, left if dx<0) hits a
-        // flagged tile, snap to the tile boundary. Assumes the rect starts in a
-        // clear cell and dx is small (no tunneling past a tile in one step).
+        // collide_x ( x y w h dx flag -- new_x ): move by signed dx; if the whole
+        // leading vertical edge (right side if dx>0, left if dx<0) hits a flagged
+        // tile (vscan covers every tile along it), snap to the tile boundary.
+        // Assumes the box starts clear and dx is small (no tunneling past a tile).
         if self.helpers.collx {
             out.push_str(
                 "@lx_collx\n  lx_cx_f STORE16 lx_cx_dx STORE16 lx_cx_h STORE16 lx_cx_w STORE16 \
@@ -2043,22 +2096,22 @@ impl Compiler {
                  lx_cx_t LOAD16 RET \
                  @lx_collx_right \
                  lx_cx_t LOAD16 lx_cx_w LOAD16 ADD #01 SUB lx_cx_lead STORE16 \
-                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_f LOAD16 lx_flagat CALL \
-                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB lx_cx_f LOAD16 lx_flagat CALL OR \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB \
+                 lx_cx_f LOAD16 lx_vscan CALL \
                  lx_collx_rhit JNZ \
                  lx_cx_t LOAD16 RET \
                  @lx_collx_rhit lx_cx_lead LOAD16 #03 SHR #03 SHL lx_cx_w LOAD16 SUB RET \
                  @lx_collx_left \
                  lx_cx_t LOAD16 lx_cx_lead STORE16 \
-                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_f LOAD16 lx_flagat CALL \
-                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB lx_cx_f LOAD16 lx_flagat CALL OR \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB \
+                 lx_cx_f LOAD16 lx_vscan CALL \
                  lx_collx_lhit JNZ \
                  lx_cx_t LOAD16 RET \
                  @lx_collx_lhit lx_cx_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
             );
         }
         // collide_y ( x y w h dy flag -- new_y ): the Y-axis mirror of collide_x
-        // (leading edge = bottom corners if dy>0, top if dy<0).
+        // (leading horizontal edge = bottom if dy>0, top if dy<0; hscan covers it).
         if self.helpers.colly {
             out.push_str(
                 "@lx_colly\n  lx_cy_f STORE16 lx_cy_dy STORE16 lx_cy_h STORE16 lx_cy_w STORE16 \
@@ -2069,15 +2122,15 @@ impl Compiler {
                  lx_cy_t LOAD16 RET \
                  @lx_colly_down \
                  lx_cy_t LOAD16 lx_cy_h LOAD16 ADD #01 SUB lx_cy_lead STORE16 \
-                 lx_cy_x LOAD16 lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL \
-                 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL OR \
+                 lx_cy_x LOAD16 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 \
+                 lx_cy_f LOAD16 lx_hscan CALL \
                  lx_colly_dhit JNZ \
                  lx_cy_t LOAD16 RET \
                  @lx_colly_dhit lx_cy_lead LOAD16 #03 SHR #03 SHL lx_cy_h LOAD16 SUB RET \
                  @lx_colly_up \
                  lx_cy_t LOAD16 lx_cy_lead STORE16 \
-                 lx_cy_x LOAD16 lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL \
-                 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 lx_cy_f LOAD16 lx_flagat CALL OR \
+                 lx_cy_x LOAD16 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 \
+                 lx_cy_f LOAD16 lx_hscan CALL \
                  lx_colly_uhit JNZ \
                  lx_cy_t LOAD16 RET \
                  @lx_colly_uhit lx_cy_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
@@ -2148,9 +2201,20 @@ impl Compiler {
         if self.helpers.flagat {
             out.push_str("@lx_fa_x .res 2\n@lx_fa_y .res 2\n@lx_fa_f .res 2\n");
         }
+        if self.helpers.vscan {
+            out.push_str(
+                "@lx_vs_px .res 2\n@lx_vs_py .res 2\n@lx_vs_y1 .res 2\n@lx_vs_f .res 2\n@lx_vs_acc .res 2\n",
+            );
+        }
+        if self.helpers.hscan {
+            out.push_str(
+                "@lx_hs_px .res 2\n@lx_hs_x1 .res 2\n@lx_hs_py .res 2\n@lx_hs_f .res 2\n@lx_hs_acc .res 2\n",
+            );
+        }
         if self.helpers.maprect {
             out.push_str(
-                "@lx_mr_x .res 2\n@lx_mr_y .res 2\n@lx_mr_w .res 2\n@lx_mr_h .res 2\n@lx_mr_f .res 2\n",
+                "@lx_mr_x .res 2\n@lx_mr_y .res 2\n@lx_mr_w .res 2\n@lx_mr_h .res 2\n@lx_mr_f .res 2\n\
+                 @lx_mr_py .res 2\n@lx_mr_y1 .res 2\n",
             );
         }
         if self.helpers.touch {
@@ -2762,6 +2826,64 @@ mod tests {
               out = 0
               if touching_floor(20, 40, 8, 8, SOLID) then out = out + 1 end  -- bottom edge 47, floor below
               if touching_floor(20, 20, 8, 8, SOLID) then out = out + 2 end   -- airborne
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn collide_x_scans_full_edge_no_tunnel() {
+        // Regression: a box TALLER than one tile whose leading edge only hits a
+        // solid tile in an intermediate row (both corners clear) must still stop.
+        // Box is 24 px tall (rows 0,1,2); the solid cell (4,1) sits in the middle
+        // row, so corner-only sampling (y=0 and y=23) would tunnel through it.
+        let src = r#"
+            tilemap level(8, 8)
+            local px: word
+            function init()
+              fset(5, SOLID, 1)
+              mset(4, 1, 5)          -- solid ONLY at the middle row (pixels y 8..15)
+              px = 20
+            end
+            function draw()
+              px = collide_x(px, 0, 8, 24, 5, SOLID)   -- moving +5 toward col 4 (x 32..)
+              entity(px, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 24); // snapped flush, not 25 (through the wall)
+    }
+
+    #[test]
+    fn map_rect_overlap_sees_interior_tile() {
+        // A rect three tiles wide with a solid cell only in the MIDDLE column —
+        // corner-only sampling misses it.
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init() fset(5, SOLID, 1)  mset(3, 0, 5) end   -- middle column
+            function draw()
+              out = 0
+              if map_rect_overlap(16, 0, 24, 8, SOLID) then out = 1 end
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn touching_right_scans_full_edge() {
+        // Tall box; a solid tile only in an intermediate row of the right edge.
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init() fset(5, SOLID, 1)  mset(3, 1, 5) end   -- right edge, middle row
+            function draw()
+              out = 0
+              if touching_right(16, 0, 8, 24, SOLID) then out = 1 end
               entity(out, 0, 1)
             end
         "#;
