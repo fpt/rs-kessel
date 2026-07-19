@@ -194,6 +194,23 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                         i += 1;
                         out.push(Token { tok: Tok::Sym("}"), line });
                         break;
+                    } else if cc == '-' && i + 1 < b.len() && b[i + 1] == '-' {
+                        // Comments are valid inside a sprite body too: `--[[ ]]`
+                        // block or `--` to end of line (not pixel rows).
+                        if i + 3 < b.len() && b[i + 2] == '[' && b[i + 3] == '[' {
+                            i += 4;
+                            while i + 1 < b.len() && !(b[i] == ']' && b[i + 1] == ']') {
+                                if b[i] == '\n' {
+                                    line += 1;
+                                }
+                                i += 1;
+                            }
+                            i += 2;
+                        } else {
+                            while i < b.len() && b[i] != '\n' {
+                                i += 1;
+                            }
+                        }
                     } else {
                         let start = i;
                         while i < b.len() && !b[i].is_whitespace() && b[i] != '}' {
@@ -1875,6 +1892,24 @@ mod tests {
         // sprite b = id 1 at (8,0): top row pixels 3,4 (from sheet base + 32)
         assert_eq!(c.vm.devices.framebuffer[8], 3);
         assert_eq!(c.vm.devices.framebuffer[9], 4);
+    }
+
+    #[test]
+    fn comments_inside_sprite_body() {
+        // Comments (line and block) inside a sprite must not become pixel rows.
+        let src = r#"
+            sprite a {
+              12......   -- top row
+              --[[ the rest is blank ]]
+              ........
+            }
+            function draw() spr(a, 0, 0, 0) end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 1);
+        assert_eq!(c.vm.devices.framebuffer[1], 2);
     }
 
     #[test]
