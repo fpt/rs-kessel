@@ -251,7 +251,9 @@ end
   power-on (wraps at 65536) for blink/timers/periodic spawns.
 - **Arrays:** `len(arr)→word` is the array's declared length (a compile-time
   constant) — write `for i = 0, len(bullets)-1 do` so the loop follows the array
-  size instead of a hand-written bound.
+  size instead of a hand-written bound. `clear(x)` zeroes a record or whole array
+  in place (`clear(bullets)` resets a pool; `clear(bullets[i])` one element) —
+  cheaper and less error-prone than field-by-field reinitialization.
 - **On-screen text:** `text("LITERAL", x, y, color)` draws a compile-time string
   in a built-in 3×5 font (uppercase `A-Z`, `0-9`, space, `: ! . -`; lowercase
   folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,

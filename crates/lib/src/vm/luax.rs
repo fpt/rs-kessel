@@ -959,6 +959,7 @@ struct Helpers {
     colly: bool,   // @lx_colly: axis-resolving Y movement
     text: bool,    // @lx_txt_x scratch for unrolled text()
     number: bool,  // @lx_number: runtime decimal rendering
+    clear: bool,   // @lx_clear: zero a record/array in place
 }
 
 const BUTTON_CONSTS: &[(&str, i64)] = &[
@@ -1343,7 +1344,13 @@ impl Compiler {
                     },
                 };
                 let label = format!("lx_l_{}_{}", self.cur_func, var);
-                self.data.push(format!("@{label} .res 2"));
+                // Two `for i` loops in the same function share this storage slot
+                // (they don't run at once) — reserve it once, not once per loop,
+                // or the duplicate `.res` label breaks assembly.
+                let decl = format!("@{label} .res 2");
+                if !self.data.contains(&decl) {
+                    self.data.push(decl);
+                }
                 self.locals.insert(
                     var.clone(),
                     VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
@@ -1636,6 +1643,26 @@ impl Compiler {
                 }
             } else {
                 d.push(err(line, "text() takes a string literal, then x, y, color"));
+            }
+            return false;
+        }
+        // `clear(place)` zeroes a record or array in place — the compiler knows
+        // the aggregate's byte size, so it emits base-address + size + a memset.
+        if name == "clear" {
+            if let [arg] = args {
+                let mut place = Vec::new();
+                match self.gen_place_addr(arg, &mut place, d) {
+                    Some(ty) if !ty.is_scalar() => {
+                        self.helpers.clear = true;
+                        out.extend(place); // base address
+                        out.push(ty.size().to_string()); // byte count
+                        out.push("lx_clear CALL".to_string());
+                    }
+                    Some(_) => d.push(err(line, "clear() takes a record or array, not a scalar")),
+                    None => {} // gen_place_addr already reported why
+                }
+            } else {
+                d.push(err(line, "clear() takes one argument"));
             }
             return false;
         }
@@ -2076,6 +2103,19 @@ impl Compiler {
                  @lx_number_done RET\n",
             );
         }
+        // clear ( addr n -- ): write n zero bytes from addr (memset for `clear`).
+        if self.helpers.clear {
+            out.push_str(
+                "@lx_clear\n  lx_cl_n STORE16 lx_cl_a STORE16 \
+                 @lx_clear_lp \
+                 lx_cl_n LOAD16 #00 EQ lx_clear_done JNZ \
+                 #00 lx_cl_a LOAD16 STORE8 \
+                 lx_cl_a LOAD16 #01 ADD lx_cl_a STORE16 \
+                 lx_cl_n LOAD16 #01 SUB lx_cl_n STORE16 \
+                 lx_clear_lp JMP \
+                 @lx_clear_done RET\n",
+            );
+        }
 
         // Data section.
         for line in &self.data {
@@ -2132,6 +2172,9 @@ impl Compiler {
                 "@lx_num_n .res 2\n@lx_num_x .res 2\n@lx_num_cnt .res 2\n\
                  @lx_num_j .res 2\n@lx_num_px .res 2\n@lx_num_buf .res 6\n",
             );
+        }
+        if self.helpers.clear {
+            out.push_str("@lx_cl_a .res 2\n@lx_cl_n .res 2\n");
         }
         // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
         if !self.sprites.is_empty() {
@@ -2246,6 +2289,28 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 15);
+    }
+
+    #[test]
+    fn two_for_loops_same_var_in_one_function() {
+        // Reusing `i` across two sequential for-loops must reserve the counter
+        // slot once — a duplicate `.res` label used to break assembly / results.
+        let src = r#"
+            local a: word
+            local b: word
+            function draw()
+              a = 0
+              for i = 1, 3 do a = a + i end   -- 6
+              b = 0
+              for i = 1, 4 do b = b + i end   -- 10
+              entity(a, 0, 1)
+              entity(b, 0, 2)
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 6);
+        assert_eq!(o.entities[1].x, 10);
     }
 
     #[test]
@@ -2765,6 +2830,62 @@ mod tests {
         let c = compile("function draw() text(\"oops, 0, 0, 7) end");
         assert!(!c.ok());
         assert!(c.diagnostics.iter().any(|d| d.message.contains("unterminated")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn clear_zeros_whole_array() {
+        let src = r#"
+            record Obj { x, y, alive }
+            local es: array(4, Obj)
+            local sum: word
+            function draw()
+              for i = 0, 3 do es[i].x = 9  es[i].y = 9  es[i].alive = 1 end
+              clear(es)
+              sum = 0
+              for i = 0, 3 do sum = sum + es[i].x + es[i].y + es[i].alive end
+              entity(sum, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 0);
+    }
+
+    #[test]
+    fn clear_zeros_one_element_only() {
+        let src = r#"
+            record Obj { x, y }
+            local es: array(3, Obj)
+            function draw()
+              es[0].x = 5  es[0].y = 6
+              es[1].x = 7  es[1].y = 8
+              clear(es[1])
+              entity(es[0].x + es[0].y, 0, 1)   -- untouched: 11
+              entity(es[1].x + es[1].y, 0, 2)   -- cleared: 0
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 11);
+        assert_eq!(o.entities[1].x, 0);
+        assert_eq!(o.entities[1].tag, 2);
+    }
+
+    #[test]
+    fn clear_zeros_a_record() {
+        let src = r#"
+            record P { a, b }
+            local p: P
+            function draw() p.a = 3  p.b = 4  clear(p)  entity(p.a + p.b, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 0);
+    }
+
+    #[test]
+    fn clear_rejects_scalar() {
+        let c = compile("local x: word function draw() clear(x) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("clear()")), "{:?}", c.diagnostics);
     }
 
     #[test]
