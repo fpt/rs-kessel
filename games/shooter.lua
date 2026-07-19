@@ -1,12 +1,13 @@
 -- shooter.lua — a vertical space shooter. Arrows move, A (Z key) fires. Bullets
--- destroy the descending foes; each kill scores a point.
+-- destroy the descending foes; each kill scores a point. Colliding with a foe
+-- ends the run; press A to restart.
 --
 --   kessel --play games/shooter.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {
   dpad = true       -- arrows move
-  a = "fire"
+  a = "fire / restart"
   pause = START
 }
 
@@ -51,6 +52,7 @@ local px: int = 60
 local cd = 0        -- fire cooldown
 local spawn = 0     -- foe spawn timer
 local score = 0
+local dead = 0
 
 function init()
   local i = 0
@@ -63,14 +65,17 @@ function init()
   cd = 0
   spawn = 0
   score = 0
+  dead = 0
 end
 
 function fire()
   local i = 0
   while i < 6 do
     if bullets[i].alive == 0 then
-      bullets[i].x = px + 3
-      bullets[i].y = 112
+      -- The bullet sprite's visible pixels are columns 3-4, matching the ship's
+      -- centreline when both sprites share the same x origin.
+      bullets[i].x = px
+      bullets[i].y = 111
       bullets[i].alive = 1
       return
     end
@@ -92,6 +97,11 @@ function spawn_foe()
 end
 
 function update()
+  if dead == 1 then
+    if btnp(A) then init() end
+    return
+  end
+
   if btn(LEFT)  then px = px - 2 end
   if btn(RIGHT) then px = px + 2 end
   if px < 0 then px = 0 end
@@ -125,13 +135,23 @@ function update()
     i = i + 1
   end
 
+  -- Use an inset ship hitbox so transparent wing corners do not feel unfair.
+  i = 0
+  while i < 6 do
+    if foes[i].alive == 1 and rect_overlap(px + 1, 113, 6, 6, foes[i].x, foes[i].y, 8, 8) then
+      dead = 1
+      return
+    end
+    i = i + 1
+  end
+
   -- bullet vs foe
   i = 0
   while i < 6 do
     if bullets[i].alive == 1 then
       local j = 0
       while j < 6 do
-        if foes[j].alive == 1 and rect_overlap(bullets[i].x, bullets[i].y, 2, 4, foes[j].x, foes[j].y, 8, 8) then
+        if foes[j].alive == 1 and rect_overlap(bullets[i].x + 3, bullets[i].y, 2, 4, foes[j].x, foes[j].y, 8, 8) then
           foes[j].alive = 0
           bullets[i].alive = 0
           score = score + 1
@@ -146,7 +166,7 @@ end
 
 function draw()
   cls(0)
-  spr(ship, px, 112, 0)
+  if dead == 0 then spr(ship, px, 112, 0) end
   local i = 0
   while i < 6 do
     if bullets[i].alive == 1 then spr(bull, bullets[i].x, bullets[i].y, 0) end
@@ -155,5 +175,9 @@ function draw()
   end
   text("SCORE", 2, 2, 7)          -- HUD: a label...
   number(score, 40, 2, 7)          -- ...and the live score
-  entity(px, 112, 1)
+  if dead == 1 then
+    text("GAME OVER", 46, 54, 8)
+    text("PRESS A", 50, 64, 7)
+  end
+  entity(px, 112, dead + 1)
 end
