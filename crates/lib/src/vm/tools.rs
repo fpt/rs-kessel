@@ -57,18 +57,50 @@ impl ToolHandler for WriteSource {
         "vm_write_source"
     }
     fn description(&self) -> &str {
-        "Write source for the fantasy-console VM to a named file in the VM workspace. \
-         A '.asm' path is stack assembly; a '.lua' path is the higher-level Lua-ish \
-         dialect (function/end, local, if/for, records + arrays, game builtins like \
-         cls/pset/spr/btn/entity). Overwrites any previous source at that path and \
-         invalidates its built ROM."
+        // A canonical luax snippet is embedded so the model writes the real
+        // dialect on the first try instead of falling back to raw PICO-8 (which
+        // only fails at assemble time). Covers the three most common priors that
+        // DON'T port: sprites are `sprite NAME { rows }` declarations (not table
+        // literals), entry points are `update`/`draw` (NOT `_update`/`_draw`),
+        // and `cls` requires a colour argument.
+        r#"Write source for the fantasy-console VM to a named file in the VM workspace. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
+
+luax essentials (a '.lua' file):
+- Entry points (vector-driven, no main loop): `function init()` runs once; `function update()` then `function draw()` run each frame. Names are bare — NOT `_update`/`_draw`.
+- State: top-level `local x = 60` is a persistent global. `record Name { a, b: byte }` (fields default to `word`); `local es: array(8, Name)`.
+- Sprites are DECLARATIONS, not table literals: `sprite hero { <8 rows of 8 chars, '.'=transparent else palette nibble 0-9a-f> }`. `hero` is then a tile id; draw with `spr(hero, x, y, flags)`.
+- Builtins: `cls(c)` (colour REQUIRED), `pset(x,y,c)`, `spr(id,x,y,flags)`, `btn(LEFT|RIGHT|UP|DOWN|A|B)`, `entity(x,y,tag)` (report for observation), `rnd(n)`, `map/mget/mset/fset/solid` (tilemap).
+
+Canonical example:
+  sprite hero {
+    ..7777..
+    .777777.
+    77777777
+    77.77.77
+    77777777
+    .777777.
+    ..7777..
+    .77..77.
+  }
+  local x = 60
+  local y = 60
+  function update()
+    if btn(LEFT)  then x = x - 1 end
+    if btn(RIGHT) then x = x + 1 end
+  end
+  function draw()
+    cls(0)
+    spr(hero, x, y, 0)
+    entity(x, y, 1)
+  end
+"#
     }
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Workspace file name, e.g. 'game.asm'"},
-                "source": {"type": "string", "description": "Assembly source text"}
+                "path": {"type": "string", "description": "Workspace file name, e.g. 'game.lua' or 'game.asm'"},
+                "source": {"type": "string", "description": "Source text: luax (.lua) or stack assembly (.asm)"}
             },
             "required": ["path", "source"]
         })

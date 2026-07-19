@@ -280,7 +280,20 @@ model authors are **human-playable**:
 ```bash
 kessel --play games/bounce.lua    # a self-animating demo
 kessel --play games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
+kessel --play games/snake.lua     # grid snake — arrows steer, eat food, A restarts
+kessel --play games/brick.lua     # Breakout — arrows move the paddle
+kessel --play games/shooter.lua   # vertical shooter — arrows move, A fires
+kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
+kessel --play games/rogue.lua     # top-down roguelike — arrows move, bump orcs to fight
+kessel --play games/platform.lua  # tile platformer — arrows move, A jumps
 ```
+
+The `games/` set doubles as worked luax examples spanning the builtins:
+`snake` (record arrays + grid movement), `brick` (signed `int` velocity + AABB
+brick hits), `shooter` (entity pools + `rect_overlap`), `tetris` (bitmask pieces,
+runtime rotation, a `tilemap` well + line clears), `rogue` (`tilemap` +
+`fset`/`solid` collision + simple enemy AI), and `platform` (tile collision +
+gravity + jump).
 
 `--play` needs no model or API key. It loads a `.lua`/`.asm` file into a standalone
 `VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,

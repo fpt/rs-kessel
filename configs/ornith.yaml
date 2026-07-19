@@ -1,0 +1,37 @@
+llm:
+  # Ornith 1.0 9B — a Qwen 3.5 (`qwen35`) variant from deepreinforce-ai, same
+  # architecture and prompt format as Qwen3.5-9B (so this mirrors qwen3.yaml).
+  # `hf:` spec — resolved and downloaded into the HuggingFace cache by the Rust
+  # model downloader, so this works from every frontend (Swift, Windows C#, and
+  # the Rust CLI). The repo ships Q4_K_M / Q5_K_M / Q6_K / Q8_0 / bf16; pick a
+  # bigger quant by swapping the filename below.
+  modelPath: "hf:deepreinforce-ai/Ornith-1.0-9B-GGUF/ornith-1.0-9b-Q4_K_M.gguf"
+  baseURL: ""
+  model: "ornith-1.0:9b"
+  harmonyTemplate: false
+  temperature: 0.7
+  maxTokens: 2048
+
+agent:
+  systemPromptPath: null
+  maxTurns: 50
+  language: "en"
+  skillPaths: ["../skills"]   # SKILL.md dirs (relative to this config's dir)
+
+tts:
+  enabled: true
+  voice: "com.apple.voice.enhanced.en-US.Zoe"  # com.apple.voice.enhanced.ja-JP.Kyoko for Japanese
+  rate: 0.5
+  pitchMultiplier: 1.0
+  volume: 1.0
+
+stt:
+  enabled: true                              # Enable speech-to-text (Apple SpeechTranscriber)
+  locale: "en-US"                            # BCP47 locale for transcription
+  censor: false                              # Enable etiquette replacements
+
+watcher:
+  enabled: true                              # Watch Claude Code activity
+  debounceInterval: 5.0                      # Seconds to batch events before summarizing
+  socketPath: null                         # Unix socket path (null = /tmp/kessel-cli-<uid>.sock)
+  sessionPath: null                        # Session JSONL path (null = auto-detect)
