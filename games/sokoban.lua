@@ -6,12 +6,12 @@
 --   kessel --play games/sokoban.lua
 --
 -- Arrows move / push. Boxes turn green when parked on a goal; clear them all to
--- win. (A/Z restarts once you've won or wedged yourself.)
+-- advance through four stages. A/Z restarts a stage, or advances after a clear.
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {
   dpad = true       -- arrows move / push a box
-  a = "restart"
+  a = "restart / next"
   pause = START
 }
 
@@ -85,11 +85,13 @@ local px = 3          -- player tile position
 local py = 4
 local moves = 0
 local won = 0
+local stage = 1
+local STAGES = 4
 
 local OX = 32         -- screen offset that centres the 8x8 board (128 = 16 tiles)
 local OY = 32
 
-function init()
+function load_stage(n)
   -- Frame the arena in walls, floor inside.
   for y = 0, 7 do
     for x = 0, 7 do
@@ -100,12 +102,36 @@ function init()
       end
     end
   end
-  -- Two goals with a box just below each; the player nudges them up.
-  mset(2, 2, target)  mset(5, 2, target)
-  mset(2, 3, box)     mset(5, 3, box)
-  px = 3  py = 4
+
+  if n == 1 then
+    -- Push both boxes upward onto their goals.
+    mset(2, 2, target)  mset(5, 2, target)
+    mset(2, 3, box)     mset(5, 3, box)
+    px = 3  py = 4
+  elseif n == 2 then
+    -- The first layout reversed: get above each box and push downward.
+    mset(2, 5, target)  mset(5, 5, target)
+    mset(2, 4, box)     mset(5, 4, box)
+    px = 3  py = 2
+  elseif n == 3 then
+    -- Each box must travel three cells; route back around the first row.
+    mset(5, 2, target)  mset(5, 5, target)
+    mset(2, 2, box)     mset(2, 5, box)
+    px = 1  py = 3
+  else
+    -- Alternate push directions and route around already parked boxes.
+    mset(5, 2, target)  mset(2, 5, target)  mset(5, 4, target)
+    mset(2, 2, box)     mset(5, 5, box)     mset(2, 4, box)
+    px = 1  py = 3
+  end
+
+  stage = n
   moves = 0
   won = 0
+end
+
+function init()
+  load_stage(1)
 end
 
 -- Resolve a step by (dx,dy): walk into floor/target, push a single box if the
@@ -150,9 +176,13 @@ end
 
 function update()
   if won == 1 then
-    if btnp(A) then init() end       -- play again
+    if btnp(A) then
+      if stage < STAGES then load_stage(stage + 1) else load_stage(1) end
+    end
     return
   end
+
+  if btnp(A) then load_stage(stage)  return end
 
   local dx: int = 0
   local dy: int = 0
@@ -169,10 +199,19 @@ function draw()
   map(0, 0, OX, OY, 8, 8)
   spr(player, OX + px * 8, OY + py * 8, 0)
 
-  text("SOKOBAN", 34, 10, 7)
+  text("SOKOBAN", 34, 8, 7)
+  text("STAGE", 34, 17, 6)
+  number(stage, 78, 17, 10)
   text("MOVES", 34, 110, 6)
   number(moves, 78, 110, 6)
-  if won == 1 then text("YOU WIN", 44, 60, 11) end
+  if won == 1 then
+    if stage < STAGES then
+      text("STAGE CLEAR", 42, 57, 11)
+    else
+      text("ALL CLEAR", 46, 57, 11)
+    end
+    text("PRESS A", 50, 65, 7)
+  end
 
-  entity(px, py, 1)      -- report the player for observation
+  entity(px, py, stage)      -- report player position and active stage
 end
