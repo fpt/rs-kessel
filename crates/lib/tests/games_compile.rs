@@ -62,11 +62,10 @@ fn assert_game_ok(name: &str, src: &str) {
     }
 }
 
-/// Drive `sokoban.lua` through a known solution and confirm the push mechanics
-/// work end-to-end: the player only reaches the far box's square if both boxes
-/// were legally pushed onto their goals along the way.
+/// Drive `sokoban.lua` through known solutions for all four stages, confirming
+/// push mechanics, stage advancement, and the final wrap back to stage one.
 #[test]
-fn sokoban_push_solves_the_level() {
+fn sokoban_solves_all_stages() {
     const LEFT: u8 = 0x01;
     const RIGHT: u8 = 0x02;
     const UP: u8 = 0x04;
@@ -78,16 +77,42 @@ fn sokoban_push_solves_the_level() {
     c.load_rom("s.lua").unwrap();
 
     // Press then release each step so btnp (edge input) fires exactly once.
-    let solution = [LEFT, UP, DOWN, RIGHT, RIGHT, RIGHT, UP];
-    let mut last = None;
-    for step in solution {
-        c.run_frame(step);
-        last = Some(c.run_frame(0));
+    fn play(c: &mut VmConsole, steps: &[u8]) {
+        for &step in steps {
+            c.run_frame(step);
+            c.run_frame(0);
+        }
     }
-    let player = last.unwrap().entities[0];
-    // Reaching (5,3) means the second box was pushed up onto its goal (and the
-    // first earlier) — a blocked push would have stranded the player short.
-    assert_eq!((player.x, player.y), (5, 3), "sokoban solution did not resolve");
+
+    let solutions: [&[u8]; 4] = [
+        &[LEFT, UP, DOWN, RIGHT, RIGHT, RIGHT, UP],
+        &[LEFT, DOWN, DOWN, UP, RIGHT, RIGHT, RIGHT, DOWN],
+        &[
+            UP, RIGHT, RIGHT, RIGHT, LEFT, LEFT, LEFT, DOWN, DOWN, DOWN, RIGHT, RIGHT, RIGHT,
+        ],
+        &[
+            UP, RIGHT, RIGHT, RIGHT, DOWN, RIGHT, RIGHT, DOWN, DOWN, LEFT, LEFT, LEFT, DOWN, LEFT,
+            LEFT, UP, UP, RIGHT, RIGHT, RIGHT,
+        ],
+    ];
+    let solved_positions = [(5, 3), (5, 4), (4, 5), (4, 4)];
+
+    for (index, solution) in solutions.iter().enumerate() {
+        play(&mut c, solution);
+        let player = c.run_frame(0).entities[0];
+        assert_eq!(player.tag, (index + 1) as u16, "unexpected active stage");
+        assert_eq!(
+            (player.x, player.y),
+            solved_positions[index],
+            "stage {} solution did not resolve",
+            index + 1
+        );
+
+        play(&mut c, &[0x10]); // A advances after a clear (stage four wraps).
+        let next = c.run_frame(0).entities[0];
+        let expected_stage = if index == 3 { 1 } else { index + 2 };
+        assert_eq!(next.tag, expected_stage as u16, "stage did not advance");
+    }
 }
 
 macro_rules! games_ok {
