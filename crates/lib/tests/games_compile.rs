@@ -392,6 +392,90 @@ fn rogue_chests_and_stairs_advance_stages() {
     }
 }
 
+#[test]
+fn game_2048_merges_wins_loses_and_restarts() {
+    const LEFT: u8 = 0x01;
+    const A: u8 = 0x10;
+    const GAME: &str = include_str!("../../../games/2048.lua");
+    const INITIAL_SPAWNS: &str = "  spawn_tile()\n  spawn_tile()";
+
+    let merge_board = GAME.replace(
+        INITIAL_SPAWNS,
+        "  cells[0] = 2  cells[1] = 2  cells[2] = 2  cells[3] = 2",
+    );
+    let mut c = VmConsole::new();
+    c.write_source("2048.lua", &merge_board);
+    c.assemble("2048.lua").unwrap();
+    c.load_rom("2048.lua").unwrap();
+
+    c.run_frame(0);
+    let first = c.run_frame(LEFT);
+    let state = first.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!((state.x, state.y), (8, 0), "first swipe scored incorrectly");
+    let animation = first.entities.iter().find(|e| e.tag == 31).unwrap();
+    assert_eq!((animation.x, animation.y), (1, 4), "left nudge did not start");
+    assert!(first.entities.iter().any(|e| e.tag == 4 && (e.x, e.y) == (32, 29)));
+    assert!(first.entities.iter().any(|e| e.tag == 4 && (e.x, e.y) == (48, 29)));
+    let rgba = c.framebuffer_rgba();
+    let nudged_edge = (29 * 128 + 30) * 4;
+    assert_eq!(
+        &rgba[nudged_edge..nudged_edge + 4],
+        &[0xc2, 0xc3, 0xc7, 0xff],
+        "matrix did not move toward the swipe"
+    );
+
+    let held = c.run_frame(LEFT);
+    let state = held.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!(state.x, 8, "held direction repeated a move");
+    let animation = held.entities.iter().find(|e| e.tag == 31).unwrap();
+    assert_eq!(animation.y, 3, "nudge animation did not advance");
+    let rgba = c.framebuffer_rgba();
+    assert_eq!(
+        &rgba[nudged_edge..nudged_edge + 4],
+        &[0x1d, 0x2b, 0x53, 0xff],
+        "matrix did not ease back after the initial nudge"
+    );
+    c.run_frame(0);
+    let second = c.run_frame(LEFT);
+    let state = second.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!(state.x, 16, "second swipe did not merge the two fours");
+    assert!(second.entities.iter().any(|e| e.tag == 8 && (e.x, e.y) == (32, 29)));
+
+    c.run_frame(0);
+    let restarted = c.run_frame(A);
+    let state = restarted.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!((state.x, state.y), (0, 0), "restart did not reset score and state");
+    assert_eq!(
+        restarted.entities.iter().filter(|e| e.tag == 2 || e.tag == 4).count(),
+        4,
+        "restart did not restore the deterministic initial board"
+    );
+
+    let win_board = GAME.replace(
+        INITIAL_SPAWNS,
+        "  cells[0] = 1024  cells[1] = 1024",
+    );
+    let mut c = VmConsole::new();
+    c.write_source("2048.lua", &win_board);
+    c.assemble("2048.lua").unwrap();
+    c.load_rom("2048.lua").unwrap();
+    let won = c.run_frame(LEFT);
+    let state = won.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!((state.x, state.y), (2048, 1), "2048 merge did not win");
+
+    let stuck_board = GAME.replace(
+        INITIAL_SPAWNS,
+        "  cells[0] = 2  cells[1] = 4  cells[2] = 2  cells[3] = 4\n  cells[4] = 4  cells[5] = 2  cells[6] = 4  cells[7] = 2\n  cells[8] = 2  cells[9] = 4  cells[10] = 2  cells[11] = 4\n  cells[12] = 4  cells[13] = 2  cells[14] = 4  cells[15] = 2",
+    );
+    let mut c = VmConsole::new();
+    c.write_source("2048.lua", &stuck_board);
+    c.assemble("2048.lua").unwrap();
+    c.load_rom("2048.lua").unwrap();
+    let lost = c.run_frame(LEFT);
+    let state = lost.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!((state.x, state.y), (0, 2), "stuck board did not game over");
+}
+
 macro_rules! games_ok {
     ($($test:ident => $file:literal),+ $(,)?) => {
         $(
@@ -404,6 +488,7 @@ macro_rules! games_ok {
 }
 
 games_ok! {
+    game_2048_ok => "2048",
     bounce_ok => "bounce",
     mover_ok => "mover",
     sprite_ok => "sprite",

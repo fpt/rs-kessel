@@ -258,6 +258,7 @@ mod tests {
     fn shipped_sample_games_load() {
         // The games/ assets shipped for `kessel --play` must stay valid.
         for (src, name) in [
+            (include_str!("../../../../games/2048.lua"), "2048.lua"),
             (include_str!("../../../../games/bounce.lua"), "bounce.lua"),
             (include_str!("../../../../games/mover.lua"), "mover.lua"),
             (include_str!("../../../../games/sprite.lua"), "sprite.lua"),
