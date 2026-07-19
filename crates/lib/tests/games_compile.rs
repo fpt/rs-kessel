@@ -244,6 +244,154 @@ fn shooter_centres_bullets_and_player_can_die() {
     assert_eq!(player.x, 60, "restart did not reset the ship position");
 }
 
+#[test]
+fn rogue_sword_hearts_and_invulnerability_work() {
+    const A: u8 = 0x10;
+    const ROGUE: &str = include_str!("../../../games/rogue.lua");
+
+    // Put the first orc directly to the hero's right, which is the initial facing.
+    let adjacent = ROGUE.replace(
+        "enemies[0].x = 12  enemies[0].y = 3",
+        "enemies[0].x = 3   enemies[0].y = 2",
+    );
+    let mut c = VmConsole::new();
+    c.write_source("r.lua", &adjacent);
+    c.assemble("r.lua").unwrap();
+    c.load_rom("r.lua").unwrap();
+
+    let before = c.run_frame(0);
+    assert!(
+        before.entities.iter().any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
+        "adjacent test orc was not present"
+    );
+    let after = c.run_frame(A);
+    assert!(
+        !after.entities.iter().any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
+        "sword did not defeat the adjacent orc"
+    );
+    let rgba = c.framebuffer_rgba();
+    let sword_tip = (19 * 128 + 31) * 4;
+    assert_eq!(
+        &rgba[sword_tip..sword_tip + 4],
+        &[0xff, 0xec, 0x27, 0xff],
+        "sword attack was not rendered"
+    );
+
+    // Keep one adjacent orc alive to exercise repeated contact attempts.
+    let contact = adjacent
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0");
+    let mut c = VmConsole::new();
+    c.write_source("r.lua", &contact);
+    c.assemble("r.lua").unwrap();
+    c.load_rom("r.lua").unwrap();
+
+    c.run_frame(0);
+    let rgba = c.framebuffer_rgba();
+    let fifth_heart = (3 * 128 + 38) * 4;
+    assert_eq!(&rgba[fifth_heart..fifth_heart + 4], &[0xff, 0x00, 0x4d, 0xff]);
+
+    let mut obs = c.run_frame(0);
+    let mut player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
+    for _ in 0..18 {
+        obs = c.run_frame(0);
+        player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
+    }
+    assert_eq!(player.tag, 4, "contact did not remove exactly one heart");
+    let rgba = c.framebuffer_rgba();
+    assert_eq!(&rgba[fifth_heart..fifth_heart + 4], &[0xc2, 0xc3, 0xc7, 0xff]);
+
+    let hero_pixel = (16 * 128 + 18) * 4;
+    assert_eq!(
+        &rgba[hero_pixel..hero_pixel + 4],
+        &[0x5f, 0x57, 0x4f, 0xff],
+        "hero should begin the blink hidden"
+    );
+    obs = c.run_frame(0);
+    player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
+    let rgba = c.framebuffer_rgba();
+    assert_eq!(
+        &rgba[hero_pixel..hero_pixel + 4],
+        &[0xff, 0xf1, 0xe8, 0xff],
+        "hero should alternate visible during invulnerability"
+    );
+
+    for _ in 0..39 {
+        obs = c.run_frame(0);
+        player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
+    }
+    assert_eq!(player.tag, 4, "invulnerability allowed damage too soon");
+    for _ in 0..20 {
+        obs = c.run_frame(0);
+        player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
+    }
+    assert_eq!(player.tag, 3, "damage did not resume after invulnerability");
+}
+
+#[test]
+fn rogue_chests_and_stairs_advance_stages() {
+    const LEFT: u8 = 0x01;
+    const RIGHT: u8 = 0x02;
+    const UP: u8 = 0x04;
+    const DOWN: u8 = 0x08;
+
+    fn walk(c: &mut VmConsole, route: &[(u8, usize)]) {
+        for &(direction, count) in route {
+            for _ in 0..count {
+                c.run_frame(direction);
+                for _ in 0..8 {
+                    c.run_frame(0);
+                }
+            }
+        }
+    }
+
+    let peaceful = include_str!("../../../games/rogue.lua")
+        .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0");
+    let mut c = VmConsole::new();
+    c.write_source("r.lua", &peaceful);
+    c.assemble("r.lua").unwrap();
+    c.load_rom("r.lua").unwrap();
+
+    let chest_routes: [&[(u8, usize)]; 4] = [
+        &[(RIGHT, 5)],
+        &[(LEFT, 5), (DOWN, 4)],
+        &[(UP, 5), (RIGHT, 5)],
+        &[(UP, 7), (LEFT, 8)],
+    ];
+    let stair_routes: [&[(u8, usize)]; 4] = [
+        &[(RIGHT, 6), (DOWN, 11)],
+        &[(LEFT, 6), (DOWN, 7)],
+        &[(UP, 6), (RIGHT, 6)],
+        &[(LEFT, 3), (UP, 4)],
+    ];
+
+    for index in 0..4 {
+        walk(&mut c, chest_routes[index]);
+        let obs = c.run_frame(0);
+        let state = obs.entities.iter().find(|e| e.tag == 30).unwrap();
+        assert_eq!((state.x, state.y), ((index + 1) as u16, (index + 1) as u16));
+        assert!(
+            obs.entities.iter().any(|e| e.tag == 22),
+            "stage {} chest did not open",
+            index + 1
+        );
+
+        walk(&mut c, stair_routes[index]);
+        let obs = c.run_frame(0);
+        let state = obs.entities.iter().find(|e| e.tag == 30).unwrap();
+        assert_eq!(
+            (state.x, state.y),
+            ((index + 2) as u16, (index + 1) as u16),
+            "stage {} staircase did not advance",
+            index + 1
+        );
+        assert!(obs.entities.iter().any(|e| e.tag == 20), "next chest was not present");
+    }
+}
+
 macro_rules! games_ok {
     ($($test:ident => $file:literal),+ $(,)?) => {
         $(
