@@ -1374,24 +1374,30 @@ impl Compiler {
                 };
                 // The counter is scoped to the loop: snapshot the binding map so
                 // it (and anything the body declares) falls out of scope after the
-                // loop, and give it its own storage slot via `alloc_slot`.
+                // loop. Give the counter and the (once-evaluated) limit their own
+                // storage via `alloc_slot`.
                 let saved = self.locals.clone();
                 let label = self.alloc_slot(var, Ty::Word.size());
+                let limit = self.alloc_slot(&format!("{var}_limit"), Ty::Word.size());
+                // Lua evaluates the numeric-for expressions ONCE, in the enclosing
+                // scope, BEFORE the counter exists — so `from`/`to` are generated
+                // here, while `var` still resolves to any outer binding (e.g.
+                // `for i = i, 3` reads the outer `i`), and the limit is fixed for
+                // the whole loop rather than re-evaluated each iteration.
+                self.gen_expr(from, out, d);
+                out.push(format!("{label} STORE16")); // i = from
+                self.gen_expr(to, out, d);
+                out.push(format!("{limit} STORE16")); // limit = to (once)
+                // Now bring the counter into scope for the body and increment.
                 self.locals.insert(
                     var.clone(),
                     VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
                 );
-                // i = from
-                self.gen_expr(from, out, d);
-                out.push(format!("{label} STORE16"));
                 let top = self.new_label();
                 let end = self.new_label();
                 out.push(format!("@{top}"));
-                // while i <= to  ->  !(i > to)
-                out.push(format!("{label} LOAD16"));
-                self.gen_expr(to, out, d);
-                out.push("GT #00 EQ".to_string());
-                out.push(format!("{end} JZ"));
+                // while i <= limit  ->  !(i > limit)
+                out.push(format!("{label} LOAD16 {limit} LOAD16 GT #00 EQ {end} JZ"));
                 self.loop_ends.push(end.clone());
                 self.gen_block(body, out, d);
                 self.loop_ends.pop();
@@ -2475,6 +2481,48 @@ mod tests {
         let o = c.run_frame(0);
         assert_eq!(o.entities[0].x, 5); // outer restored after the inner block
         assert_eq!(o.entities[1].x, 9); // inner saw the shadowing value
+    }
+
+    #[test]
+    fn for_control_expr_reads_outer_binding() {
+        // Reviewer's case (PR #36): `for i = i, N` — the `from` expression must
+        // read the OUTER `i`, evaluated before the counter is in scope, not the
+        // freshly allocated (0) counter slot.
+        let src = r#"
+            local out: word
+            function run()
+              local i = 2
+              local sum = 0
+              for i = i, 4 do sum = sum + 1 end   -- from = outer 2 -> i in 2,3,4 -> 3 iters
+              out = sum
+            end
+            function init() out = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 3); // not 5 (would-be from 0)
+    }
+
+    #[test]
+    fn for_limit_evaluated_once() {
+        // The numeric-for limit is fixed before the loop, not re-read each pass:
+        // clobbering `n` inside the body must not shorten the loop.
+        let src = r#"
+            local out: word
+            function run()
+              local n = 3
+              local cnt = 0
+              for i = 0, n do
+                cnt = cnt + 1
+                n = 0            -- if the limit were re-evaluated, we'd stop early
+              end
+              out = cnt
+            end
+            function init() out = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 4); // i in 0,1,2,3 regardless of n
     }
 
     #[test]
