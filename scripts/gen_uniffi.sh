@@ -3,26 +3,30 @@ set -e
 
 # Generate UniFFI bindings for Swift
 
+# Resolve the repo root from this script's own location so the paths below hold
+# no matter what directory the script is invoked from.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 echo "🦀 Building Rust library..."
-cd crates
+cd "$ROOT/crates"
 cargo build --release
 
 echo "🔧 Generating UniFFI Swift bindings..."
 cd lib
 
 LIBRARY_PATH="../target/release/libkessel_core.dylib"
-OUT_DIR="../../vendor/uniffi-swift"
+OUT_DIR="$ROOT/vendor/uniffi-swift"
 
-mkdir -p $OUT_DIR
+mkdir -p "$OUT_DIR"
 
 # Generate Swift sources
-cargo run --bin uniffi-bindgen-swift -- --swift-sources $LIBRARY_PATH $OUT_DIR
+cargo run --bin uniffi-bindgen-swift -- --swift-sources "$LIBRARY_PATH" "$OUT_DIR"
 
 # Generate headers
-cargo run --bin uniffi-bindgen-swift -- --headers $LIBRARY_PATH $OUT_DIR
+cargo run --bin uniffi-bindgen-swift -- --headers "$LIBRARY_PATH" "$OUT_DIR"
 
 # Generate modulemap
-cargo run --bin uniffi-bindgen-swift -- --modulemap $LIBRARY_PATH $OUT_DIR
+cargo run --bin uniffi-bindgen-swift -- --modulemap "$LIBRARY_PATH" "$OUT_DIR"
 
 echo "✅ UniFFI bindings generated!"
 
@@ -32,7 +36,7 @@ echo "✅ UniFFI bindings generated!"
 # Doing the copies here (rather than as a manual "next step") keeps a clean clone
 # buildable and stops the committed bindings from silently going stale after a
 # .udl change — which is exactly what broke the McpServerConfig.url field.
-cd ..
+cd "$ROOT"
 echo "📋 Copying generated bindings into the tracked Swift tree..."
 cp vendor/uniffi-swift/kessel_core.swift   swift/Sources/AgentBridge/kessel_core.swift
 cp vendor/uniffi-swift/kessel_coreFFI.h    swift/Sources/AgentBridgeFFI/kessel_coreFFI.h
