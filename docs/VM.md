@@ -181,9 +181,16 @@ function draw()
 end
 ```
 
-- **Types:** `word` (default) / `byte` / `bool`; `record Name { field[: type], … }`;
-  fixed arrays `array(N, T)` where `T` is a scalar **or a record**
-  (`local es: array(16, Enemy)`), indexed `a[i]` / `a[i].field`.
+- **Types:** `word` (default, unsigned) / `byte` / `int` (16-bit signed) / `bool`;
+  `record Name { field[: type], … }`; fixed arrays `array(N, T)` where `T` is a
+  scalar **or a record** (`local es: array(16, Enemy)`), indexed `a[i]` /
+  `a[i].field`.
+- **Signed vs unsigned:** `word` comparisons are unsigned (fine for pixel coords /
+  addresses); declare a value `int` when you need signed comparisons — e.g. a
+  velocity `local vy: int` so `if vy < 0 then …` works. `int` arithmetic is
+  identical to `word` (two's-complement wrapping); only `< <= > >=` differ.
+  Comparing two operands is signed iff either is `int` (a unary `-x` counts as
+  `int`).
 - **Declarations:** `record`; top-level `local name[: T] [= const]` (a global);
   `function name(a[: T], …) … end`. Records pass by address (functions mutate
   them); scalars pass by value.
