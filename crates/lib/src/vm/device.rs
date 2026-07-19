@@ -100,6 +100,15 @@ pub struct Devices {
     sprite_flags: u8,
     // base address of the sprite sheet (32-byte 4bpp tiles) for blit-by-id
     tileset_base: u16,
+    // tilemap device (page 0x7): base/width of the tile-id grid + pending region
+    map_base: u16,
+    map_width: u16,
+    map_tx: u16,
+    map_ty: u16,
+    map_sx: u16,
+    map_sy: u16,
+    map_tw: u16,
+    map_th: u16,
 }
 
 impl Default for Devices {
@@ -133,6 +142,14 @@ impl Devices {
             cam_y: 0,
             sprite_flags: 0,
             tileset_base: 0,
+            map_base: 0,
+            map_width: 0,
+            map_tx: 0,
+            map_ty: 0,
+            map_sx: 0,
+            map_sy: 0,
+            map_tw: 0,
+            map_th: 0,
         }
     }
 
@@ -220,8 +237,47 @@ impl Devices {
                     self.console.push(val as u8);
                 }
             }
+            // Tilemap device: set base/width/region, then draw a tw×th block of
+            // tiles from the map (ids in memory) via the sprite sheet.
+            0x7 => match reg {
+                0x0 => self.map_base = val,
+                0x1 => self.map_width = val,
+                0x2 => self.map_tx = val,
+                0x3 => self.map_ty = val,
+                0x4 => self.map_sx = val,
+                0x5 => self.map_sy = val,
+                0x6 => self.map_tw = val,
+                0x7 => self.map_th = val,
+                0x8 => self.draw_map(mem),
+                _ => {}
+            },
             _ => {}
         }
+    }
+
+    /// Draw the pending map region: for each cell, read the tile id from
+    /// `mem[map_base + (map_ty+row)*map_width + (map_tx+col)]` and blit that
+    /// sheet tile at screen `(map_sx+col*8, map_sy+row*8)`. The camera applies
+    /// (via `put_pixel`); sprite flip is forced off for map tiles.
+    fn draw_map(&mut self, mem: &[u8]) {
+        let saved_flags = self.sprite_flags;
+        self.sprite_flags = 0;
+        for row in 0..self.map_th {
+            for col in 0..self.map_tw {
+                let mx = self.map_tx.wrapping_add(col);
+                let my = self.map_ty.wrapping_add(row);
+                let cell = self
+                    .map_base
+                    .wrapping_add(my.wrapping_mul(self.map_width))
+                    .wrapping_add(mx) as usize;
+                let id = mem.get(cell).copied().unwrap_or(0) as u16;
+                let addr = self.tileset_base.wrapping_add(id.wrapping_mul(32));
+                self.sx = self.map_sx.wrapping_add(col.wrapping_mul(8));
+                self.sy = self.map_sy.wrapping_add(row.wrapping_mul(8));
+                self.blit_sprite(addr, mem);
+            }
+        }
+        self.sprite_flags = saved_flags;
     }
 
     /// Clear the per-frame reported state (entities + console output).
@@ -380,6 +436,33 @@ mod tests {
         d.write(0x12, 4, &mem); // y = 4
         d.write(0x1a, 1, &mem); // blit id 1
         assert_eq!(d.framebuffer[4 * SCREEN_DIM + 3], 5);
+    }
+
+    #[test]
+    fn draw_map_blits_cells() {
+        let mut d = Devices::new();
+        let mut mem = vec![0u8; 256];
+        // Sheet at 100: tile 1's top-left pixel is colour 5 (tile 0 stays blank).
+        let sheet = 100usize;
+        mem[sheet + 32] = 0x50;
+        d.write(0x1b, sheet as u16, &mem); // tileset base
+        // 2x2 map at 0, width 2: cells [0,1 / 1,0].
+        mem[0] = 0;
+        mem[1] = 1;
+        mem[2] = 1;
+        mem[3] = 0;
+        d.write(0x70, 0, &mem); // map base
+        d.write(0x71, 2, &mem); // map width
+        d.write(0x72, 0, &mem); // tx
+        d.write(0x73, 0, &mem); // ty
+        d.write(0x74, 0, &mem); // sx
+        d.write(0x75, 0, &mem); // sy
+        d.write(0x76, 2, &mem); // tw
+        d.write(0x77, 2, &mem); // th
+        d.write(0x78, 0, &mem); // draw
+        assert_eq!(d.framebuffer[8], 5); // cell (1,0) = tile 1 -> screen (8,0)
+        assert_eq!(d.framebuffer[8 * SCREEN_DIM], 5); // cell (0,1) -> screen (0,8)
+        assert_eq!(d.framebuffer[0], 0); // cell (0,0) = tile 0 (blank)
     }
 
     #[test]

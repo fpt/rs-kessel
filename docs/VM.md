@@ -214,11 +214,17 @@ end
   `return`, calls.
 - **Operators (Lua):** `+ - * / %`, `& | ~ << >>` (binary `~` is xor), `== ~= < <=
   > >=`, `and or not`, unary `-` `~` (bitwise not). Assignment is a statement.
+- **Tilemap:** one `tilemap NAME(w, h)` declaration reserves a `w×h` grid of tile
+  ids. `mget(tx,ty)` / `mset(tx,ty,id)` read/write cells; `map(tx,ty,sx,sy,tw,th)`
+  draws a `tw×th` block of the grid (tiles from the sprite sheet) to screen
+  `(sx,sy)`. Per-tile flag bits: `fset(tile,flag,v)` / `fget(tile,flag)→0/1`;
+  `solid(px,py)→0/1` is `fget(mget(px/8,py/8), SOLID)` — the platformer collision
+  primitive. Flag constants: `SOLID` (0), `FLAG1..FLAG3`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
   `id`; flags bit0/1 = flip x/y), `sspr(addr,x,y,flags)` (blit a raw 32-byte tile
   at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
-  `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
+  `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
 - Comments: `--` line, `--[[ … ]]` block.
 
@@ -247,7 +253,24 @@ local state = 0            -- 0 title, 1 play
 function update()
   if state == 0 and btn(START) then state = 1 end
 end
+
+-- tilemap + collision: draw a level and stop the player at solid tiles
+tilemap level(16, 16)
+function init()
+  fset(1, SOLID, 1)                 -- tile id 1 is solid
+  for x = 0, 15 do mset(x, 14, 1) end  -- a floor row
+end
+function draw() map(0, 0, 0, 0, 16, 16) end
+function update()
+  local vy: int = p.vy + 1          -- gravity
+  if vy > 0 and solid(p.x + 4, p.y + 8) then vy = 0 end
+  p.vy = vy
+end
 ```
+
+**Full worked example:** `games/platform.lua` is a ~70-line tile platformer —
+sprites, a `tilemap` level, gravity, `solid()` collision, and a jump — the kind
+of complete example to adapt.
 
 ## Playing a game (`kessel --play`)
 
