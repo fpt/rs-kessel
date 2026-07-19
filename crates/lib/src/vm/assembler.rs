@@ -158,6 +158,73 @@ pub fn assemble(src: &str) -> Assembled {
                     }
                     _ => diagnostics.push(err(line, ".res needs a length".into())),
                 },
+                // `.sprite NAME <rows...> .end` — define NAME at the current
+                // address and emit a 32-byte 4bpp 8x8 tile. Each row is a
+                // whitespace-free run of up to 8 chars: `.` = transparent (0),
+                // else a palette nibble `0-9a-f` (hi nibble = left pixel).
+                "sprite" => {
+                    let name = match tokens.get(i) {
+                        Some((n, _)) if is_ident(n) => {
+                            let n = n.clone();
+                            i += 1;
+                            n
+                        }
+                        _ => {
+                            diagnostics.push(err(line, ".sprite needs a name".into()));
+                            continue;
+                        }
+                    };
+                    let mut rows: Vec<(String, usize)> = Vec::new();
+                    let mut closed = false;
+                    while i < tokens.len() {
+                        if tokens[i].0 == ".end" {
+                            i += 1;
+                            closed = true;
+                            break;
+                        }
+                        rows.push(tokens[i].clone());
+                        i += 1;
+                    }
+                    if !closed {
+                        diagnostics.push(err(line, ".sprite is missing its '.end'".into()));
+                    }
+                    if rows.len() > 8 {
+                        diagnostics.push(err(rows[8].1, ".sprite has more than 8 rows".into()));
+                    }
+                    let mut bytes = vec![0u8; 32];
+                    for (r, (row, rl)) in rows.iter().take(8).enumerate() {
+                        let chars: Vec<char> = row.chars().collect();
+                        if chars.len() > 8 {
+                            diagnostics.push(err(*rl, ".sprite row is longer than 8 pixels".into()));
+                        }
+                        for (c, ch) in chars.iter().take(8).enumerate() {
+                            let nib = match ch {
+                                '.' => 0u8,
+                                _ => match ch.to_digit(16) {
+                                    Some(v) => v as u8,
+                                    None => {
+                                        diagnostics.push(err(
+                                            *rl,
+                                            format!(".sprite: bad pixel char '{ch}' (use . or 0-9a-f)"),
+                                        ));
+                                        0
+                                    }
+                                },
+                            };
+                            let bi = r * 4 + c / 2;
+                            if c % 2 == 0 {
+                                bytes[bi] |= nib << 4;
+                            } else {
+                                bytes[bi] |= nib;
+                            }
+                        }
+                    }
+                    if labels.insert(name.clone(), addr as u16).is_some() {
+                        diagnostics.push(err(line, format!("duplicate label '{name}'")));
+                    }
+                    addr += 32;
+                    items.push(Item::Bytes(bytes));
+                }
                 other => diagnostics.push(err(line, format!("unknown directive '.{other}'"))),
             }
             continue;
@@ -447,6 +514,25 @@ mod tests {
         let a = assemble(".res 70000");
         assert!(!a.ok());
         assert!(a.diagnostics[0].message.contains("out of range"), "{:?}", a.diagnostics);
+    }
+
+    #[test]
+    fn sprite_directive_packs_a_tile() {
+        // Row 0 pixels [1,2,3,4,0,0,0,0]; other rows blank -> 32 bytes.
+        let a = assemble(".sprite hero\n1234....\n........\n........\n........\n........\n........\n........\n........\n.end");
+        assert!(a.ok(), "{:?}", a.diagnostics);
+        assert_eq!(a.rom.len(), 32);
+        assert_eq!(*a.labels.get("hero").unwrap(), 0x0100);
+        assert_eq!(a.rom[0], 0x12);
+        assert_eq!(a.rom[1], 0x34);
+        assert_eq!(a.rom[2], 0x00);
+        assert!(a.rom[4..].iter().all(|&b| b == 0)); // rows 1..8 blank
+    }
+
+    #[test]
+    fn sprite_directive_bad_char_and_missing_end() {
+        assert!(!assemble(".sprite t\nxy......\n.end").ok()); // bad pixel char
+        assert!(!assemble(".sprite t\n11111111").ok()); // missing .end
     }
 
     #[test]

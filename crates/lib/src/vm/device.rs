@@ -98,6 +98,8 @@ pub struct Devices {
     cam_y: i16,
     // flip flags for the next sprite blit: bit0 = flip-x, bit1 = flip-y
     sprite_flags: u8,
+    // base address of the sprite sheet (32-byte 4bpp tiles) for blit-by-id
+    tileset_base: u16,
 }
 
 impl Default for Devices {
@@ -130,6 +132,7 @@ impl Devices {
             cam_x: 0,
             cam_y: 0,
             sprite_flags: 0,
+            tileset_base: 0,
         }
     }
 
@@ -182,6 +185,14 @@ impl Devices {
                 0x7 => self.cam_x = val as i16,
                 0x8 => self.cam_y = val as i16,
                 0x9 => self.sprite_flags = val as u8,
+                // Blit sprite by id from the tileset (base + id*32).
+                0xa => {
+                    let addr = self
+                        .tileset_base
+                        .wrapping_add((val & 0xff).wrapping_mul(32));
+                    self.blit_sprite(addr, mem);
+                }
+                0xb => self.tileset_base = val,
                 _ => {}
             },
             0x3 => {
@@ -356,6 +367,19 @@ mod tests {
         assert_eq!(d.framebuffer[5], 3);
         assert_eq!(d.framebuffer[4], 4);
         assert_eq!(d.framebuffer[0], 0); // src 7 was transparent
+    }
+
+    #[test]
+    fn blit_sprite_by_id() {
+        let mut d = Devices::new();
+        let mut mem = [0u8; 128];
+        // Tile id 1 lives at base(0) + 1*32 = 32; its top-left pixel is colour 5.
+        mem[32] = 0x50;
+        d.write(0x1b, 0, &mem); // tileset base = 0
+        d.write(0x11, 3, &mem); // x = 3
+        d.write(0x12, 4, &mem); // y = 4
+        d.write(0x1a, 1, &mem); // blit id 1
+        assert_eq!(d.framebuffer[4 * SCREEN_DIM + 3], 5);
     }
 
     #[test]
