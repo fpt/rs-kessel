@@ -79,8 +79,10 @@ Port byte = `(device << 4) | register`.
 | `0x14` | out | draw pixel at (x,y) |
 | `0x15` | out | draw 8×8 sprite from `mem[addr]` (32 bytes, 4bpp, hi-nibble = left) |
 | `0x16` | out | clear screen to colour |
-| `0x20` | in  | gamepad buttons bitfield |
+| `0x20` | in  | gamepad buttons bitfield (held) |
+| `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
+| `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
 | `0x40` `0x41` `0x42` | out/in/out | storage addr / read / write (256 bytes) |
 | `0x50` `0x51` `0x52` | out | debug entity: x, y, commit(tag) — reported in the observation |
 | `0x60` | out | console: write a byte to the text buffer |
@@ -225,6 +227,14 @@ end
   at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
+- **Input & timing:** `btn(mask)→0/1` (held), `btnp(mask)→0/1` (pressed *this*
+  frame — the rising edge), `btnr(mask)→0/1` (released this frame). Use `btnp`
+  for jumps, menu steps and fire-on-press so the model doesn't have to track the
+  previous frame's buttons by hand. `frame_count()→word` gives frames since
+  power-on (wraps at 65536) for blink/timers/periodic spawns.
+- **Arrays:** `len(arr)→word` is the array's declared length (a compile-time
+  constant) — write `for i = 0, len(bullets)-1 do` so the loop follows the array
+  size instead of a hand-written bound.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
 - Comments: `--` line, `--[[ … ]]` block.
 

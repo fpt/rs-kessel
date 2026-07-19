@@ -7,12 +7,14 @@
 //! | dev | name    | registers |
 //! |-----|---------|-----------|
 //! | 0x0 | system  | 0 halt · 1 pal-index · 2 pal-r · 3 pal-g · 4 pal-b (commit) |
-//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls |
-//! | 0x2 | gamepad | 0 buttons (read) |
+//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base |
+//! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) — all read |
 //! | 0x3 | rng     | 0 next (read) / set-seed (write) |
 //! | 0x4 | storage | 0 addr · 1 read · 2 write |
 //! | 0x5 | debug   | 0 ent-x · 1 ent-y · 2 ent-commit(tag) |
 //! | 0x6 | console | 0 write-byte |
+//! | 0x7 | tilemap | 0 base · 1 width · 2 tx · 3 ty · 4 sx · 5 sy · 6 tw · 7 th · 8 draw |
+//! | 0x8 | time    | 0 frame-count (read) |
 
 /// Screen edge length in pixels (square framebuffer).
 pub const SCREEN_DIM: usize = 128;
@@ -68,6 +70,11 @@ pub struct Devices {
     pub palette: [(u8, u8, u8); 16],
     /// Current gamepad button bitfield.
     pub gamepad: u8,
+    /// Gamepad bitfield from the *previous* frame, for edge detection
+    /// (`btnp`/`btnr`).
+    pub prev_gamepad: u8,
+    /// Frames elapsed since power-on (wraps at 65536; drives blink/timers).
+    pub frame_count: u16,
     /// The frame vector the game installed via `screen/vector`; 0 = none.
     pub frame_vector: u16,
     /// Set when the game writes a non-zero value to `system/halt`.
@@ -123,6 +130,8 @@ impl Devices {
             framebuffer: vec![0u8; SCREEN_PIXELS],
             palette: DEFAULT_PALETTE,
             gamepad: 0,
+            prev_gamepad: 0,
+            frame_count: 0,
             frame_vector: 0,
             halt_requested: false,
             entities: Vec::new(),
@@ -159,7 +168,13 @@ impl Devices {
         let reg = port & 0x0f;
         match (dev, reg) {
             (0x2, 0x0) => self.gamepad as u16,
+            // just-pressed this frame (rising edge): held now, not held before.
+            (0x2, 0x1) => (self.gamepad & !self.prev_gamepad) as u16,
+            // just-released this frame (falling edge): held before, not now.
+            (0x2, 0x2) => (!self.gamepad & self.prev_gamepad) as u16,
             (0x3, 0x0) => self.next_rand(),
+            // time device: frames since power-on.
+            (0x8, 0x0) => self.frame_count,
             (0x4, 0x1) => self.storage[self.storage_addr as usize] as u16,
             _ => 0,
         }
@@ -280,9 +295,13 @@ impl Devices {
         self.sprite_flags = saved_flags;
     }
 
-    /// Clear the per-frame reported state (entities + console output).
+    /// Clear the per-frame reported state (entities + console output) and
+    /// advance per-frame input/timing: the previous gamepad snapshot (for
+    /// `btnp`/`btnr` edge detection) and the frame counter.
     pub fn begin_frame(&mut self, buttons: u8) {
+        self.prev_gamepad = self.gamepad;
         self.gamepad = buttons;
+        self.frame_count = self.frame_count.wrapping_add(1);
         self.entities.clear();
         self.console.clear();
         self.halt_requested = false;

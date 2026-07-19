@@ -69,7 +69,7 @@ luax essentials (a '.lua' file):
 - Entry points (vector-driven, no main loop): `function init()` runs once; `function update()` then `function draw()` run each frame. Names are bare — NOT `_update`/`_draw`.
 - State: top-level `local x = 60` is a persistent global. `record Name { a, b: byte }` (fields default to `word`); `local es: array(8, Name)`.
 - Sprites are DECLARATIONS, not table literals: `sprite hero { <8 rows of 8 chars, '.'=transparent else palette nibble 0-9a-f> }`. `hero` is then a tile id; draw with `spr(hero, x, y, flags)`.
-- Builtins: `cls(c)` (colour REQUIRED), `pset(x,y,c)`, `spr(id,x,y,flags)`, `btn(LEFT|RIGHT|UP|DOWN|A|B)`, `entity(x,y,tag)` (report for observation), `rnd(n)`, `map/mget/mset/fset/solid` (tilemap).
+- Builtins: `cls(c)` (colour REQUIRED), `pset(x,y,c)`, `spr(id,x,y,flags)`, `btn(LEFT|RIGHT|UP|DOWN|A|B)` (held), `btnp`/`btnr` (pressed/released THIS frame — use for jumps/menus), `frame_count()` (frames since start), `len(arr)` (array length), `entity(x,y,tag)` (report for observation), `rnd(n)`, `map/mget/mset/fset/solid` (tilemap).
 
 Canonical example:
   sprite hero {

@@ -962,6 +962,9 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "poke" => (2, false),
         "poke16" => (2, false),
         "btn" => (1, true),
+        "btnp" => (1, true),
+        "btnr" => (1, true),
+        "frame_count" => (0, true),
         "rnd" => (1, true),
         "peek" => (1, true),
         "peek16" => (1, true),
@@ -1549,6 +1552,18 @@ impl Compiler {
     }
 
     fn gen_call(&mut self, name: &str, args: &[Expr], out: &mut Vec<String>, d: &mut Vec<Diagnostic>, line: usize) -> bool {
+        // `len(arr)` is a compile-time constant = the array's declared length.
+        if name == "len" {
+            if let [arg] = args {
+                if let Ty::Array(_, n) = self.type_of(arg) {
+                    out.push(n.to_string());
+                    return true;
+                }
+            }
+            d.push(err(line, "len() takes one array argument"));
+            out.push("0".to_string());
+            return true;
+        }
         if let Some((argc, yields)) = builtin(name) {
             // On an arity mismatch, report it and emit nothing — a partial call
             // would leave the data stack unbalanced.
@@ -1621,6 +1636,9 @@ impl Compiler {
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
             "btn" => "#20 DEI AND #00 NE",
+            "btnp" => "#21 DEI AND #00 NE", // just-pressed this frame
+            "btnr" => "#22 DEI AND #00 NE", // just-released this frame
+            "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
             "rnd" => "#30 DEI SWAP MOD", // ( n ) -> rand % n
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
@@ -1709,6 +1727,15 @@ impl Compiler {
                     ">>" => a >> b,
                     _ => return None,
                 })
+            }
+            // `len(arr)` folds to the array's declared length.
+            Expr::Call(name, args, _) if name == "len" => {
+                if let [Expr::Var(v, _)] = args.as_slice() {
+                    if let Some(Ty::Array(_, n)) = self.resolve_var(v).map(|i| i.ty) {
+                        return Some(n as i64);
+                    }
+                }
+                None
             }
             _ => None,
         }
@@ -1849,7 +1876,7 @@ fn fn_has_return(decl: &Decl) -> bool {
 mod tests {
     use super::*;
     use crate::vm::assembler::assemble;
-    use crate::vm::device::{BTN_LEFT, BTN_RIGHT};
+    use crate::vm::device::{BTN_A, BTN_LEFT, BTN_RIGHT};
     use crate::vm::VmConsole;
 
     fn compile_ok(src: &str) -> String {
@@ -2208,6 +2235,73 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 44); // 300 & 0xff
+    }
+
+    #[test]
+    fn btnp_fires_only_on_rising_edge() {
+        // A counter that increments once per fresh A press must not run away
+        // while A is held — that's the whole point of btnp vs btn.
+        let src = r#"
+            local n: word
+            function update() if btnp(A) then n = n + 1 end end
+            function draw() entity(n, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1);   // press -> +1
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1);   // still held -> no change
+        assert_eq!(c.run_frame(0).entities[0].x, 1);        // released
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 2);   // new press -> +1
+    }
+
+    #[test]
+    fn btnr_fires_on_release() {
+        let src = r#"
+            local n: word
+            function update() if btnr(A) then n = n + 1 end end
+            function draw() entity(n, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0);   // press: no release yet
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0);   // held
+        assert_eq!(c.run_frame(0).entities[0].x, 1);        // release -> +1
+        assert_eq!(c.run_frame(0).entities[0].x, 1);        // stays released
+    }
+
+    #[test]
+    fn frame_count_increments() {
+        let src = r#"
+            function draw() entity(frame_count(), 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+        assert_eq!(c.run_frame(0).entities[0].x, 2);
+        assert_eq!(c.run_frame(0).entities[0].x, 3);
+    }
+
+    #[test]
+    fn len_folds_to_array_length() {
+        // len(a) is a compile-time constant that drives the loop bound.
+        let src = r#"
+            local a: array(5, word)
+            local sum: word
+            function draw()
+              sum = 0
+              for i = 0, len(a) - 1 do a[i] = i  sum = sum + a[i] end  -- 0+1+2+3+4
+              entity(sum, 0, 1)
+              entity(len(a), 0, 2)
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 10);
+        assert_eq!(o.entities[1].x, 5);
+    }
+
+    #[test]
+    fn len_rejects_non_array() {
+        let c = compile("local x: word function draw() entity(len(x), 0, 1) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("len()")), "{:?}", c.diagnostics);
     }
 
     #[test]
