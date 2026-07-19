@@ -332,14 +332,16 @@ kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-dr
 kessel --play games/rogue.lua     # top-down roguelike — arrows move, bump orcs to fight
 kessel --play games/platform.lua  # tile platformer — arrows move, A jumps
 kessel --play games/wall.lua      # platformer — collide_x/y + touching_* + btnp double/wall-jump
+kessel --play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:
 `snake` (record arrays + grid movement), `brick` (signed `int` velocity + AABB
 brick hits), `shooter` (entity pools + `rect_overlap`), `tetris` (bitmask pieces,
 runtime rotation, a `tilemap` well + line clears), `rogue` (`tilemap` +
-`fset`/`solid` collision + simple enemy AI), and `platform` (tile collision +
-gravity + jump).
+`fset`/`solid` collision + simple enemy AI), `platform` (tile collision +
+gravity + jump), and `sokoban` (grid puzzle — `btnp` step input, a board held in
+the `tilemap` and mutated with `mset`, `text`/`number` HUD).
 
 `--play` needs no model or API key. It loads a `.lua`/`.asm` file into a standalone
 `VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,

@@ -62,6 +62,34 @@ fn assert_game_ok(name: &str, src: &str) {
     }
 }
 
+/// Drive `sokoban.lua` through a known solution and confirm the push mechanics
+/// work end-to-end: the player only reaches the far box's square if both boxes
+/// were legally pushed onto their goals along the way.
+#[test]
+fn sokoban_push_solves_the_level() {
+    const LEFT: u8 = 0x01;
+    const RIGHT: u8 = 0x02;
+    const UP: u8 = 0x04;
+    const DOWN: u8 = 0x08;
+
+    let mut c = VmConsole::new();
+    c.write_source("s.lua", include_str!("../../../games/sokoban.lua"));
+    c.assemble("s.lua").unwrap();
+    c.load_rom("s.lua").unwrap();
+
+    // Press then release each step so btnp (edge input) fires exactly once.
+    let solution = [LEFT, UP, DOWN, RIGHT, RIGHT, RIGHT, UP];
+    let mut last = None;
+    for step in solution {
+        c.run_frame(step);
+        last = Some(c.run_frame(0));
+    }
+    let player = last.unwrap().entities[0];
+    // Reaching (5,3) means the second box was pushed up onto its goal (and the
+    // first earlier) — a blocked push would have stranded the player short.
+    assert_eq!((player.x, player.y), (5, 3), "sokoban solution did not resolve");
+}
+
 macro_rules! games_ok {
     ($($test:ident => $file:literal),+ $(,)?) => {
         $(
@@ -84,4 +112,5 @@ games_ok! {
     rogue_ok => "rogue",
     tetris_ok => "tetris",
     wall_ok => "wall",
+    sokoban_ok => "sokoban",
 }

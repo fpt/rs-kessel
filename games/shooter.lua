@@ -128,6 +128,7 @@ function update()
           foes[j].alive = 0
           bullets[i].alive = 0
           score = score + 1
+          break                 -- this bullet is spent: don't let it kill more foes
         end
         j = j + 1
       end
