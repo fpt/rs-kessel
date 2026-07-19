@@ -1069,6 +1069,24 @@ impl Compiler {
         l
     }
 
+    /// Reserve a `.res` storage cell for `label`, at most once. Two same-named
+    /// locals in one function share the slot (valid Lua — e.g. `local i` reused
+    /// as a counter in disjoint branches); reserving it per-declaration emits a
+    /// duplicate `.res` label that the assembler rejects. Deduped by label (not
+    /// the full line) and grown to the largest requested size, so two locals of
+    /// the same name but different types still share one correctly-sized slot.
+    fn reserve_slot(&mut self, label: &str, size: u16) {
+        let prefix = format!("@{label} .res ");
+        if let Some(line) = self.data.iter_mut().find(|l| l.starts_with(&prefix)) {
+            let cur: u16 = line[prefix.len()..].trim().parse().unwrap_or(0);
+            if size > cur {
+                *line = format!("{prefix}{size}");
+            }
+        } else {
+            self.data.push(format!("{prefix}{size}"));
+        }
+    }
+
     fn compile(&mut self, decls: &[Decl], d: &mut Vec<Diagnostic>) -> String {
         // Pass 1: record layouts.
         for decl in decls {
@@ -1286,7 +1304,7 @@ impl Compiler {
                     None => Ty::Word,
                 };
                 let label = format!("lx_l_{}_{}", self.cur_func, name);
-                self.data.push(format!("@{label} .res {}", vty.size()));
+                self.reserve_slot(&label, vty.size());
                 self.locals.insert(
                     name.clone(),
                     VarInfo { label: label.clone(), ty: vty.clone(), by_ref: false },
@@ -1349,13 +1367,11 @@ impl Compiler {
                     },
                 };
                 let label = format!("lx_l_{}_{}", self.cur_func, var);
-                // Two `for i` loops in the same function share this storage slot
-                // (they don't run at once) — reserve it once, not once per loop,
-                // or the duplicate `.res` label breaks assembly.
-                let decl = format!("@{label} .res 2");
-                if !self.data.contains(&decl) {
-                    self.data.push(decl);
-                }
+                // The counter shares one storage slot with any other loop or
+                // `local` of the same name in this function (they don't run at
+                // once); `reserve_slot` dedups it and sizes it to the largest use,
+                // so a duplicate `.res` label can't break assembly.
+                self.reserve_slot(&label, Ty::Word.size());
                 self.locals.insert(
                     var.clone(),
                     VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
@@ -2381,6 +2397,54 @@ mod tests {
         let o = c.run_frame(0);
         assert_eq!(o.entities[0].x, 6);
         assert_eq!(o.entities[1].x, 10);
+    }
+
+    #[test]
+    fn same_named_locals_in_one_function_share_a_slot() {
+        // The `for`-counter dedup (above) also had to cover plain `local`
+        // declarations: reusing `local i` in disjoint branches of one function is
+        // valid Lua but used to emit a duplicate `.res lx_l_run_i` label the
+        // assembler rejected. Reserve one slot, sized to the largest use.
+        let src = r#"
+            local g: word
+            local out: word
+            function run()
+              if g == 0 then
+                local i = 0
+                while i < 3 do i = i + 1 end
+                out = i
+              else
+                local i = 9
+                out = i
+              end
+            end
+            function init() g = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 3); // took the g==0 branch, counted to 3
+    }
+
+    #[test]
+    fn local_and_for_same_name_share_a_slot() {
+        // The dedup must also hold ACROSS the two paths: a `local i` and a `for i`
+        // in one function share `lx_l_run_i`. Because the local here is a byte
+        // (1 B) and the for-counter a word (2 B), this also exercises grow-to-max
+        // — a naive per-path `.res` would emit two conflicting labels.
+        let src = r#"
+            local g: word
+            function run()
+              local i: byte
+              i = 1
+              g = g + i                       -- 1
+              for i = 0, 2 do g = g + i end    -- + 0+1+2 = 3  -> 4
+            end
+            function init() g = 0 end
+            function draw() run() entity(g, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 4);
     }
 
     #[test]

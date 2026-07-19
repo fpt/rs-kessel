@@ -21,7 +21,7 @@ llm:
   model: "gemma4:26b-a4b"
   harmonyTemplate: false
   temperature: 0.7
-  maxTokens: 2048
+  maxTokens: 4096
 
 agent:
   # Gemma 4 does support a system role, and its template declares tools natively
