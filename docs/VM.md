@@ -192,15 +192,31 @@ end
   Comparing two operands is signed iff either is `int` (a unary `-x` counts as
   `int`).
 - **Declarations:** `record`; top-level `local name[: T] [= const]` (a global);
-  `function name(a[: T], …) … end`. Records pass by address (functions mutate
-  them); scalars pass by value.
+  `function name(a[: T], …) … end`; `sprite NAME { <pixel rows> }` (see below).
+  Records pass by address (functions mutate them); scalars pass by value.
+- **Sprites:** a `sprite NAME { … }` declaration gives an 8×8 tile; each row is a
+  whitespace-free run of up to 8 chars — `.` = transparent, else a palette nibble
+  `0-9a-f`. Declared sprites form a **sheet** (ids 0,1,2… in order); `NAME` is a
+  constant = its id. Draw with `spr(id, x, y, flags)`.
+  ```lua
+  sprite ball {
+    ..2222..
+    .222222.
+    22222222
+    22222222
+    .222222.
+    ..2222..
+  }
+  function draw() spr(ball, x, y, 0) end   -- flags bit0=flip-x, bit1=flip-y
+  ```
 - **Statements:** `local`, assignment, `if/elseif/else … end`, `while … do … end`,
   `for i = a, b[, step] do … end` (ascending, positive literal step), `break`,
   `return`, calls.
 - **Operators (Lua):** `+ - * / %`, `& | ~ << >>` (binary `~` is xor), `== ~= < <=
   > >=`, `and or not`, unary `-` `~` (bitwise not). Assignment is a statement.
-- **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(tile,x,y,flags)` (flags bit0/1 =
-  flip x/y), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
+- **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
+  `id`; flags bit0/1 = flip x/y), `sspr(addr,x,y,flags)` (blit a raw 32-byte tile
+  at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.

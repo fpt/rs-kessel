@@ -175,6 +175,37 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
         {
             i += sym.len();
             out.push(Token { tok: Tok::Sym(sym), line });
+            // Raw-capture a `sprite NAME { <rows> }` body: pixel rows like
+            // `..2222..` aren't lexable as normal tokens, so once we see the
+            // opening `{` of a sprite block, scan whitespace-separated rows
+            // verbatim (each becomes an Ident) up to the matching `}`.
+            if *sym == "{"
+                && out.len() >= 3
+                && matches!(&out[out.len() - 3].tok, Tok::Ident(k) if k == "sprite")
+            {
+                while i < b.len() {
+                    let cc = b[i];
+                    if cc == '\n' {
+                        line += 1;
+                        i += 1;
+                    } else if cc.is_whitespace() {
+                        i += 1;
+                    } else if cc == '}' {
+                        i += 1;
+                        out.push(Token { tok: Tok::Sym("}"), line });
+                        break;
+                    } else {
+                        let start = i;
+                        while i < b.len() && !b[i].is_whitespace() && b[i] != '}' {
+                            i += 1;
+                        }
+                        out.push(Token {
+                            tok: Tok::Ident(b[start..i].iter().collect()),
+                            line,
+                        });
+                    }
+                }
+            }
             continue;
         }
         diagnostics.push(err(line, format!("unexpected character '{c}'")));
@@ -307,6 +338,11 @@ enum Decl {
         body: Vec<Stmt>,
         line: usize,
     },
+    Sprite {
+        name: String,
+        rows: Vec<String>, // pixel rows, e.g. "..2222.."
+        line: usize,
+    },
 }
 
 // ======================================================================
@@ -385,8 +421,10 @@ impl Parser {
                 decls.push(self.parse_function(d));
             } else if self.is_kw("local") {
                 decls.push(self.parse_global(d));
+            } else if self.is_kw("sprite") {
+                decls.push(self.parse_sprite(d));
             } else {
-                d.push(err(self.line(), "expected 'record', 'function', or 'local'"));
+                d.push(err(self.line(), "expected 'record', 'function', 'local', or 'sprite'"));
                 self.advance();
             }
             if self.pos == before {
@@ -420,6 +458,26 @@ impl Parser {
         }
         self.expect_sym("}", d);
         Decl::Record { name, fields, line }
+    }
+
+    fn parse_sprite(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("sprite");
+        let name = self.ident(d);
+        self.expect_sym("{", d);
+        // Rows were raw-captured by the lexer as Ident tokens.
+        let mut rows = Vec::new();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            match self.advance() {
+                Tok::Ident(r) => rows.push(r),
+                _ => {
+                    d.push(err(self.line(), "expected a sprite pixel row"));
+                    break;
+                }
+            }
+        }
+        self.expect_sym("}", d);
+        Decl::Sprite { name, rows, line }
     }
 
     fn parse_scalar_ty(&mut self, d: &mut Vec<Diagnostic>) -> Ty {
@@ -804,6 +862,9 @@ struct Compiler {
     globals: HashMap<String, GlobalInfo>,
     funcs: HashMap<String, FuncSig>,
     locals: HashMap<String, VarInfo>,
+    /// Declared sprites in id order (name, rows); each `NAME` is a constant = its id.
+    sprites: Vec<(String, Vec<String>)>,
+    sprite_ids: HashMap<String, u16>,
     data: Vec<String>,
     label_ctr: usize,
     loop_ends: Vec<String>,
@@ -836,6 +897,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "cls" => (1, false),
         "pset" => (3, false),
         "spr" => (4, false),
+        "sspr" => (4, false),
         "entity" => (3, false),
         "camera" => (2, false),
         "poke" => (2, false),
@@ -873,6 +935,8 @@ impl Compiler {
             globals: HashMap::new(),
             funcs: HashMap::new(),
             locals: HashMap::new(),
+            sprites: Vec::new(),
+            sprite_ids: HashMap::new(),
             data: Vec::new(),
             label_ctr: 0,
             loop_ends: Vec::new(),
@@ -904,6 +968,17 @@ impl Compiler {
                 {
                     d.push(err(*line, format!("duplicate record '{name}'")));
                 }
+            }
+        }
+        // Pass 1.5: sprites — assign ids (declaration order), bind each name to
+        // its id (a compile-time constant).
+        for decl in decls {
+            if let Decl::Sprite { name, rows, line } = decl {
+                let id = self.sprites.len() as u16;
+                if self.sprite_ids.insert(name.clone(), id).is_some() {
+                    d.push(err(*line, format!("duplicate sprite '{name}'")));
+                }
+                self.sprites.push((name.clone(), rows.clone()));
             }
         }
         // Pass 2: function signatures.
@@ -1227,6 +1302,10 @@ impl Compiler {
                     out.push(((v.1 & 0xffff) as u16).to_string());
                     return true;
                 }
+                if let Some(id) = self.sprite_ids.get(name) {
+                    out.push(id.to_string()); // sprite name -> its tile id
+                    return true;
+                }
                 // A place: scalar -> load; aggregate -> its address (reference).
                 let ty = match self.gen_place_addr(e, out, d) {
                     Some(t) => t,
@@ -1399,7 +1478,8 @@ impl Compiler {
         let seq: &str = match name {
             "cls" => "#16 DEO",
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
-            "spr" => "#19 DEO #12 DEO #11 DEO #15 DEO",      // ( tile x y flags )
+            "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO",      // ( id x y flags ) blit by id
+            "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO",     // ( addr x y flags ) raw blit
             "camera" => "#18 DEO #17 DEO",                   // ( x y )
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
@@ -1448,6 +1528,9 @@ impl Compiler {
                 if let Some(v) = BUTTON_CONSTS.iter().find(|(n, _)| *n == name) {
                     return Some(v.1);
                 }
+                if let Some(id) = self.sprite_ids.get(name) {
+                    return Some(*id as i64);
+                }
                 if seen.contains(name) {
                     return None;
                 }
@@ -1487,6 +1570,10 @@ impl Compiler {
     fn assemble_program(&mut self, funcs: &str) -> String {
         let mut out = String::new();
         out.push_str("( generated by the luax front-end )\n");
+        // Point the tileset base at the sprite sheet so `spr(id, …)` works.
+        if !self.sprites.is_empty() {
+            out.push_str("lx_sheet #1b DEO\n");
+        }
         if self.funcs.contains_key("init") {
             out.push_str("lx_p_init CALL\n");
         }
@@ -1537,6 +1624,13 @@ impl Compiler {
         if self.helpers.rect {
             for i in 0..8 {
                 out.push_str(&format!("@lx_ro{i} .res 2\n"));
+            }
+        }
+        // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
+        if !self.sprites.is_empty() {
+            out.push_str("@lx_sheet\n");
+            for (id, (_, rows)) in self.sprites.iter().enumerate() {
+                out.push_str(&format!(".sprite lx_spr{id} {} .end\n", rows.join(" ")));
             }
         }
         out
@@ -1756,6 +1850,44 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn sprite_sheet_blits_by_id() {
+        let src = r#"
+            sprite a {
+              12......
+            }
+            sprite b {
+              34......
+            }
+            function draw()
+              spr(a, 0, 0, 0)
+              spr(b, 8, 0, 0)
+            end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        // sprite a = id 0 at (0,0): top row pixels 1,2
+        assert_eq!(c.vm.devices.framebuffer[0], 1);
+        assert_eq!(c.vm.devices.framebuffer[1], 2);
+        // sprite b = id 1 at (8,0): top row pixels 3,4 (from sheet base + 32)
+        assert_eq!(c.vm.devices.framebuffer[8], 3);
+        assert_eq!(c.vm.devices.framebuffer[9], 4);
+    }
+
+    #[test]
+    fn sprite_flip_flag() {
+        // flags=1 mirrors horizontally: top row 1,2 -> columns 7,6.
+        let src = r#"
+            sprite a { 12...... }
+            function draw() spr(a, 0, 0, 1) end
+        "#;
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[7], 1);
+        assert_eq!(c.vm.devices.framebuffer[6], 2);
     }
 
     #[test]
