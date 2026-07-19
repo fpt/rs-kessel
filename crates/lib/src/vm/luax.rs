@@ -193,6 +193,7 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
 enum Ty {
     Byte,
     Word,
+    Int, // 16-bit signed (two's complement); comparisons are signed
     Bool,
     Record(String, u16),      // name, byte size
     Array(Box<Ty>, u16),      // element, length
@@ -202,16 +203,19 @@ impl Ty {
     fn size(&self) -> u16 {
         match self {
             Ty::Byte => 1,
-            Ty::Word | Ty::Bool => 2,
+            Ty::Word | Ty::Int | Ty::Bool => 2,
             Ty::Record(_, sz) => *sz,
             Ty::Array(e, n) => e.size() * n,
         }
     }
     fn is_scalar(&self) -> bool {
-        matches!(self, Ty::Byte | Ty::Word | Ty::Bool)
+        matches!(self, Ty::Byte | Ty::Word | Ty::Int | Ty::Bool)
     }
     fn is_byte(&self) -> bool {
         matches!(self, Ty::Byte)
+    }
+    fn is_int(&self) -> bool {
+        matches!(self, Ty::Int)
     }
 }
 
@@ -423,9 +427,10 @@ impl Parser {
         match self.advance() {
             Tok::Ident(k) if k == "word" => Ty::Word,
             Tok::Ident(k) if k == "byte" => Ty::Byte,
+            Tok::Ident(k) if k == "int" => Ty::Int,
             Tok::Ident(k) if k == "bool" => Ty::Bool,
             _ => {
-                d.push(err(line, "expected a scalar type (word, byte, bool)"));
+                d.push(err(line, "expected a scalar type (word, byte, int, bool)"));
                 Ty::Word
             }
         }
@@ -451,6 +456,10 @@ impl Parser {
             Tok::Ident(k) if k == "byte" => {
                 self.advance();
                 TypeExpr::Scalar(Ty::Byte)
+            }
+            Tok::Ident(k) if k == "int" => {
+                self.advance();
+                TypeExpr::Scalar(Ty::Int)
             }
             Tok::Ident(k) if k == "bool" => {
                 self.advance();
@@ -1275,8 +1284,20 @@ impl Compiler {
             out.push(if op == "and" { "AND" } else { "OR" }.to_string());
             return;
         }
+        // Ordering comparisons are signed if either operand is `int`. The VM's
+        // LT/GT are unsigned, so bias both operands by 0x8000 (flip the sign bit)
+        // — unsigned-compare-of-biased == signed compare. `==`/`~=` are bit
+        // equality, unaffected by signedness.
+        let signed = matches!(op, "<" | "<=" | ">" | ">=")
+            && (self.type_of(l).is_int() || self.type_of(r).is_int());
         self.gen_expr(l, out, d);
+        if signed {
+            out.push("#8000 XOR".to_string());
+        }
         self.gen_expr(r, out, d);
+        if signed {
+            out.push("#8000 XOR".to_string());
+        }
         let ops: &[&str] = match op {
             "+" => &["ADD"],
             "-" => &["SUB"],
@@ -1298,6 +1319,49 @@ impl Compiler {
         };
         for o in ops {
             out.push(o.to_string());
+        }
+    }
+
+    /// Best-effort static type of an expression — used only to decide signed vs
+    /// unsigned comparisons; never emits code.
+    fn type_of(&self, e: &Expr) -> Ty {
+        match e {
+            Expr::Num(..) => Ty::Word,
+            Expr::Var(name, _) => {
+                if BUTTON_CONSTS.iter().any(|(n, _)| *n == name) {
+                    Ty::Word
+                } else {
+                    self.resolve_var(name).map(|v| v.ty).unwrap_or(Ty::Word)
+                }
+            }
+            Expr::Field(base, field, _) => match self.type_of(base) {
+                Ty::Record(rname, _) => self
+                    .records
+                    .get(&rname)
+                    .and_then(|l| l.fields.iter().find(|(n, _, _)| n == field))
+                    .map(|(_, t, _)| t.clone())
+                    .unwrap_or(Ty::Word),
+                _ => Ty::Word,
+            },
+            Expr::Index(base, _, _) => match self.type_of(base) {
+                Ty::Array(elem, _) => *elem,
+                _ => Ty::Word,
+            },
+            Expr::Unary(op, inner, _) => match *op {
+                "not" => Ty::Bool,
+                "-" => Ty::Int,             // a negated value is signed
+                _ => self.type_of(inner),   // `~` keeps the operand's type
+            },
+            Expr::Binary(op, l, r, _) => {
+                if matches!(*op, "==" | "~=" | "<" | "<=" | ">" | ">=" | "and" | "or") {
+                    Ty::Bool
+                } else if self.type_of(l).is_int() || self.type_of(r).is_int() {
+                    Ty::Int
+                } else {
+                    Ty::Word
+                }
+            }
+            Expr::Call(..) => Ty::Word,
         }
     }
 
@@ -1655,6 +1719,43 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 6);
+    }
+
+    #[test]
+    fn signed_int_comparisons() {
+        // vx is int and negative; `vx < 0` must be signed (true), and a large
+        // unsigned word must NOT read as negative.
+        let src = r#"
+            local vx: int
+            local w: word
+            local out: word
+            function init() vx = 0 - 2  w = 0xC000 end
+            function draw()
+              out = 0
+              if vx < 0 then out = out + 1 end      -- signed: -2 < 0 true (+1; unsigned would be false)
+              if w > 1 then out = out + 2 end        -- unsigned word: 0xC000 > 1 true (+2)
+              if 0 - 3 < vx then out = out + 8 end   -- signed (vx is int): -3 < -2 true (+8)
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1 + 2 + 8);
+    }
+
+    #[test]
+    fn int_record_field_is_signed() {
+        let src = r#"
+            record Mob { vy: int }
+            local m: Mob
+            local out: word
+            function init() m.vy = 0 - 5 end
+            function draw()
+              if m.vy < 0 then out = 1 else out = 0 end
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
     }
 
     #[test]
