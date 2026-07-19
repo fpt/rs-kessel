@@ -360,6 +360,12 @@ enum Decl {
         rows: Vec<String>, // pixel rows, e.g. "..2222.."
         line: usize,
     },
+    Tilemap {
+        name: String,
+        w: Expr,
+        h: Expr,
+        line: usize,
+    },
 }
 
 // ======================================================================
@@ -440,8 +446,13 @@ impl Parser {
                 decls.push(self.parse_global(d));
             } else if self.is_kw("sprite") {
                 decls.push(self.parse_sprite(d));
+            } else if self.is_kw("tilemap") {
+                decls.push(self.parse_tilemap(d));
             } else {
-                d.push(err(self.line(), "expected 'record', 'function', 'local', or 'sprite'"));
+                d.push(err(
+                    self.line(),
+                    "expected 'record', 'function', 'local', 'sprite', or 'tilemap'",
+                ));
                 self.advance();
             }
             if self.pos == before {
@@ -495,6 +506,18 @@ impl Parser {
         }
         self.expect_sym("}", d);
         Decl::Sprite { name, rows, line }
+    }
+
+    fn parse_tilemap(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("tilemap");
+        let name = self.ident(d);
+        self.expect_sym("(", d);
+        let w = self.parse_expr(d);
+        self.expect_sym(",", d);
+        let h = self.parse_expr(d);
+        self.expect_sym(")", d);
+        Decl::Tilemap { name, w, h, line }
     }
 
     fn parse_scalar_ty(&mut self, d: &mut Vec<Diagnostic>) -> Ty {
@@ -882,6 +905,9 @@ struct Compiler {
     /// Declared sprites in id order (name, rows); each `NAME` is a constant = its id.
     sprites: Vec<(String, Vec<String>)>,
     sprite_ids: HashMap<String, u16>,
+    /// The single declared tilemap: (label, width, height). `mget`/`mset`/`map`/
+    /// `solid` need it.
+    tilemap: Option<(String, u16, u16)>,
     data: Vec<String>,
     label_ctr: usize,
     loop_ends: Vec<String>,
@@ -891,10 +917,14 @@ struct Compiler {
 
 #[derive(Default)]
 struct Helpers {
-    entity: bool,
+    tmp: bool, // a shared @lx_tmp scratch cell (entity, mset)
     min: bool,
     max: bool,
     rect: bool,
+    flags: bool, // the @lx_flags 256-byte table (fget/fset/solid)
+    fget: bool,
+    fset: bool,
+    solid: bool,
 }
 
 const BUTTON_CONSTS: &[(&str, i64)] = &[
@@ -907,6 +937,18 @@ const BUTTON_CONSTS: &[(&str, i64)] = &[
     ("START", 0x40),
     ("SELECT", 0x80),
 ];
+
+/// Tile-flag bit indices (for `fget`/`fset`/`solid`). `SOLID` is flag 0.
+const FLAG_CONSTS: &[(&str, i64)] = &[("SOLID", 0), ("FLAG1", 1), ("FLAG2", 2), ("FLAG3", 3)];
+
+/// A predefined constant (buttons + tile flags), or `None`.
+fn predefined_const(name: &str) -> Option<i64> {
+    BUTTON_CONSTS
+        .iter()
+        .chain(FLAG_CONSTS.iter())
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| *v)
+}
 
 /// Builtins: name -> (arg count, returns a value).
 fn builtin(name: &str) -> Option<(usize, bool)> {
@@ -926,6 +968,12 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "min" => (2, true),
         "max" => (2, true),
         "rect_overlap" => (8, true),
+        "mget" => (2, true),
+        "mset" => (3, false),
+        "map" => (6, false),
+        "fget" => (2, true),
+        "fset" => (3, false),
+        "solid" => (2, true),
         _ => return None,
     })
 }
@@ -954,6 +1002,7 @@ impl Compiler {
             locals: HashMap::new(),
             sprites: Vec::new(),
             sprite_ids: HashMap::new(),
+            tilemap: None,
             data: Vec::new(),
             label_ctr: 0,
             loop_ends: Vec::new(),
@@ -996,6 +1045,44 @@ impl Compiler {
                     d.push(err(*line, format!("duplicate sprite '{name}'")));
                 }
                 self.sprites.push((name.clone(), rows.clone()));
+            }
+        }
+        // Pass 1.6: the tilemap (single) — reserve its tile-id grid.
+        for decl in decls {
+            if let Decl::Tilemap { name, w, h, line } = decl {
+                // Validate before casting: dimensions in 1..=1024 and a grid that
+                // fits well inside the 64 KiB space (avoids u16 truncation and
+                // out-of-range addressing).
+                const MAX_DIM: i64 = 1024;
+                const MAX_CELLS: i64 = 0x4000; // 16 KiB of tile ids
+                let wv = self.eval_const(w, &mut vec![]);
+                let hv = self.eval_const(h, &mut vec![]);
+                let (wv, hv) = match (wv, hv) {
+                    (Some(a), Some(b))
+                        if (1..=MAX_DIM).contains(&a)
+                            && (1..=MAX_DIM).contains(&b)
+                            && a * b <= MAX_CELLS =>
+                    {
+                        (a as u16, b as u16)
+                    }
+                    (Some(_), Some(_)) => {
+                        d.push(err(*line, format!(
+                            "tilemap dimensions out of range (each 1..={MAX_DIM}, w*h <= {MAX_CELLS})"
+                        )));
+                        continue;
+                    }
+                    _ => {
+                        d.push(err(*line, "tilemap dimensions must be positive constants"));
+                        continue;
+                    }
+                };
+                if self.tilemap.is_some() {
+                    d.push(err(*line, "only one tilemap is supported"));
+                    continue;
+                }
+                let label = format!("lx_map_{name}");
+                self.data.push(format!("@{label} .res {}", wv as u32 * hv as u32));
+                self.tilemap = Some((label, wv, hv));
             }
         }
         // Pass 2: function signatures.
@@ -1315,8 +1402,8 @@ impl Compiler {
                 true
             }
             Expr::Var(name, _) => {
-                if let Some(v) = BUTTON_CONSTS.iter().find(|(n, _)| *n == name) {
-                    out.push(((v.1 & 0xffff) as u16).to_string());
+                if let Some(v) = predefined_const(name) {
+                    out.push(((v & 0xffff) as u16).to_string());
                     return true;
                 }
                 if let Some(id) = self.sprite_ids.get(name) {
@@ -1424,7 +1511,7 @@ impl Compiler {
         match e {
             Expr::Num(..) => Ty::Word,
             Expr::Var(name, _) => {
-                if BUTTON_CONSTS.iter().any(|(n, _)| *n == name) {
+                if predefined_const(name).is_some() {
                     Ty::Word
                 } else {
                     self.resolve_var(name).map(|v| v.ty).unwrap_or(Ty::Word)
@@ -1472,7 +1559,7 @@ impl Compiler {
             for a in args {
                 self.gen_expr(a, out, d);
             }
-            self.gen_builtin(name, out);
+            self.gen_builtin(name, out, d);
             return yields;
         }
         if let Some(sig) = self.funcs.get(name) {
@@ -1491,7 +1578,40 @@ impl Compiler {
         false
     }
 
-    fn gen_builtin(&mut self, name: &str, out: &mut Vec<String>) {
+    fn gen_builtin(&mut self, name: &str, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
+        // Tilemap builtins need the single declared map (label + width). `mget`
+        // computes `map + ty*W + tx` and loads the tile id.
+        if matches!(name, "mget" | "mset" | "map" | "solid") {
+            let (map, w) = match &self.tilemap {
+                Some((l, w, _)) => (l.clone(), *w),
+                None => {
+                    d.push(err(0, format!("{name}() needs a `tilemap` declaration")));
+                    return;
+                }
+            };
+            match name {
+                "mget" => out.push(format!("{w} MUL ADD {map} ADD LOAD8")), // ( tx ty -- id )
+                "mset" => {
+                    self.helpers.tmp = true;
+                    out.push(format!(
+                        "lx_tmp STORE16 {w} MUL ADD {map} ADD lx_tmp LOAD16 SWAP STORE8"
+                    )); // ( tx ty id -- )
+                }
+                // ( tx ty sx sy tw th -- ) set region + trigger the map draw.
+                "map" => out.push(
+                    "#77 DEO #76 DEO #75 DEO #74 DEO #73 DEO #72 DEO #00 #78 DEO".to_string(),
+                ),
+                "solid" => {
+                    self.helpers.solid = true;
+                    self.helpers.flags = true;
+                    self.helpers.fget = true;
+                    out.push("lx_solid CALL".to_string()); // ( px py -- 0/1 )
+                }
+                _ => {}
+            }
+            return;
+        }
+
         let seq: &str = match name {
             "cls" => "#16 DEO",
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
@@ -1505,8 +1625,18 @@ impl Compiler {
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
             "entity" => {
-                self.helpers.entity = true;
+                self.helpers.tmp = true;
                 "lx_tmp STORE16 #51 DEO #50 DEO lx_tmp LOAD16 #52 DEO"
+            }
+            "fget" => {
+                self.helpers.flags = true;
+                self.helpers.fget = true;
+                "lx_fget CALL"
+            }
+            "fset" => {
+                self.helpers.flags = true;
+                self.helpers.fset = true;
+                "lx_fset CALL"
             }
             "min" => {
                 self.helpers.min = true;
@@ -1542,8 +1672,8 @@ impl Compiler {
         match e {
             Expr::Num(n, _) => Some(*n),
             Expr::Var(name, _) => {
-                if let Some(v) = BUTTON_CONSTS.iter().find(|(n, _)| *n == name) {
-                    return Some(v.1);
+                if let Some(v) = predefined_const(name) {
+                    return Some(v);
                 }
                 if let Some(id) = self.sprite_ids.get(name) {
                     return Some(*id as i64);
@@ -1591,6 +1721,10 @@ impl Compiler {
         if !self.sprites.is_empty() {
             out.push_str("lx_sheet #1b DEO\n");
         }
+        // Point the tilemap device at the map grid + its width.
+        if let Some((label, width, _)) = self.tilemap.clone() {
+            out.push_str(&format!("{label} #70 DEO {width} #71 DEO\n"));
+        }
         if self.funcs.contains_key("init") {
             out.push_str("lx_p_init CALL\n");
         }
@@ -1629,19 +1763,59 @@ impl Compiler {
                  lx_ro5 LOAD16 lx_ro1 LOAD16 lx_ro3 LOAD16 ADD LT AND RET\n",
             );
         }
+        // fget ( tile flag -- bit ): (flags[tile] >> flag) & 1
+        if self.helpers.fget {
+            out.push_str("@lx_fget SWAP lx_flags ADD LOAD8 SWAP SHR #01 AND RET\n");
+        }
+        // fset ( tile flag v -- ): set/clear bit `flag` of flags[tile]
+        if self.helpers.fset {
+            out.push_str(
+                "@lx_fset\n  lx_ft_v STORE16 #01 SWAP SHL lx_ft_m STORE16 lx_flags ADD DUP LOAD8 \
+                 lx_ft_v LOAD16 lx_fset_set JNZ \
+                 lx_ft_m LOAD16 #ffff XOR AND lx_fset_done JMP \
+                 @lx_fset_set lx_ft_m LOAD16 OR @lx_fset_done SWAP STORE8 RET\n",
+            );
+        }
+        // solid ( px py -- 0/1 ): is the tile at pixel (px,py) SOLID (flag 0)?
+        // Off-map pixels (negative — a signed value like -1 is 0xffff — or past
+        // the map edge) are treated as not solid. The `LT` bounds checks are
+        // unsigned, so a wrapped-negative coordinate fails them and returns 0.
+        if self.helpers.solid {
+            if let Some((map, w, h)) = self.tilemap.clone() {
+                let pw = w as u32 * 8; // map width/height in pixels
+                let ph = h as u32 * 8;
+                out.push_str(&format!(
+                    "@lx_solid\n  lx_sy STORE16 lx_sx STORE16 \
+                     lx_sx LOAD16 {pw} LT lx_sy LOAD16 {ph} LT AND lx_solid_ok JNZ \
+                     #00 RET \
+                     @lx_solid_ok \
+                     lx_sx LOAD16 #03 SHR lx_sy LOAD16 #03 SHR {w} MUL ADD {map} ADD LOAD8 \
+                     #00 lx_fget CALL RET\n"
+                ));
+            }
+        }
 
         // Data section.
         for line in &self.data {
             out.push_str(line);
             out.push('\n');
         }
-        if self.helpers.entity {
+        if self.helpers.tmp {
             out.push_str("@lx_tmp .res 2\n");
         }
         if self.helpers.rect {
             for i in 0..8 {
                 out.push_str(&format!("@lx_ro{i} .res 2\n"));
             }
+        }
+        if self.helpers.flags {
+            out.push_str("@lx_flags .res 256\n");
+        }
+        if self.helpers.fset {
+            out.push_str("@lx_ft_v .res 2\n@lx_ft_m .res 2\n");
+        }
+        if self.helpers.solid {
+            out.push_str("@lx_sx .res 2\n@lx_sy .res 2\n");
         }
         // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
         if !self.sprites.is_empty() {
@@ -1923,6 +2097,106 @@ mod tests {
         c.run_frame(0);
         assert_eq!(c.vm.devices.framebuffer[7], 1);
         assert_eq!(c.vm.devices.framebuffer[6], 2);
+    }
+
+    #[test]
+    fn tilemap_mget_mset() {
+        let src = r#"
+            tilemap level(4, 4)
+            local out: word
+            function init() mset(1, 2, 7) end
+            function draw() out = mget(1, 2)  entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 7);
+    }
+
+    #[test]
+    fn tile_flags_fget_fset() {
+        let src = r#"
+            local out: word
+            function init() fset(3, SOLID, 1)  fset(3, FLAG1, 1) end
+            function draw()
+              out = 0
+              if fget(3, SOLID) == 1 then out = out + 1 end
+              if fget(3, FLAG1) == 1 then out = out + 2 end
+              if fget(3, FLAG2) == 1 then out = out + 4 end   -- not set
+              fset(3, SOLID, 0)                                -- clear it
+              if fget(3, SOLID) == 0 then out = out + 8 end
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1 + 2 + 8);
+    }
+
+    #[test]
+    fn solid_collision_query() {
+        let src = r#"
+            tilemap level(4, 4)
+            local out: word
+            function init()
+              mset(1, 1, 5)        -- tile id 5 at cell (1,1)
+              fset(5, SOLID, 1)     -- tile 5 is solid
+            end
+            function draw()
+              out = 0
+              if solid(12, 12) == 1 then out = out + 1 end  -- (1,1) tile 5 -> solid
+              if solid(4, 4) == 1 then out = out + 2 end      -- (0,0) tile 0 -> not
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn tilemap_map_draws_from_sheet() {
+        let src = r#"
+            sprite a { 12...... }
+            tilemap level(2, 2)
+            function init() mset(0, 0, a)  mset(1, 1, a) end
+            function draw() cls(0)  map(0, 0, 0, 0, 2, 2) end
+        "#;
+        let mut c = load(src);
+        c.run_frame(0);
+        // cell (0,0) tile a=0 -> screen (0,0): top-left pixel 1
+        assert_eq!(c.vm.devices.framebuffer[0], 1);
+        // cell (1,1) tile a -> screen (8,8): top-left pixel 1
+        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 1);
+    }
+
+    #[test]
+    fn tilemap_dimensions_out_of_range() {
+        let c = compile("tilemap level(65536, 1)\nfunction draw() end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("out of range")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn solid_off_map_is_not_solid() {
+        let src = r#"
+            tilemap level(4, 4)
+            local out: word
+            function init() mset(0, 0, 5)  fset(5, SOLID, 1) end
+            function draw()
+              out = 0
+              if solid(0 - 1, 0) == 0 then out = out + 1 end   -- negative x
+              if solid(999, 0) == 0 then out = out + 2 end       -- off the right edge
+              if solid(0, 999) == 0 then out = out + 4 end       -- off the bottom edge
+              if solid(2, 2) == 1 then out = out + 8 end          -- in-bounds solid cell
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1 + 2 + 4 + 8);
+    }
+
+    #[test]
+    fn tilemap_required_for_mget() {
+        let c = compile("function draw() local x = mget(0, 0) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("tilemap")));
     }
 
     #[test]
