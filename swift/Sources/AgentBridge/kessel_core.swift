@@ -830,11 +830,15 @@ public func FfiConverterTypeAgent_lower(_ value: Agent) -> UnsafeMutableRawPoint
 
 public protocol VmPlayerProtocol : AnyObject {
     
+    func controlsJson()  -> String
+    
     func framebufferRgba()  -> Data?
     
     func hasRom()  -> Bool
     
     func isHalted()  -> Bool
+    
+    func isPaused()  -> Bool
     
     func load(source: String, path: String)  -> String
     
@@ -901,6 +905,13 @@ public convenience init() {
     
 
     
+open func controlsJson() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_controls_json(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func framebufferRgba() -> Data? {
     return try!  FfiConverterOptionData.lift(try! rustCall() {
     uniffi_kessel_core_fn_method_vmplayer_framebuffer_rgba(self.uniffiClonePointer(),$0
@@ -918,6 +929,13 @@ open func hasRom() -> Bool {
 open func isHalted() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_kessel_core_fn_method_vmplayer_is_halted(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func isPaused() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_vmplayer_is_paused(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -2046,6 +2064,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 47839) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kessel_core_checksum_method_vmplayer_controls_json() != 8354) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kessel_core_checksum_method_vmplayer_framebuffer_rgba() != 34844) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2053,6 +2074,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kessel_core_checksum_method_vmplayer_is_halted() != 6751) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kessel_core_checksum_method_vmplayer_is_paused() != 37829) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kessel_core_checksum_method_vmplayer_load() != 24897) {

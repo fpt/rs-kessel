@@ -3,6 +3,12 @@
 --
 --   kessel --play games/sprite.lua
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move the sprite
+  pause = START
+}
+
 sprite face {
   .aaaaaa.
   a999999a

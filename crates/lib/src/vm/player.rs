@@ -79,12 +79,27 @@ impl VmPlayer {
     }
 
     /// Advance one frame with `buttons` held (see the `BTN_*` bit values). A
-    /// no-op until a ROM is loaded.
+    /// no-op until a ROM is loaded. The ROM's pause button (from its `controls`
+    /// metadata, default START) freezes and resumes the game — see
+    /// [`is_paused`](Self::is_paused).
     pub fn tick(&self, buttons: u8) {
         let mut c = self.inner.lock();
         if c.rom_loaded {
-            c.run_frame(buttons);
+            c.play_tick(buttons);
         }
+    }
+
+    /// Whether the game is currently paused (the pause button was pressed). The
+    /// framebuffer stays frozen on the last frame while paused.
+    pub fn is_paused(&self) -> bool {
+        self.inner.lock().is_paused()
+    }
+
+    /// The loaded ROM's control-layout metadata as a JSON string, for a host UI
+    /// to label buttons / lay out an on-screen pad. Default layout until a ROM
+    /// is loaded.
+    pub fn controls_json(&self) -> String {
+        self.inner.lock().controls().to_json().to_string()
     }
 
     /// The current framebuffer expanded to `dim*dim*4` RGBA bytes, or `None`
@@ -157,6 +172,47 @@ mod tests {
         let old = (60 * SCREEN_DIM + 32) * 4;
         let new = (60 * SCREEN_DIM + 34) * 4;
         assert_ne!(&fb[new..new + 3], &fb[old..old + 3], "pixel should have moved");
+    }
+
+    #[test]
+    fn pause_button_freezes_and_resumes() {
+        // A game that advances a global each frame; START pauses by default.
+        let src = r#"
+            local n = 0
+            function update() n = n + 1 end
+            function draw() cls(0)  pset(n, 0, 7)  entity(n, 0, 1) end
+        "#;
+        let p = VmPlayer::new();
+        assert!(p.load(src.to_string(), "p.lua".to_string()).is_empty());
+        assert!(!p.is_paused());
+        p.tick(0); // n -> 1
+        p.tick(0); // n -> 2
+
+        // Press START (bit 0x40): toggles pause, so this frame does NOT advance.
+        p.tick(super::super::device::BTN_START);
+        assert!(p.is_paused());
+        // Holding / re-ticking while paused does not advance the game.
+        p.tick(0);
+        p.tick(0);
+        let fb_paused = p.framebuffer_rgba().unwrap();
+        p.tick(0);
+        assert_eq!(fb_paused, p.framebuffer_rgba().unwrap(), "frozen while paused");
+
+        // Press START again: resume.
+        p.tick(super::super::device::BTN_START);
+        assert!(!p.is_paused());
+        p.tick(0); // advances again
+        assert_ne!(fb_paused, p.framebuffer_rgba().unwrap(), "resumed after pause");
+    }
+
+    #[test]
+    fn controls_json_reflects_the_rom() {
+        let p = VmPlayer::new();
+        let src = "controls { a = \"fire\"  pause = SELECT } function draw() cls(0) end";
+        assert!(p.load(src.to_string(), "c.lua".to_string()).is_empty());
+        let j = p.controls_json();
+        assert!(j.contains("\"fire\""), "got: {j}");
+        assert!(j.contains("SELECT"), "got: {j}");
     }
 
     #[test]

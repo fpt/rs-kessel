@@ -38,6 +38,13 @@ pub struct VmConsole {
     sources: HashMap<String, String>,
     /// Assembled ROMs, keyed by source path.
     roms: HashMap<String, Vec<u8>>,
+    /// Control-layout metadata, keyed by source path (see [`luax::Controls`]).
+    controls: HashMap<String, luax::Controls>,
+    /// Control metadata of the currently loaded ROM (default until a load).
+    active_controls: luax::Controls,
+    /// Host-play pause state (managed by [`play_tick`](Self::play_tick)).
+    paused: bool,
+    prev_pause_down: bool,
     /// Saved states, keyed by snapshot id.
     snapshots: HashMap<String, Snapshot>,
     snap_counter: u64,
@@ -66,6 +73,10 @@ impl VmConsole {
             prev_fb: vec![0u8; device::SCREEN_PIXELS],
             sources: HashMap::new(),
             roms: HashMap::new(),
+            controls: HashMap::new(),
+            active_controls: luax::Controls::default(),
+            paused: false,
+            prev_pause_down: false,
             snapshots: HashMap::new(),
             snap_counter: 0,
         }
@@ -91,8 +102,9 @@ impl VmConsole {
             .ok_or_else(|| format!("no source written at '{path}'"))?;
 
         // luax (Lua-ish) dialect: compile to assembler first. Compiler
-        // diagnostics are returned in an otherwise-empty `Assembled`.
-        let built = if is_lua(path) {
+        // diagnostics are returned in an otherwise-empty `Assembled`. The
+        // control-layout metadata rides along and is cached for `load_rom`.
+        let (built, controls) = if is_lua(path) {
             let compiled = luax::compile(src);
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
@@ -101,13 +113,15 @@ impl VmConsole {
                     labels: Default::default(),
                 });
             }
-            assembler::assemble(&compiled.asm)
+            (assembler::assemble(&compiled.asm), compiled.controls)
         } else {
-            assembler::assemble(src)
+            // Raw assembly has no `controls` block; use the default layout.
+            (assembler::assemble(src), luax::Controls::default())
         };
 
         if built.ok() {
             self.roms.insert(path.to_string(), built.rom.clone());
+            self.controls.insert(path.to_string(), controls);
         }
         Ok(built)
     }
@@ -123,7 +137,37 @@ impl VmConsole {
         self.rom_loaded = true;
         self.frame = 0;
         self.prev_fb = self.vm.devices.framebuffer.clone();
+        self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
+        self.paused = false;
+        self.prev_pause_down = false;
         Ok(outcome)
+    }
+
+    /// The control-layout metadata of the currently loaded ROM.
+    pub fn controls(&self) -> &luax::Controls {
+        &self.active_controls
+    }
+
+    /// Whether host play is currently paused (see [`play_tick`](Self::play_tick)).
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// A host-play frame tick: toggle pause on the rising edge of the ROM's
+    /// pause button, then advance one frame **unless** paused. The pause button
+    /// (default START) comes from the ROM's `controls` metadata, so pausing is a
+    /// host concern the game never sees. Used by the play window; the agent's
+    /// `vm_run_frame` drives [`run_frame`](Self::run_frame) directly instead.
+    pub fn play_tick(&mut self, buttons: u8) {
+        let pause_bit = self.active_controls.pause_bit();
+        let down = pause_bit != 0 && buttons & pause_bit != 0;
+        if down && !self.prev_pause_down {
+            self.paused = !self.paused;
+        }
+        self.prev_pause_down = down;
+        if !self.paused {
+            self.run_frame(buttons);
+        }
     }
 
     /// Advance one frame with `buttons` held; returns the observation record.
@@ -202,9 +246,11 @@ impl VmConsole {
     pub fn reset(&mut self) {
         let keep_sources = std::mem::take(&mut self.sources);
         let keep_roms = std::mem::take(&mut self.roms);
+        let keep_controls = std::mem::take(&mut self.controls);
         *self = VmConsole::new();
         self.sources = keep_sources;
         self.roms = keep_roms;
+        self.controls = keep_controls;
     }
 }
 

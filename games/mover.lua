@@ -3,6 +3,12 @@
 --
 --   kessel --play games/mover.lua
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move
+  pause = START
+}
+
 record P { x, y }
 local p: P
 

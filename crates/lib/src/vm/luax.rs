@@ -37,15 +37,79 @@ use std::collections::HashMap;
 
 use super::assembler::Diagnostic;
 
-/// Result of compiling luax source: generated assembler text plus diagnostics.
+/// Result of compiling luax source: generated assembler text plus diagnostics
+/// and the game's control-layout metadata (see [`Controls`]).
 pub struct Compiled {
     pub asm: String,
     pub diagnostics: Vec<Diagnostic>,
+    pub controls: Controls,
 }
 
 impl Compiled {
     pub fn ok(&self) -> bool {
         self.diagnostics.is_empty()
+    }
+}
+
+/// Control-layout metadata declared by a `controls { … }` block. It is
+/// **irrelevant to VM execution** — the machine only ever sees the raw gamepad
+/// bitfield. It rides along as ROM metadata so a host UI (on-screen buttons,
+/// help text, a smartphone virtual pad) can label and lay out the inputs
+/// without guessing from source comments.
+///
+/// ```lua
+/// controls {
+///   dpad = true       -- the movement pad is used
+///   a = "jump"        -- what the A / B / Start / Select buttons do
+///   b = "dash"
+///   pause = START     -- which physical button pauses (default START)
+/// }
+/// ```
+///
+/// Every game has a **pause** binding by default (START) even without a block,
+/// so the host always has a pause control to offer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Controls {
+    /// Whether the directional pad / movement is used.
+    pub dpad: bool,
+    /// Action labels for the four action buttons (`None` = unused).
+    pub a: Option<String>,
+    pub b: Option<String>,
+    pub start: Option<String>,
+    pub select: Option<String>,
+    /// The physical button that pauses (uppercase name, e.g. `"START"`).
+    pub pause: String,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Controls {
+            dpad: true,
+            a: None,
+            b: None,
+            start: None,
+            select: None,
+            pause: "START".to_string(),
+        }
+    }
+}
+
+impl Controls {
+    /// The gamepad bit of the pause button, or `0` if it names no known button.
+    pub fn pause_bit(&self) -> u8 {
+        super::buttons_from_names(std::slice::from_ref(&self.pause))
+    }
+
+    /// The metadata as JSON, for a host UI to read.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "dpad": self.dpad,
+            "a": self.a,
+            "b": self.b,
+            "start": self.start,
+            "select": self.select,
+            "pause": self.pause,
+        })
     }
 }
 
@@ -55,14 +119,36 @@ pub fn compile(src: &str) -> Compiled {
     let tokens = lex(src, &mut diagnostics);
     let mut parser = Parser::new(tokens);
     let decls = parser.parse_program(&mut diagnostics);
+    let controls = extract_controls(&decls, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Compiled {
             asm: String::new(),
             diagnostics,
+            controls,
         };
     }
     let asm = Compiler::new().compile(&decls, &mut diagnostics);
-    Compiled { asm, diagnostics }
+    Compiled {
+        asm,
+        diagnostics,
+        controls,
+    }
+}
+
+/// Pull the single `controls { … }` block out of the parsed program (a second
+/// block is a diagnostic). Absent → the default layout (pause = START).
+fn extract_controls(decls: &[Decl], d: &mut Vec<Diagnostic>) -> Controls {
+    let mut found: Option<Controls> = None;
+    for decl in decls {
+        if let Decl::Controls { controls, line } = decl {
+            if found.is_some() {
+                d.push(err(*line, "duplicate 'controls' block"));
+            } else {
+                found = Some(controls.clone());
+            }
+        }
+    }
+    found.unwrap_or_default()
 }
 
 fn err(line: usize, message: impl Into<String>) -> Diagnostic {
@@ -389,6 +475,11 @@ enum Decl {
         h: Expr,
         line: usize,
     },
+    /// Control-layout metadata for the host UI. Emits no code.
+    Controls {
+        controls: Controls,
+        line: usize,
+    },
 }
 
 // ======================================================================
@@ -471,10 +562,12 @@ impl Parser {
                 decls.push(self.parse_sprite(d));
             } else if self.is_kw("tilemap") {
                 decls.push(self.parse_tilemap(d));
+            } else if self.is_kw("controls") {
+                decls.push(self.parse_controls(d));
             } else {
                 d.push(err(
                     self.line(),
-                    "expected 'record', 'function', 'local', 'sprite', or 'tilemap'",
+                    "expected 'record', 'function', 'local', 'sprite', 'tilemap', or 'controls'",
                 ));
                 self.advance();
             }
@@ -541,6 +634,93 @@ impl Parser {
         let h = self.parse_expr(d);
         self.expect_sym(")", d);
         Decl::Tilemap { name, w, h, line }
+    }
+
+    /// `controls { dpad = true  a = "jump"  b = "dash"  pause = START }` —
+    /// host-UI layout metadata. Entries are `key = value` pairs (commas
+    /// optional); recognized keys: `dpad` (bool), `a`/`b`/`start`/`select`
+    /// (string label), `pause` (a button name). Emits no code.
+    fn parse_controls(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("controls");
+        self.expect_sym("{", d);
+        let mut controls = Controls::default();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            let key_line = self.line();
+            let key = self.ident(d);
+            self.expect_sym("=", d);
+            match key.as_str() {
+                "dpad" => controls.dpad = self.parse_bool_value(d),
+                "a" => controls.a = Some(self.parse_str_value(d)),
+                "b" => controls.b = Some(self.parse_str_value(d)),
+                "start" => controls.start = Some(self.parse_str_value(d)),
+                "select" => controls.select = Some(self.parse_str_value(d)),
+                "pause" => controls.pause = self.parse_button_value(d),
+                other => {
+                    d.push(err(
+                        key_line,
+                        format!(
+                            "unknown controls key '{other}' (expected dpad, a, b, start, select, or pause)"
+                        ),
+                    ));
+                    self.advance(); // consume the value token to recover
+                }
+            }
+            self.eat_sym(","); // commas are optional between entries
+        }
+        self.expect_sym("}", d);
+        Decl::Controls { controls, line }
+    }
+
+    /// A `true`/`false` value in a `controls` block.
+    fn parse_bool_value(&mut self, d: &mut Vec<Diagnostic>) -> bool {
+        let line = self.line();
+        match self.advance() {
+            Tok::Ident(s) if s == "true" => true,
+            Tok::Ident(s) if s == "false" => false,
+            _ => {
+                d.push(err(line, "expected 'true' or 'false'"));
+                false
+            }
+        }
+    }
+
+    /// A `"..."` label value in a `controls` block.
+    fn parse_str_value(&mut self, d: &mut Vec<Diagnostic>) -> String {
+        let line = self.line();
+        match self.advance() {
+            Tok::Str(s) => s,
+            _ => {
+                d.push(err(line, "expected a \"...\" label"));
+                String::new()
+            }
+        }
+    }
+
+    /// A button name (bare identifier or `"..."`) in a `controls` block,
+    /// validated against the eight gamepad buttons and normalized to uppercase.
+    fn parse_button_value(&mut self, d: &mut Vec<Diagnostic>) -> String {
+        let line = self.line();
+        let raw = match self.advance() {
+            Tok::Ident(s) => s,
+            Tok::Str(s) => s,
+            _ => {
+                d.push(err(line, "expected a button name"));
+                return "START".to_string();
+            }
+        };
+        let name = raw.to_ascii_uppercase();
+        const BUTTONS: [&str; 8] = [
+            "LEFT", "RIGHT", "UP", "DOWN", "A", "B", "START", "SELECT",
+        ];
+        if !BUTTONS.contains(&name.as_str()) {
+            d.push(err(
+                line,
+                format!("unknown button '{raw}' (expected one of {})", BUTTONS.join(", ")),
+            ));
+            return "START".to_string();
+        }
+        name
     }
 
     fn parse_scalar_ty(&mut self, d: &mut Vec<Diagnostic>) -> Ty {
@@ -3273,5 +3453,66 @@ mod tests {
         assert!(!compile("function draw() break end").ok()); // break outside loop
         assert!(!compile("function draw() cls() end").ok()); // wrong arg count
         assert!(!compile("local a: array(3, Nope) function draw() end").ok()); // unknown type
+    }
+
+    // ---- controls {} metadata ----
+
+    #[test]
+    fn controls_default_when_absent() {
+        // Every game has a pause binding (START) and dpad on, even with no block.
+        let c = compile("function draw() end");
+        assert!(c.ok(), "{:?}", c.diagnostics);
+        assert_eq!(c.controls, Controls::default());
+        assert_eq!(c.controls.pause, "START");
+        assert!(c.controls.dpad);
+    }
+
+    #[test]
+    fn controls_block_parsed() {
+        let c = compile(
+            r#"
+            controls {
+              dpad = true
+              a = "jump"
+              b = "dash"
+              pause = SELECT
+            }
+            function draw() end
+        "#,
+        );
+        assert!(c.ok(), "{:?}", c.diagnostics);
+        assert!(c.controls.dpad);
+        assert_eq!(c.controls.a.as_deref(), Some("jump"));
+        assert_eq!(c.controls.b.as_deref(), Some("dash"));
+        assert_eq!(c.controls.pause, "SELECT");
+        // JSON is the shape the host UI reads.
+        let j = c.controls.to_json();
+        assert_eq!(j["a"], "jump");
+        assert_eq!(j["pause"], "SELECT");
+    }
+
+    #[test]
+    fn controls_pause_defaults_when_omitted() {
+        let c = compile("controls { a = \"fire\" } function draw() end");
+        assert!(c.ok(), "{:?}", c.diagnostics);
+        assert_eq!(c.controls.pause, "START"); // pause key is always present
+        assert_eq!(c.controls.pause_bit(), super::super::device::BTN_START);
+    }
+
+    #[test]
+    fn controls_commas_optional_and_dpad_false() {
+        let c = compile("controls { dpad = false, a = \"x\", } function draw() end");
+        assert!(c.ok(), "{:?}", c.diagnostics);
+        assert!(!c.controls.dpad);
+        assert_eq!(c.controls.a.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn controls_diagnostics() {
+        assert!(!compile("controls { bogus = true } function draw() end").ok()); // unknown key
+        assert!(!compile("controls { pause = HYPER } function draw() end").ok()); // bad button
+        assert!(!compile("controls { dpad = 3 } function draw() end").ok()); // non-bool
+        assert!(!compile("controls { a = 5 } function draw() end").ok()); // non-string label
+        assert!(!compile("controls {} controls {} function draw() end").ok()); // duplicate block
     }
 }

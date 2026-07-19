@@ -45,7 +45,7 @@ internal static class PlayWindow
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Console.Error.WriteLine(
-                    "[play] arrows move, Z/X = A/B, Enter/Space = Start/Select. Close the window to quit.");
+                    "[play] arrows move, Z/X = A/B, Space = Select, Enter = Start (pauses). Close the window to quit.");
                 Application.Run(new PlayForm(player, Path.GetFileName(romPath)));
             }
             catch (Exception e)
@@ -70,6 +70,8 @@ internal sealed class PlayForm : Form
     private readonly Bitmap _frame;
     private readonly byte[] _bgra;
     private byte _pressed;
+    private readonly string _baseTitle;
+    private bool _wasPaused;
 
     public PlayForm(VmPlayer player, string title)
     {
@@ -79,7 +81,8 @@ internal sealed class PlayForm : Form
         _bgra = new byte[_dim * _dim * 4];
 
         const int scale = 5;
-        Text = $"Kessel — {title}";
+        _baseTitle = $"Kessel — {title}";
+        Text = _baseTitle;
         ClientSize = new Size(_dim * scale, _dim * scale);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -100,6 +103,13 @@ internal sealed class PlayForm : Form
         {
             WriteFramebuffer(rgba);
             Invalidate();
+        }
+        // Surface the pause state (toggled by the ROM's pause button) in the title.
+        bool paused = _player.IsPaused();
+        if (paused != _wasPaused)
+        {
+            _wasPaused = paused;
+            Text = paused ? $"{_baseTitle} — PAUSED" : _baseTitle;
         }
     }
 

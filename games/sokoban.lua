@@ -8,6 +8,13 @@
 -- Arrows move / push. Boxes turn green when parked on a goal; clear them all to
 -- win. (A/Z restarts once you've won or wedged yourself.)
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move / push a box
+  a = "restart"
+  pause = START
+}
+
 -- Tiles double as the board's logical cells: the sprite NAME is its tile id, so
 -- `mget(x,y) == wall` reads the board directly. Declaration order sets the ids
 -- (floor 0, wall 1, target 2, box 3, boxt 4, player 5).

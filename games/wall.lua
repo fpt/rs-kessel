@@ -8,6 +8,13 @@
 -- Arrows move. A (Z key) jumps — press again in mid-air for a double-jump, or
 -- press while sliding down a wall to wall-jump off it.
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move
+  a = "jump"        -- press again mid-air / against a wall for double / wall-jump
+  pause = START
+}
+
 sprite hero {
   ..9999..
   .999999.

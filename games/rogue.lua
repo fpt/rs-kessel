@@ -7,6 +7,13 @@
 -- Sprite order sets the tile ids the tilemap draws: floor=0, wall=1 (hero=2 and
 -- orc=3 are drawn as free sprites, not tiles).
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move / bump an orc to attack
+  a = "restart"
+  pause = START
+}
+
 sprite floor {
   55555555
   55555555

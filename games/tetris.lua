@@ -8,6 +8,13 @@
 -- The well is a tilemap: cell 0 = empty (sprite id 0, an opaque dark tile so the
 -- well is visible), cell 1 = a locked/active block (sprite id 1).
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- left/right move, down soft-drops
+  a = "rotate"
+  pause = START
+}
+
 sprite empty {
   11111111
   11111111

@@ -76,11 +76,17 @@ final class PlayController {
     private let view: PixelView
     private let dim: Int
     private var timer: Timer?
+    // Reflect the ROM's pause state in the window title.
+    private weak var window: NSWindow?
+    private let baseTitle: String
+    private var wasPaused = false
 
-    init(player: VmPlayer, view: PixelView) {
+    init(player: VmPlayer, view: PixelView, window: NSWindow? = nil, baseTitle: String = "") {
         self.player = player
         self.view = view
         self.dim = Int(player.screenDim())
+        self.window = window
+        self.baseTitle = baseTitle
     }
 
     func start() {
@@ -101,6 +107,12 @@ final class PlayController {
         if let data = player.framebufferRgba() {
             view.image = Self.makeImage(data: data, dim: dim)
             view.needsDisplay = true
+        }
+        // Surface the pause state (toggled by the ROM's pause button) in the title.
+        let paused = player.isPaused()
+        if paused != wasPaused {
+            wasPaused = paused
+            window?.title = paused ? "\(baseTitle) — PAUSED" : baseTitle
         }
     }
 
@@ -166,19 +178,20 @@ func runPlayMode(romPath: String) -> Never {
         backing: .buffered,
         defer: false
     )
-    window.title = "Kessel — \(URL(fileURLWithPath: romPath).lastPathComponent)"
+    let baseTitle = "Kessel — \(URL(fileURLWithPath: romPath).lastPathComponent)"
+    window.title = baseTitle
     window.contentView = view
     window.center()
     window.isReleasedWhenClosed = false
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
 
-    let controller = PlayController(player: player, view: view)
+    let controller = PlayController(player: player, view: view, window: window, baseTitle: baseTitle)
     let delegate = PlayAppDelegate()
     app.delegate = delegate
     playObjects = [controller, delegate, window]
 
-    print("Playing \(romPath) — arrows move, Z/X = A/B, Return/Space = Start/Select. Close the window to quit.")
+    print("Playing \(romPath) — arrows move, Z/X = A/B, Space = Select, Return = Start (pauses). Close the window to quit.")
     controller.start()
     app.activate(ignoringOtherApps: true)
     app.run()
