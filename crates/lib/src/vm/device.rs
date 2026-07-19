@@ -15,6 +15,7 @@
 //! | 0x6 | console | 0 write-byte |
 //! | 0x7 | tilemap | 0 base · 1 width · 2 tx · 3 ty · 4 sx · 5 sy · 6 tw · 7 th · 8 draw |
 //! | 0x8 | time    | 0 frame-count (read) |
+//! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 
 /// Screen edge length in pixels (square framebuffer).
 pub const SCREEN_DIM: usize = 128;
@@ -116,6 +117,10 @@ pub struct Devices {
     map_sy: u16,
     map_tw: u16,
     map_th: u16,
+    // composite-sprite device (page 0xa): base tile id + block size
+    sprn_id: u16,
+    sprn_w: u16,
+    sprn_h: u16,
 }
 
 impl Default for Devices {
@@ -159,6 +164,9 @@ impl Devices {
             map_sy: 0,
             map_tw: 0,
             map_th: 0,
+            sprn_id: 0,
+            sprn_w: 0,
+            sprn_h: 0,
         }
     }
 
@@ -266,8 +274,40 @@ impl Devices {
                 0x8 => self.draw_map(mem),
                 _ => {}
             },
+            // Composite-sprite device: draw a w×h block of sheet tiles at the
+            // pending screen (sx,sy) with the current sprite flags.
+            0xa => match reg {
+                0x0 => self.sprn_id = val,
+                0x1 => self.sprn_w = val,
+                0x2 => self.sprn_h = val,
+                0x3 => self.draw_sprn(mem),
+                _ => {}
+            },
             _ => {}
         }
+    }
+
+    /// Draw a `sprn_w × sprn_h` block of sheet tiles anchored at the pending
+    /// screen `(sx,sy)`. Tile ids are row-major and contiguous from `sprn_id`
+    /// (id at col/row = `sprn_id + row*w + col`), each 8 px cell blitted from the
+    /// tileset. The current `sprite_flags` (flip) apply to every tile; the block
+    /// layout itself is not mirrored.
+    fn draw_sprn(&mut self, mem: &[u8]) {
+        let (base_x, base_y) = (self.sx, self.sy);
+        for row in 0..self.sprn_h {
+            for col in 0..self.sprn_w {
+                let id = self
+                    .sprn_id
+                    .wrapping_add(row.wrapping_mul(self.sprn_w))
+                    .wrapping_add(col);
+                let addr = self.tileset_base.wrapping_add(id.wrapping_mul(32));
+                self.sx = base_x.wrapping_add(col.wrapping_mul(8));
+                self.sy = base_y.wrapping_add(row.wrapping_mul(8));
+                self.blit_sprite(addr, mem);
+            }
+        }
+        self.sx = base_x;
+        self.sy = base_y;
     }
 
     /// Draw the pending map region: for each cell, read the tile id from

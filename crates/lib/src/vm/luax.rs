@@ -961,6 +961,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "cls" => (1, false),
         "pset" => (3, false),
         "spr" => (4, false),
+        "sprn" => (6, false),
         "sspr" => (4, false),
         "entity" => (3, false),
         "camera" => (2, false),
@@ -1677,6 +1678,8 @@ impl Compiler {
             "cls" => "#16 DEO",
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
             "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO",      // ( id x y flags ) blit by id
+            // ( id x y w h flags ) draw a w×h block of contiguous sheet tiles.
+            "sprn" => "#19 DEO #a2 DEO #a1 DEO #12 DEO #11 DEO #a0 DEO #00 #a3 DEO",
             "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO",     // ( addr x y flags ) raw blit
             "camera" => "#18 DEO #17 DEO",                   // ( x y )
             "poke" => "SWAP STORE8",
@@ -2309,6 +2312,26 @@ mod tests {
         c.run_frame(0);
         assert_eq!(c.vm.devices.framebuffer[7], 1);
         assert_eq!(c.vm.devices.framebuffer[6], 2);
+    }
+
+    #[test]
+    fn sprn_draws_block_row_major() {
+        // A 2×2 composite from four sheet tiles: ids advance row-major, cells are
+        // 8 px apart. Each sprite's top-left pixel marks which tile landed where.
+        let src = r#"
+            sprite a { 1....... }
+            sprite b { 2....... }
+            sprite c { 3....... }
+            sprite d { 4....... }
+            function draw() sprn(a, 0, 0, 2, 2, 0) end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 1);            // (0,0) id a
+        assert_eq!(c.vm.devices.framebuffer[8], 2);            // (8,0) id b
+        assert_eq!(c.vm.devices.framebuffer[8 * 128], 3);      // (0,8) id c
+        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4);  // (8,8) id d
     }
 
     #[test]

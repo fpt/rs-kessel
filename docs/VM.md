@@ -238,8 +238,10 @@ end
   Jump *feel* (coyote time, jump buffering, double/wall-jump counters) stays in
   luax — see `games/wall.lua`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
-  `id`; flags bit0/1 = flip x/y), `sspr(addr,x,y,flags)` (blit a raw 32-byte tile
-  at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
+  `id`; flags bit0/1 = flip x/y), `sprn(id,x,y,w,h,flags)` (draw a `w×h` block of
+  contiguous sheet tiles — id at col/row = `id + row*w + col` — for 16×16+
+  players/bosses/UI panels; flip applies per tile, the block isn't mirrored),
+  `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
 - **Input & timing:** `btn(mask)→0/1` (held), `btnp(mask)→0/1` (pressed *this*
