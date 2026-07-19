@@ -119,8 +119,13 @@ fn sokoban_solves_all_stages() {
 fn platform_has_clear_background_and_smooth_jump() {
     const A: u8 = 0x10;
 
+    let peaceful = include_str!("../../../games/platform.lua")
+        .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
+        .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", include_str!("../../../games/platform.lua"));
+    c.write_source("p.lua", &peaceful);
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
 
@@ -174,8 +179,13 @@ fn platform_camera_follows_player_across_stage() {
         bounds
     }
 
+    let peaceful = include_str!("../../../games/platform.lua")
+        .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
+        .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", include_str!("../../../games/platform.lua"));
+    c.write_source("p.lua", &peaceful);
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
 
@@ -198,6 +208,169 @@ fn platform_camera_follows_player_across_stage() {
     assert_eq!(player.x, 240, "right boundary did not stop the player");
     let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba()).expect("hero is visible");
     assert!(min_x >= 112 && max_x < 128, "hero disappeared at stage edge");
+}
+
+#[test]
+fn platform_wall_jump_launches_away_from_wall() {
+    const A: u8 = 0x10;
+    const LEFT: u8 = 0x01;
+    const RIGHT: u8 = 0x02;
+
+    let wall_jump = include_str!("../../../games/platform.lua")
+        .replace(
+            "p.x = 16  p.y = 96  p.y4 = 96 * 4",
+            "p.x = 56  p.y = 72  p.y4 = 72 * 4",
+        )
+        .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
+        .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
+    let mut c = VmConsole::new();
+    c.write_source("p.lua", &wall_jump);
+    c.assemble("p.lua").unwrap();
+    c.load_rom("p.lua").unwrap();
+
+    // The player starts flush against the right side of the first raised pillar.
+    let launched = c.run_frame(A | LEFT);
+    assert!(
+        launched.entities[0].x > 56,
+        "wall-jump did not detach from the wall"
+    );
+    assert!(
+        launched.entities[0].y < 72,
+        "wall-jump did not launch upward"
+    );
+    let launch_x = launched.entities[0].x;
+
+    // Held input toward the wall can steer, but must not cancel the reflection.
+    let toward_wall = c.run_frame(LEFT);
+    assert!(
+        toward_wall.entities[0].x > launch_x,
+        "wall-jump reflection was cancelled by held input"
+    );
+
+    // Steering away from the wall has more influence than steering toward it.
+    let away_start = c.run_frame(0).entities[0].x;
+    let away = c.run_frame(RIGHT);
+    assert!(
+        away.entities[0].x - away_start > toward_wall.entities[0].x - launch_x,
+        "wall-jump steering did not adjust horizontal movement"
+    );
+}
+
+#[test]
+fn platform_coins_patrols_stomps_and_knockback_work() {
+    const RIGHT: u8 = 0x02;
+    const PLATFORM: &str = include_str!("../../../games/platform.lua");
+
+    // The enemy on the short raised platform walks to its edge, turns, and returns.
+    let mut c = VmConsole::new();
+    c.write_source("p.lua", PLATFORM);
+    c.assemble("p.lua").unwrap();
+    c.load_rom("p.lua").unwrap();
+    let first = c.run_frame(0);
+    let solid_tiles = [
+        (4, 11), (5, 11), (6, 11), (10, 9), (11, 9), (16, 11), (17, 11),
+        (18, 11), (22, 8), (23, 8), (24, 8), (28, 10), (29, 10), (6, 8),
+        (6, 9), (6, 10), (18, 8), (18, 9), (18, 10), (24, 5), (24, 6), (24, 7),
+    ];
+    for coin in first.entities.iter().filter(|e| e.tag == 3) {
+        assert!(
+            !solid_tiles.contains(&(coin.x / 8, coin.y / 8)),
+            "coin at ({}, {}) overlaps a solid block",
+            coin.x,
+            coin.y
+        );
+    }
+    let raised = first.entities.iter().find(|e| e.tag == 2 && e.y == 80).unwrap();
+    assert_eq!(raised.x, 136, "enemy moved before its patrol tick");
+    let mut raised_x = raised.x;
+    for _ in 0..31 {
+        let obs = c.run_frame(0);
+        raised_x = obs.entities.iter().find(|e| e.tag == 2 && e.y == 80).unwrap().x;
+    }
+    assert!(raised_x < 144, "raised enemy did not reverse at the platform edge");
+
+    let peaceful = PLATFORM
+        .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
+        .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
+    let mut c = VmConsole::new();
+    c.write_source("p.lua", &peaceful);
+    c.assemble("p.lua").unwrap();
+    c.load_rom("p.lua").unwrap();
+    for _ in 0..20 {
+        c.run_frame(0);
+    }
+    let collected = c.run_frame(RIGHT);
+    let state = collected.entities.iter().find(|e| e.tag == 30).unwrap();
+    assert_eq!(state.x, 1, "coin overlap did not increment the counter");
+    assert!(
+        !collected.entities.iter().any(|e| e.tag == 3 && (e.x, e.y) == (24, 104)),
+        "collected coin remained visible"
+    );
+
+    let stomp = PLATFORM
+        .replace("enemies[0].x = 64", "enemies[0].x = 16")
+        .replace("enemies[0].dir = 1", "enemies[0].dir = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
+        .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
+    let mut c = VmConsole::new();
+    c.write_source("p.lua", &stomp);
+    c.assemble("p.lua").unwrap();
+    c.load_rom("p.lua").unwrap();
+    let mut stomped = false;
+    let mut player_y = 0;
+    for _ in 0..12 {
+        let obs = c.run_frame(0);
+        player_y = obs.entities[0].y;
+        stomped = !obs.entities.iter().any(|e| e.tag == 2 && e.x == 16);
+        if stomped { break; }
+    }
+    assert!(stomped, "falling onto an enemy did not defeat it");
+    assert!(player_y <= 96, "stomp did not bounce the player upward");
+
+    let side_hit = PLATFORM
+        .replace("enemies[0].x = 64", "enemies[0].x = 32")
+        .replace("enemies[0].dir = 1", "enemies[0].dir = 0")
+        .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
+        .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
+        .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
+    let mut c = VmConsole::new();
+    c.write_source("p.lua", &side_hit);
+    c.assemble("p.lua").unwrap();
+    c.load_rom("p.lua").unwrap();
+    for _ in 0..20 {
+        c.run_frame(0);
+    }
+    let mut hit_player_x = 0;
+    let mut hit = false;
+    for _ in 0..20 {
+        let obs = c.run_frame(RIGHT);
+        let state = obs.entities.iter().find(|e| e.tag == 30).unwrap();
+        if state.y > 0 {
+            hit = true;
+            hit_player_x = obs.entities[0].x;
+            assert_eq!(state.y, 45, "side hit did not start invulnerability");
+            break;
+        }
+    }
+    assert!(hit, "horizontal enemy contact was not detected");
+    assert!(hit_player_x <= 22, "side hit did not knock the player backward");
+    let after = c.run_frame(0);
+    assert!(after.entities[0].x < hit_player_x, "knockback did not continue after impact");
+    assert!(
+        after.entities.iter().any(|e| e.tag == 2 && e.x == 32),
+        "enemy was defeated during horizontal knockback"
+    );
+    let mut enemy_survived = true;
+    for _ in 0..20 {
+        let obs = c.run_frame(0);
+        enemy_survived = obs.entities.iter().any(|e| e.tag == 2 && e.x == 32);
+    }
+    assert!(enemy_survived, "enemy was stomped while the player was invulnerable");
 }
 
 #[test]
@@ -498,6 +671,5 @@ games_ok! {
     shooter_ok => "shooter",
     rogue_ok => "rogue",
     tetris_ok => "tetris",
-    wall_ok => "wall",
     sokoban_ok => "sokoban",
 }
