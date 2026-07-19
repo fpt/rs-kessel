@@ -26,8 +26,9 @@ final class PixelView: NSView {
     var image: CGImage?
     private(set) var pressed: UInt8 = 0
 
-    // Top-left origin so the framebuffer's first row renders at the top.
-    override var isFlipped: Bool { true }
+    // Keep the default bottom-left origin: `CGContext.draw(_:in:)` renders a
+    // CGImage upright in that space (framebuffer row 0 at the top). A flipped
+    // view would concatenate a y-flip into the context and draw it upside down.
     override var acceptsFirstResponder: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
