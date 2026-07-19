@@ -937,10 +937,16 @@ struct Compiler {
     tilemap: Option<(String, u16, u16)>,
     data: Vec<String>,
     label_ctr: usize,
-    /// Monotonic id for local/for storage slots, so every declaration gets its
-    /// own `.res` cell — distinct labels are what make lexical shadowing correct
-    /// (an inner `local i` can't clobber an outer one) and can never collide.
+    /// Monotonic id for fresh local/for storage slots, so a newly-emitted `.res`
+    /// label can never collide with another.
     slot_ctr: usize,
+    /// Storage slots currently live (a stack, in allocation order) and slots
+    /// released by ended scopes and available for reuse — each `(label, physical
+    /// size)`. Together they let disjoint declarations share a cell while a live
+    /// slot is never reused (so lexical shadows stay distinct). Reset per
+    /// function, since a callee's locals are live while the caller's are too.
+    live_slots: Vec<(String, u16)>,
+    free_slots: Vec<(String, u16)>,
     loop_ends: Vec<String>,
     cur_func: String,
     helpers: Helpers,
@@ -1062,6 +1068,8 @@ impl Compiler {
             data: Vec::new(),
             label_ctr: 0,
             slot_ctr: 0,
+            live_slots: Vec::new(),
+            free_slots: Vec::new(),
             loop_ends: Vec::new(),
             cur_func: String::new(),
             helpers: Helpers::default(),
@@ -1074,16 +1082,36 @@ impl Compiler {
         l
     }
 
-    /// Allocate a fresh, unique `.res` storage slot of `size` bytes for a local
-    /// named `name`, and return its label. Each declaration gets its own cell (a
-    /// monotonic id keeps labels distinct), so two same-named locals — whether
-    /// reused in disjoint branches or shadowing across nested blocks — never
-    /// share storage or collide on a duplicate `.res` label.
+    /// Allocate a storage slot of `size` bytes for a local named `name`, and
+    /// return its label. Slots are lifetime-scoped: a cell released by a block
+    /// that has ended (see [`Compiler::release_slots`]) is reused for a later
+    /// disjoint declaration, so sequential same-named locals / for-counters share
+    /// one cell — but a slot that is still live is never handed out, so a nested
+    /// shadow always gets a distinct cell. First-fit over the free list by
+    /// physical size (a bigger freed cell can back a smaller local); otherwise a
+    /// fresh, uniquely-labelled `.res` is emitted.
     fn alloc_slot(&mut self, name: &str, size: u16) -> String {
-        let label = format!("lx_l_{}_{}_{}", self.cur_func, name, self.slot_ctr);
-        self.slot_ctr += 1;
-        self.data.push(format!("@{label} .res {size}"));
-        label
+        if let Some(pos) = self.free_slots.iter().position(|(_, phys)| *phys >= size) {
+            let (label, phys) = self.free_slots.remove(pos);
+            self.live_slots.push((label.clone(), phys)); // keep the cell's real size
+            label
+        } else {
+            let label = format!("lx_l_{}_{}_{}", self.cur_func, name, self.slot_ctr);
+            self.slot_ctr += 1;
+            self.data.push(format!("@{label} .res {size}"));
+            self.live_slots.push((label.clone(), size));
+            label
+        }
+    }
+
+    /// Release every slot allocated since `mark` (a `live_slots` length captured
+    /// on block entry) back to the free list, newest first. Called when a lexical
+    /// scope ends, making those cells available to later disjoint declarations.
+    fn release_slots(&mut self, mark: usize) {
+        while self.live_slots.len() > mark {
+            let slot = self.live_slots.pop().expect("live_slots underflow");
+            self.free_slots.push(slot);
+        }
     }
 
     fn compile(&mut self, decls: &[Decl], d: &mut Vec<Diagnostic>) -> String {
@@ -1261,6 +1289,11 @@ impl Compiler {
         d: &mut Vec<Diagnostic>,
     ) -> String {
         self.locals.clear();
+        // Slot reuse is per-function: a callee's locals are live at the same time
+        // as the caller's, so a freed slot from another function must never be
+        // handed out here. Params stay live for the whole body (never released).
+        self.live_slots.clear();
+        self.free_slots.clear();
         self.cur_func = name.to_string();
 
         // Declare param slots. Aggregates are passed by address (word slot).
@@ -1297,9 +1330,11 @@ impl Compiler {
     /// of scope, which is what governs resolution.
     fn gen_block(&mut self, stmts: &[Stmt], out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
         let saved = self.locals.clone();
+        let mark = self.live_slots.len();
         for s in stmts {
             self.gen_stmt(s, out, d);
         }
+        self.release_slots(mark); // block's slots become reusable
         self.locals = saved;
     }
 
@@ -1374,9 +1409,10 @@ impl Compiler {
                 };
                 // The counter is scoped to the loop: snapshot the binding map so
                 // it (and anything the body declares) falls out of scope after the
-                // loop. Give the counter and the (once-evaluated) limit their own
-                // storage via `alloc_slot`.
+                // loop, and mark the slot stack so the counter and limit cells are
+                // released (reusable) once the loop ends.
                 let saved = self.locals.clone();
+                let mark = self.live_slots.len();
                 let label = self.alloc_slot(var, Ty::Word.size());
                 let limit = self.alloc_slot(&format!("{var}_limit"), Ty::Word.size());
                 // Lua evaluates the numeric-for expressions ONCE, in the enclosing
@@ -1404,6 +1440,7 @@ impl Compiler {
                 // i = i + step
                 out.push(format!("{label} LOAD16 {step_val} ADD {label} STORE16"));
                 out.push(format!("{top} JMP @{end}"));
+                self.release_slots(mark); // counter + limit cells reusable
                 self.locals = saved; // counter leaves scope
             }
             Stmt::Break(line) => match self.loop_ends.last() {
@@ -2455,6 +2492,34 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 4);
+    }
+
+    fn local_slot_count(asm: &str) -> usize {
+        asm.lines()
+            .filter(|l| l.trim_start().starts_with("@lx_l_") && l.contains(".res"))
+            .count()
+    }
+
+    #[test]
+    fn disjoint_declarations_reuse_storage() {
+        // Two disjoint for-loops (counter + limit each) must SHARE cells once the
+        // first loop's scope ends — 2 slots total, not 4. This is the storage
+        // reuse the free list buys back on top of correct scoping.
+        let reuse = compile("function draw() for i = 0, 3 do end  for j = 0, 3 do end end");
+        assert!(reuse.ok(), "{:?}", reuse.diagnostics);
+        assert_eq!(local_slot_count(&reuse.asm), 2, "disjoint loops should reuse the same 2 cells");
+    }
+
+    #[test]
+    fn live_shadows_do_not_reuse_storage() {
+        // When the outer binding is still live, the inner shadow must get its OWN
+        // cell (not reuse the outer's) — here the outer `i` and the nested `i`
+        // are simultaneously live, so two distinct slots.
+        let shadow = compile(
+            "function draw() local i = 1  if i == 1 then local i = 2  entity(i,0,2) end  entity(i,0,1) end",
+        );
+        assert!(shadow.ok(), "{:?}", shadow.diagnostics);
+        assert_eq!(local_slot_count(&shadow.asm), 2, "live shadow needs a distinct cell");
     }
 
     #[test]
