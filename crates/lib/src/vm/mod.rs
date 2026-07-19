@@ -155,9 +155,12 @@ impl VmConsole {
 
     /// A host-play frame tick: toggle pause on the rising edge of the ROM's
     /// pause button, then advance one frame **unless** paused. The pause button
-    /// (default START) comes from the ROM's `controls` metadata, so pausing is a
-    /// host concern the game never sees. Used by the play window; the agent's
-    /// `vm_run_frame` drives [`run_frame`](Self::run_frame) directly instead.
+    /// (default START) comes from the ROM's `controls` metadata; it is a host
+    /// control, so its bit is **masked out** of the buttons handed to the game —
+    /// the game never sees it, not even on the frame play resumes (otherwise the
+    /// resume press would leak in as a `btn`/`btnp` on the pause button). Used by
+    /// the play window; the agent's `vm_run_frame` drives
+    /// [`run_frame`](Self::run_frame) directly instead.
     pub fn play_tick(&mut self, buttons: u8) {
         let pause_bit = self.active_controls.pause_bit();
         let down = pause_bit != 0 && buttons & pause_bit != 0;
@@ -166,7 +169,7 @@ impl VmConsole {
         }
         self.prev_pause_down = down;
         if !self.paused {
-            self.run_frame(buttons);
+            self.run_frame(buttons & !pause_bit);
         }
     }
 
@@ -426,6 +429,49 @@ mod tests {
         let o2 = c.run_frame(device::BTN_LEFT);
         assert_eq!(o2.buttons, vec!["LEFT"]);
         assert_eq!(o2.entities[0].x, 31);
+    }
+
+    #[test]
+    fn play_tick_pauses_and_masks_the_pause_button() {
+        // A game that (a) advances a counter each frame and (b) reacts to the
+        // pause button (START) itself via btnp — reporting the counter as an
+        // entity so we can read it. Pause must freeze the counter AND the game
+        // must never observe a START press (default pause button), even on the
+        // frame play resumes.
+        let src = r#"
+            local n = 0
+            local hits = 0
+            function update()
+              n = n + 1
+              if btnp(START) then hits = hits + 1 end
+            end
+            function draw() cls(0)  entity(n, hits, 1) end
+        "#;
+        let mut c = VmConsole::new();
+        c.write_source("p.lua", src);
+        assert!(c.assemble("p.lua").unwrap().ok());
+        c.load_rom("p.lua").unwrap();
+
+        // The last entity reported: (x = n, y = hits).
+        let read = |c: &VmConsole| {
+            let e = c.vm.devices.entities.last().copied().unwrap();
+            (e.x, e.y)
+        };
+
+        c.play_tick(0); // n=1
+        c.play_tick(0); // n=2
+        assert_eq!(read(&c), (2, 0));
+        assert!(!c.is_paused());
+
+        c.play_tick(device::BTN_START); // pause (down edge): frame skipped
+        assert!(c.is_paused());
+        assert_eq!(read(&c), (2, 0), "frozen while paused");
+        c.play_tick(0); // release, still paused
+        c.play_tick(device::BTN_START); // resume (down edge)
+        assert!(!c.is_paused());
+        // n advanced to 3, but hits is STILL 0: the pause button was masked out,
+        // so btnp(START) never fired despite the game watching for it.
+        assert_eq!(read(&c), (3, 0), "pause button leaked into the game");
     }
 
     #[test]
