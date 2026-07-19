@@ -200,6 +200,50 @@ fn platform_camera_follows_player_across_stage() {
     assert!(min_x >= 112 && max_x < 128, "hero disappeared at stage edge");
 }
 
+#[test]
+fn shooter_centres_bullets_and_player_can_die() {
+    const A: u8 = 0x10;
+    const SHOOTER: &str = include_str!("../../../games/shooter.lua");
+
+    let mut c = VmConsole::new();
+    c.write_source("s.lua", SHOOTER);
+    c.assemble("s.lua").unwrap();
+    c.load_rom("s.lua").unwrap();
+    c.run_frame(0);
+    c.run_frame(A);
+
+    let rgba = c.framebuffer_rgba();
+    let mut yellow_x = Vec::new();
+    for (index, pixel) in rgba.chunks_exact(4).enumerate() {
+        if pixel == [0xff, 0xec, 0x27, 0xff] {
+            yellow_x.push(index % 128);
+        }
+    }
+    assert!(!yellow_x.is_empty(), "fired bullet was not rendered");
+    assert_eq!(
+        (*yellow_x.iter().min().unwrap(), *yellow_x.iter().max().unwrap()),
+        (63, 64),
+        "bullet was not aligned to the ship centreline"
+    );
+
+    // Make spawned enemies track the initial ship x so collision is deterministic.
+    let targeted = SHOOTER.replace("foes[i].x = rnd(120)", "foes[i].x = px");
+    let mut c = VmConsole::new();
+    c.write_source("s.lua", &targeted);
+    c.assemble("s.lua").unwrap();
+    c.load_rom("s.lua").unwrap();
+
+    let mut player = c.run_frame(0).entities[0];
+    for _ in 0..150 {
+        player = c.run_frame(0).entities[0];
+    }
+    assert_eq!(player.tag, 2, "enemy collision did not kill the player");
+
+    player = c.run_frame(A).entities[0];
+    assert_eq!(player.tag, 1, "A did not restart after game over");
+    assert_eq!(player.x, 60, "restart did not reset the ship position");
+}
+
 macro_rules! games_ok {
     ($($test:ident => $file:literal),+ $(,)?) => {
         $(
