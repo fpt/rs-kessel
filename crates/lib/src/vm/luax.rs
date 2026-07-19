@@ -905,9 +905,9 @@ struct Compiler {
     /// Declared sprites in id order (name, rows); each `NAME` is a constant = its id.
     sprites: Vec<(String, Vec<String>)>,
     sprite_ids: HashMap<String, u16>,
-    /// The single declared tilemap: (label, width). `mget`/`mset`/`map`/`solid`
-    /// need it.
-    tilemap: Option<(String, u16)>,
+    /// The single declared tilemap: (label, width, height). `mget`/`mset`/`map`/
+    /// `solid` need it.
+    tilemap: Option<(String, u16, u16)>,
     data: Vec<String>,
     label_ctr: usize,
     loop_ends: Vec<String>,
@@ -1050,10 +1050,27 @@ impl Compiler {
         // Pass 1.6: the tilemap (single) — reserve its tile-id grid.
         for decl in decls {
             if let Decl::Tilemap { name, w, h, line } = decl {
-                let wv = self.eval_const(w, &mut vec![]).filter(|&v| v > 0);
-                let hv = self.eval_const(h, &mut vec![]).filter(|&v| v > 0);
+                // Validate before casting: dimensions in 1..=1024 and a grid that
+                // fits well inside the 64 KiB space (avoids u16 truncation and
+                // out-of-range addressing).
+                const MAX_DIM: i64 = 1024;
+                const MAX_CELLS: i64 = 0x4000; // 16 KiB of tile ids
+                let wv = self.eval_const(w, &mut vec![]);
+                let hv = self.eval_const(h, &mut vec![]);
                 let (wv, hv) = match (wv, hv) {
-                    (Some(a), Some(b)) => (a as u16, b as u16),
+                    (Some(a), Some(b))
+                        if (1..=MAX_DIM).contains(&a)
+                            && (1..=MAX_DIM).contains(&b)
+                            && a * b <= MAX_CELLS =>
+                    {
+                        (a as u16, b as u16)
+                    }
+                    (Some(_), Some(_)) => {
+                        d.push(err(*line, format!(
+                            "tilemap dimensions out of range (each 1..={MAX_DIM}, w*h <= {MAX_CELLS})"
+                        )));
+                        continue;
+                    }
                     _ => {
                         d.push(err(*line, "tilemap dimensions must be positive constants"));
                         continue;
@@ -1065,7 +1082,7 @@ impl Compiler {
                 }
                 let label = format!("lx_map_{name}");
                 self.data.push(format!("@{label} .res {}", wv as u32 * hv as u32));
-                self.tilemap = Some((label, wv));
+                self.tilemap = Some((label, wv, hv));
             }
         }
         // Pass 2: function signatures.
@@ -1566,7 +1583,7 @@ impl Compiler {
         // computes `map + ty*W + tx` and loads the tile id.
         if matches!(name, "mget" | "mset" | "map" | "solid") {
             let (map, w) = match &self.tilemap {
-                Some((l, w)) => (l.clone(), *w),
+                Some((l, w, _)) => (l.clone(), *w),
                 None => {
                     d.push(err(0, format!("{name}() needs a `tilemap` declaration")));
                     return;
@@ -1705,7 +1722,7 @@ impl Compiler {
             out.push_str("lx_sheet #1b DEO\n");
         }
         // Point the tilemap device at the map grid + its width.
-        if let Some((label, width)) = self.tilemap.clone() {
+        if let Some((label, width, _)) = self.tilemap.clone() {
             out.push_str(&format!("{label} #70 DEO {width} #71 DEO\n"));
         }
         if self.funcs.contains_key("init") {
@@ -1760,11 +1777,20 @@ impl Compiler {
             );
         }
         // solid ( px py -- 0/1 ): is the tile at pixel (px,py) SOLID (flag 0)?
+        // Off-map pixels (negative — a signed value like -1 is 0xffff — or past
+        // the map edge) are treated as not solid. The `LT` bounds checks are
+        // unsigned, so a wrapped-negative coordinate fails them and returns 0.
         if self.helpers.solid {
-            if let Some((map, w)) = self.tilemap.clone() {
-                // px>>3, py>>3 convert pixels to tile coords (8px tiles).
+            if let Some((map, w, h)) = self.tilemap.clone() {
+                let pw = w as u32 * 8; // map width/height in pixels
+                let ph = h as u32 * 8;
                 out.push_str(&format!(
-                    "@lx_solid #03 SHR SWAP #03 SHR SWAP {w} MUL ADD {map} ADD LOAD8 #00 lx_fget CALL RET\n"
+                    "@lx_solid\n  lx_sy STORE16 lx_sx STORE16 \
+                     lx_sx LOAD16 {pw} LT lx_sy LOAD16 {ph} LT AND lx_solid_ok JNZ \
+                     #00 RET \
+                     @lx_solid_ok \
+                     lx_sx LOAD16 #03 SHR lx_sy LOAD16 #03 SHR {w} MUL ADD {map} ADD LOAD8 \
+                     #00 lx_fget CALL RET\n"
                 ));
             }
         }
@@ -1787,6 +1813,9 @@ impl Compiler {
         }
         if self.helpers.fset {
             out.push_str("@lx_ft_v .res 2\n@lx_ft_m .res 2\n");
+        }
+        if self.helpers.solid {
+            out.push_str("@lx_sx .res 2\n@lx_sy .res 2\n");
         }
         // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
         if !self.sprites.is_empty() {
@@ -2135,6 +2164,32 @@ mod tests {
         assert_eq!(c.vm.devices.framebuffer[0], 1);
         // cell (1,1) tile a -> screen (8,8): top-left pixel 1
         assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 1);
+    }
+
+    #[test]
+    fn tilemap_dimensions_out_of_range() {
+        let c = compile("tilemap level(65536, 1)\nfunction draw() end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("out of range")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn solid_off_map_is_not_solid() {
+        let src = r#"
+            tilemap level(4, 4)
+            local out: word
+            function init() mset(0, 0, 5)  fset(5, SOLID, 1) end
+            function draw()
+              out = 0
+              if solid(0 - 1, 0) == 0 then out = out + 1 end   -- negative x
+              if solid(999, 0) == 0 then out = out + 2 end       -- off the right edge
+              if solid(0, 999) == 0 then out = out + 4 end       -- off the bottom edge
+              if solid(2, 2) == 1 then out = out + 8 end          -- in-bounds solid cell
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1 + 2 + 4 + 8);
     }
 
     #[test]
