@@ -937,6 +937,10 @@ struct Compiler {
     tilemap: Option<(String, u16, u16)>,
     data: Vec<String>,
     label_ctr: usize,
+    /// Monotonic id for local/for storage slots, so every declaration gets its
+    /// own `.res` cell — distinct labels are what make lexical shadowing correct
+    /// (an inner `local i` can't clobber an outer one) and can never collide.
+    slot_ctr: usize,
     loop_ends: Vec<String>,
     cur_func: String,
     helpers: Helpers,
@@ -1057,6 +1061,7 @@ impl Compiler {
             tilemap: None,
             data: Vec::new(),
             label_ctr: 0,
+            slot_ctr: 0,
             loop_ends: Vec::new(),
             cur_func: String::new(),
             helpers: Helpers::default(),
@@ -1069,22 +1074,16 @@ impl Compiler {
         l
     }
 
-    /// Reserve a `.res` storage cell for `label`, at most once. Two same-named
-    /// locals in one function share the slot (valid Lua — e.g. `local i` reused
-    /// as a counter in disjoint branches); reserving it per-declaration emits a
-    /// duplicate `.res` label that the assembler rejects. Deduped by label (not
-    /// the full line) and grown to the largest requested size, so two locals of
-    /// the same name but different types still share one correctly-sized slot.
-    fn reserve_slot(&mut self, label: &str, size: u16) {
-        let prefix = format!("@{label} .res ");
-        if let Some(line) = self.data.iter_mut().find(|l| l.starts_with(&prefix)) {
-            let cur: u16 = line[prefix.len()..].trim().parse().unwrap_or(0);
-            if size > cur {
-                *line = format!("{prefix}{size}");
-            }
-        } else {
-            self.data.push(format!("{prefix}{size}"));
-        }
+    /// Allocate a fresh, unique `.res` storage slot of `size` bytes for a local
+    /// named `name`, and return its label. Each declaration gets its own cell (a
+    /// monotonic id keeps labels distinct), so two same-named locals — whether
+    /// reused in disjoint branches or shadowing across nested blocks — never
+    /// share storage or collide on a duplicate `.res` label.
+    fn alloc_slot(&mut self, name: &str, size: u16) -> String {
+        let label = format!("lx_l_{}_{}_{}", self.cur_func, name, self.slot_ctr);
+        self.slot_ctr += 1;
+        self.data.push(format!("@{label} .res {size}"));
+        label
     }
 
     fn compile(&mut self, decls: &[Decl], d: &mut Vec<Diagnostic>) -> String {
@@ -1290,10 +1289,18 @@ impl Compiler {
         format!("@lx_p_{name}\n  {}\n", out.join(" "))
     }
 
+    /// Generate a lexical block. Locals declared inside it are visible only
+    /// within it: the name→slot map is snapshotted on entry and restored on exit,
+    /// so an inner `local x` shadows an outer `x` for the block and the outer
+    /// binding comes back afterward (correct Lua scoping). Storage slots
+    /// (`alloc_slot`) are not freed — they're static — but their *names* fall out
+    /// of scope, which is what governs resolution.
     fn gen_block(&mut self, stmts: &[Stmt], out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
+        let saved = self.locals.clone();
         for s in stmts {
             self.gen_stmt(s, out, d);
         }
+        self.locals = saved;
     }
 
     fn gen_stmt(&mut self, s: &Stmt, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
@@ -1303,8 +1310,7 @@ impl Compiler {
                     Some(te) => self.resolve_type(te, d),
                     None => Ty::Word,
                 };
-                let label = format!("lx_l_{}_{}", self.cur_func, name);
-                self.reserve_slot(&label, vty.size());
+                let label = self.alloc_slot(name, vty.size());
                 self.locals.insert(
                     name.clone(),
                     VarInfo { label: label.clone(), ty: vty.clone(), by_ref: false },
@@ -1366,12 +1372,11 @@ impl Compiler {
                         }
                     },
                 };
-                let label = format!("lx_l_{}_{}", self.cur_func, var);
-                // The counter shares one storage slot with any other loop or
-                // `local` of the same name in this function (they don't run at
-                // once); `reserve_slot` dedups it and sizes it to the largest use,
-                // so a duplicate `.res` label can't break assembly.
-                self.reserve_slot(&label, Ty::Word.size());
+                // The counter is scoped to the loop: snapshot the binding map so
+                // it (and anything the body declares) falls out of scope after the
+                // loop, and give it its own storage slot via `alloc_slot`.
+                let saved = self.locals.clone();
+                let label = self.alloc_slot(var, Ty::Word.size());
                 self.locals.insert(
                     var.clone(),
                     VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
@@ -1393,6 +1398,7 @@ impl Compiler {
                 // i = i + step
                 out.push(format!("{label} LOAD16 {step_val} ADD {label} STORE16"));
                 out.push(format!("{top} JMP @{end}"));
+                self.locals = saved; // counter leaves scope
             }
             Stmt::Break(line) => match self.loop_ends.last() {
                 Some(end) => out.push(format!("{end} JMP")),
@@ -2379,8 +2385,9 @@ mod tests {
 
     #[test]
     fn two_for_loops_same_var_in_one_function() {
-        // Reusing `i` across two sequential for-loops must reserve the counter
-        // slot once — a duplicate `.res` label used to break assembly / results.
+        // Reusing `i` across two sequential for-loops must compile: each gets its
+        // own scoped slot, so there's no duplicate `.res` label (the old bug) and
+        // the counters don't interfere.
         let src = r#"
             local a: word
             local b: word
@@ -2400,11 +2407,10 @@ mod tests {
     }
 
     #[test]
-    fn same_named_locals_in_one_function_share_a_slot() {
-        // The `for`-counter dedup (above) also had to cover plain `local`
-        // declarations: reusing `local i` in disjoint branches of one function is
-        // valid Lua but used to emit a duplicate `.res lx_l_run_i` label the
-        // assembler rejected. Reserve one slot, sized to the largest use.
+    fn same_named_locals_in_disjoint_branches() {
+        // Reusing `local i` in disjoint branches of one function is valid Lua and
+        // must compile: block scoping gives each its own slot, so there's no
+        // duplicate `.res lx_l_run_i` label (the old bug).
         let src = r#"
             local g: word
             local out: word
@@ -2427,11 +2433,9 @@ mod tests {
     }
 
     #[test]
-    fn local_and_for_same_name_share_a_slot() {
-        // The dedup must also hold ACROSS the two paths: a `local i` and a `for i`
-        // in one function share `lx_l_run_i`. Because the local here is a byte
-        // (1 B) and the for-counter a word (2 B), this also exercises grow-to-max
-        // — a naive per-path `.res` would emit two conflicting labels.
+    fn local_and_for_same_name_compile() {
+        // A `local i` and a `for i` in one function: distinct scoped slots, no
+        // duplicate label even though the local is a byte and the counter a word.
         let src = r#"
             local g: word
             function run()
@@ -2445,6 +2449,50 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 4);
+    }
+
+    #[test]
+    fn nested_local_shadowing_is_lexically_scoped() {
+        // The reviewer's case (PR #36): an inner `local i` shadows an outer one
+        // only within its block. Reading the outer `i` after the block must see
+        // the OUTER value — distinct slots + scope restore, not a shared cell that
+        // would leak the inner value out.
+        let src = r#"
+            local out: word
+            local inner: word
+            function run()
+              local i = 5
+              if out == 0 then
+                local i = 9      -- shadows for this block only
+                inner = i        -- 9
+              end
+              out = i            -- outer i -> 5 (not 9)
+            end
+            function init() out = 0  inner = 0 end
+            function draw() run()  entity(out, 0, 1)  entity(inner, 0, 2) end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 5); // outer restored after the inner block
+        assert_eq!(o.entities[1].x, 9); // inner saw the shadowing value
+    }
+
+    #[test]
+    fn for_counter_leaves_scope_after_loop() {
+        // A `for` counter is scoped to its loop: a `local i` declared before the
+        // loop is the binding in effect again once the loop ends.
+        let src = r#"
+            local out: word
+            function run()
+              local i = 7
+              for i = 0, 3 do end   -- counter shadows within the loop only
+              out = i               -- back to the outer i = 7
+            end
+            function init() out = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 7);
     }
 
     #[test]
