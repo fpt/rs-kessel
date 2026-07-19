@@ -80,6 +80,7 @@ fn err(line: usize, message: impl Into<String>) -> Diagnostic {
 enum Tok {
     Ident(String),
     Num(i64),
+    Str(String), // a "..." literal — only valid as text()'s first argument
     Sym(&'static str),
     Eof,
 }
@@ -141,6 +142,26 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                 tok: Tok::Ident(b[start..i].iter().collect()),
                 line,
             });
+            continue;
+        }
+        // String literal: "..." (no escapes; for text() titles/labels). Newlines
+        // inside are not allowed — an unterminated string is a diagnostic.
+        if c == '"' {
+            let start_line = line;
+            i += 1;
+            let s_start = i;
+            while i < b.len() && b[i] != '"' && b[i] != '\n' {
+                i += 1;
+            }
+            if i >= b.len() || b[i] == '\n' {
+                diagnostics.push(err(start_line, "unterminated string literal"));
+            } else {
+                out.push(Token {
+                    tok: Tok::Str(b[s_start..i].iter().collect()),
+                    line,
+                });
+                i += 1; // closing quote
+            }
             continue;
         }
         // Number.
@@ -279,6 +300,7 @@ enum TypeExpr {
 #[allow(dead_code)]
 enum Expr {
     Num(i64, usize),
+    Str(String, usize), // "..." literal — only valid as text()'s first arg
     Var(String, usize),
     Field(Box<Expr>, String, usize),
     Index(Box<Expr>, Box<Expr>, usize),
@@ -291,6 +313,7 @@ impl Expr {
     fn line(&self) -> usize {
         match self {
             Expr::Num(_, l)
+            | Expr::Str(_, l)
             | Expr::Var(_, l)
             | Expr::Field(_, _, l)
             | Expr::Index(_, _, l)
@@ -812,6 +835,10 @@ impl Parser {
                 self.advance();
                 Expr::Num(n, line)
             }
+            Tok::Str(s) => {
+                self.advance();
+                Expr::Str(s, line)
+            }
             Tok::Ident(k) if k == "true" => {
                 self.advance();
                 Expr::Num(1, line)
@@ -925,6 +952,16 @@ struct Helpers {
     fget: bool,
     fset: bool,
     solid: bool,
+    flagat: bool,  // @lx_flagat ( px py flag -- bit ): bounds-checked fget(mget(...))
+    vscan: bool,   // @lx_vscan: scan a vertical edge, one sample per tile
+    hscan: bool,   // @lx_hscan: scan a horizontal edge, one sample per tile
+    maprect: bool, // @lx_maprect: rect vs tilemap overlap
+    touch: bool,   // @lx_touch_*: edge contact predicates
+    collx: bool,   // @lx_collx: axis-resolving X movement
+    colly: bool,   // @lx_colly: axis-resolving Y movement
+    text: bool,    // @lx_txt_x scratch for unrolled text()
+    number: bool,  // @lx_number: runtime decimal rendering
+    clear: bool,   // @lx_clear: zero a record/array in place
 }
 
 const BUTTON_CONSTS: &[(&str, i64)] = &[
@@ -956,12 +993,16 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "cls" => (1, false),
         "pset" => (3, false),
         "spr" => (4, false),
+        "sprn" => (6, false),
         "sspr" => (4, false),
         "entity" => (3, false),
         "camera" => (2, false),
         "poke" => (2, false),
         "poke16" => (2, false),
         "btn" => (1, true),
+        "btnp" => (1, true),
+        "btnr" => (1, true),
+        "frame_count" => (0, true),
         "rnd" => (1, true),
         "peek" => (1, true),
         "peek16" => (1, true),
@@ -974,6 +1015,17 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "fget" => (2, true),
         "fset" => (3, false),
         "solid" => (2, true),
+        "map_rect_overlap" => (5, true),
+        "collide_x" => (6, true),
+        "collide_y" => (6, true),
+        "touching_left" => (5, true),
+        "touching_right" => (5, true),
+        "touching_floor" => (5, true),
+        "touching_ceiling" => (5, true),
+        "number" => (4, false),
+        "sfx" => (1, false),
+        "music" => (1, false),
+        "music_stop" => (0, false),
         _ => return None,
     })
 }
@@ -1297,7 +1349,13 @@ impl Compiler {
                     },
                 };
                 let label = format!("lx_l_{}_{}", self.cur_func, var);
-                self.data.push(format!("@{label} .res 2"));
+                // Two `for i` loops in the same function share this storage slot
+                // (they don't run at once) — reserve it once, not once per loop,
+                // or the duplicate `.res` label breaks assembly.
+                let decl = format!("@{label} .res 2");
+                if !self.data.contains(&decl) {
+                    self.data.push(decl);
+                }
                 self.locals.insert(
                     var.clone(),
                     VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
@@ -1399,6 +1457,11 @@ impl Compiler {
         match e {
             Expr::Num(n, _) => {
                 out.push(((*n & 0xffff) as u16).to_string());
+                true
+            }
+            Expr::Str(_, line) => {
+                d.push(err(*line, "string literals are only allowed as text()'s first argument"));
+                out.push("0".to_string());
                 true
             }
             Expr::Var(name, _) => {
@@ -1510,6 +1573,7 @@ impl Compiler {
     fn type_of(&self, e: &Expr) -> Ty {
         match e {
             Expr::Num(..) => Ty::Word,
+            Expr::Str(..) => Ty::Word,
             Expr::Var(name, _) => {
                 if predefined_const(name).is_some() {
                     Ty::Word
@@ -1549,6 +1613,64 @@ impl Compiler {
     }
 
     fn gen_call(&mut self, name: &str, args: &[Expr], out: &mut Vec<String>, d: &mut Vec<Diagnostic>, line: usize) -> bool {
+        // `len(arr)` is a compile-time constant = the array's declared length.
+        if name == "len" {
+            if let [arg] = args {
+                if let Ty::Array(_, n) = self.type_of(arg) {
+                    out.push(n.to_string());
+                    return true;
+                }
+            }
+            d.push(err(line, "len() takes one array argument"));
+            out.push("0".to_string());
+            return true;
+        }
+        // `text("literal", x, y, color)` unrolls one glyph draw per character
+        // (the string is compile-time). Colour and y are set once; x advances by
+        // 4 px per glyph. No value.
+        if name == "text" {
+            if let [Expr::Str(s, _), x, y, color] = args {
+                self.helpers.text = true;
+                self.gen_expr(color, out, d);
+                out.push("#13 DEO".to_string()); // scolor
+                self.gen_expr(y, out, d);
+                out.push("#12 DEO".to_string()); // sy
+                self.gen_expr(x, out, d);
+                out.push("lx_txt_x STORE16".to_string()); // base x
+                for (i, ch) in s.bytes().enumerate() {
+                    let off = i as u16 * 4;
+                    if off == 0 {
+                        out.push("lx_txt_x LOAD16 #11 DEO".to_string());
+                    } else {
+                        out.push(format!("lx_txt_x LOAD16 {off} ADD #11 DEO"));
+                    }
+                    out.push(format!("#{ch:02x} #1c DEO")); // draw glyph
+                }
+            } else {
+                d.push(err(line, "text() takes a string literal, then x, y, color"));
+            }
+            return false;
+        }
+        // `clear(place)` zeroes a record or array in place — the compiler knows
+        // the aggregate's byte size, so it emits base-address + size + a memset.
+        if name == "clear" {
+            if let [arg] = args {
+                let mut place = Vec::new();
+                match self.gen_place_addr(arg, &mut place, d) {
+                    Some(ty) if !ty.is_scalar() => {
+                        self.helpers.clear = true;
+                        out.extend(place); // base address
+                        out.push(ty.size().to_string()); // byte count
+                        out.push("lx_clear CALL".to_string());
+                    }
+                    Some(_) => d.push(err(line, "clear() takes a record or array, not a scalar")),
+                    None => {} // gen_place_addr already reported why
+                }
+            } else {
+                d.push(err(line, "clear() takes one argument"));
+            }
+            return false;
+        }
         if let Some((argc, yields)) = builtin(name) {
             // On an arity mismatch, report it and emit nothing — a partial call
             // would leave the data stack unbalanced.
@@ -1578,10 +1700,24 @@ impl Compiler {
         false
     }
 
+    /// Enable `lx_flagat` and its dependencies (the flags table + `fget`), which
+    /// every tilemap-collision helper builds on.
+    fn need_flagat(&mut self) {
+        self.helpers.flagat = true;
+        self.helpers.flags = true;
+        self.helpers.fget = true;
+    }
+
     fn gen_builtin(&mut self, name: &str, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
         // Tilemap builtins need the single declared map (label + width). `mget`
-        // computes `map + ty*W + tx` and loads the tile id.
-        if matches!(name, "mget" | "mset" | "map" | "solid") {
+        // computes `map + ty*W + tx` and loads the tile id. The collision helpers
+        // reach the map through `lx_flagat` (which bakes in the map/width), so
+        // they only need the declaration to exist.
+        if matches!(
+            name,
+            "mget" | "mset" | "map" | "solid" | "map_rect_overlap" | "collide_x" | "collide_y"
+            | "touching_left" | "touching_right" | "touching_floor" | "touching_ceiling"
+        ) {
             let (map, w) = match &self.tilemap {
                 Some((l, w, _)) => (l.clone(), *w),
                 None => {
@@ -1607,6 +1743,33 @@ impl Compiler {
                     self.helpers.fget = true;
                     out.push("lx_solid CALL".to_string()); // ( px py -- 0/1 )
                 }
+                "map_rect_overlap" => {
+                    self.need_flagat();
+                    self.helpers.hscan = true; // scans each row of the rect
+                    self.helpers.maprect = true;
+                    out.push("lx_maprect CALL".to_string()); // ( x y w h flag -- bool )
+                }
+                "collide_x" => {
+                    self.need_flagat();
+                    self.helpers.vscan = true; // scans the vertical leading edge
+                    self.helpers.collx = true;
+                    out.push("lx_collx CALL".to_string()); // ( x y w h dx flag -- new_x )
+                }
+                "collide_y" => {
+                    self.need_flagat();
+                    self.helpers.hscan = true; // scans the horizontal leading edge
+                    self.helpers.colly = true;
+                    out.push("lx_colly CALL".to_string()); // ( x y w h dy flag -- new_y )
+                }
+                "touching_left" | "touching_right" | "touching_floor" | "touching_ceiling" => {
+                    self.need_flagat();
+                    // The four touching_* subroutines are emitted together, so
+                    // enable both scans regardless of which direction is used.
+                    self.helpers.vscan = true;
+                    self.helpers.hscan = true;
+                    self.helpers.touch = true;
+                    out.push(format!("lx_{name} CALL")); // ( x y w h flag -- bool )
+                }
                 _ => {}
             }
             return;
@@ -1616,11 +1779,19 @@ impl Compiler {
             "cls" => "#16 DEO",
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
             "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO",      // ( id x y flags ) blit by id
+            // ( id x y w h flags ) draw a w×h block of contiguous sheet tiles.
+            "sprn" => "#19 DEO #a2 DEO #a1 DEO #12 DEO #11 DEO #a0 DEO #00 #a3 DEO",
             "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO",     // ( addr x y flags ) raw blit
             "camera" => "#18 DEO #17 DEO",                   // ( x y )
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
             "btn" => "#20 DEI AND #00 NE",
+            "btnp" => "#21 DEI AND #00 NE", // just-pressed this frame
+            "btnr" => "#22 DEI AND #00 NE", // just-released this frame
+            "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
+            "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
+            "music" => "#91 DEO",           // ( id ) start a music track
+            "music_stop" => "#00 #92 DEO",  // stop music
             "rnd" => "#30 DEI SWAP MOD", // ( n ) -> rand % n
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
@@ -1649,6 +1820,10 @@ impl Compiler {
             "rect_overlap" => {
                 self.helpers.rect = true;
                 "lx_rect CALL"
+            }
+            "number" => {
+                self.helpers.number = true;
+                "lx_number CALL" // ( n x y color -- ) draw decimal at (x,y)
             }
             _ => "",
         };
@@ -1709,6 +1884,15 @@ impl Compiler {
                     ">>" => a >> b,
                     _ => return None,
                 })
+            }
+            // `len(arr)` folds to the array's declared length.
+            Expr::Call(name, args, _) if name == "len" => {
+                if let [Expr::Var(v, _)] = args.as_slice() {
+                    if let Some(Ty::Array(_, n)) = self.resolve_var(v).map(|i| i.ty) {
+                        return Some(n as i64);
+                    }
+                }
+                None
             }
             _ => None,
         }
@@ -1794,6 +1978,203 @@ impl Compiler {
                 ));
             }
         }
+        // flagat ( px py flag -- bit ): the generalized `solid` — is bit `flag`
+        // set on the tile under pixel (px,py)? Off-map pixels (unsigned bounds
+        // check fails a wrapped-negative coord) read as 0. The rect/edge/collision
+        // helpers below all sample the map through this.
+        if self.helpers.flagat {
+            if let Some((map, w, h)) = self.tilemap.clone() {
+                let pw = w as u32 * 8;
+                let ph = h as u32 * 8;
+                out.push_str(&format!(
+                    "@lx_flagat\n  lx_fa_f STORE16 lx_fa_y STORE16 lx_fa_x STORE16 \
+                     lx_fa_x LOAD16 {pw} LT lx_fa_y LOAD16 {ph} LT AND lx_flagat_ok JNZ \
+                     #00 RET \
+                     @lx_flagat_ok \
+                     lx_fa_x LOAD16 #03 SHR lx_fa_y LOAD16 #03 SHR {w} MUL ADD {map} ADD LOAD8 \
+                     lx_fa_f LOAD16 lx_fget CALL RET\n"
+                ));
+            }
+        }
+        // vscan ( px y0 y1 flag -- bit ): 1 if any tile with `flag` is set along
+        // the vertical segment x=px, y in [y0,y1]. Steps one sample per tile
+        // (every 8 px) and always samples the far end y1, so a tile between the
+        // endpoints of a tall box can't be skipped.
+        if self.helpers.vscan {
+            out.push_str(
+                "@lx_vscan\n  lx_vs_f STORE16 lx_vs_y1 STORE16 lx_vs_py STORE16 lx_vs_px STORE16 \
+                 #00 lx_vs_acc STORE16 \
+                 @lx_vscan_lp \
+                 lx_vs_px LOAD16 lx_vs_py LOAD16 lx_vs_f LOAD16 lx_flagat CALL \
+                 lx_vs_acc LOAD16 OR lx_vs_acc STORE16 \
+                 lx_vs_py LOAD16 lx_vs_y1 LOAD16 LT #00 EQ lx_vscan_done JNZ \
+                 lx_vs_py LOAD16 #08 ADD lx_vs_py STORE16 \
+                 lx_vs_py LOAD16 lx_vs_y1 LOAD16 GT lx_vscan_clamp JNZ \
+                 lx_vscan_lp JMP \
+                 @lx_vscan_clamp lx_vs_y1 LOAD16 lx_vs_py STORE16 lx_vscan_lp JMP \
+                 @lx_vscan_done lx_vs_acc LOAD16 RET\n",
+            );
+        }
+        // hscan ( x0 x1 py flag -- bit ): the horizontal mirror of vscan.
+        if self.helpers.hscan {
+            out.push_str(
+                "@lx_hscan\n  lx_hs_f STORE16 lx_hs_py STORE16 lx_hs_x1 STORE16 lx_hs_px STORE16 \
+                 #00 lx_hs_acc STORE16 \
+                 @lx_hscan_lp \
+                 lx_hs_px LOAD16 lx_hs_py LOAD16 lx_hs_f LOAD16 lx_flagat CALL \
+                 lx_hs_acc LOAD16 OR lx_hs_acc STORE16 \
+                 lx_hs_px LOAD16 lx_hs_x1 LOAD16 LT #00 EQ lx_hscan_done JNZ \
+                 lx_hs_px LOAD16 #08 ADD lx_hs_px STORE16 \
+                 lx_hs_px LOAD16 lx_hs_x1 LOAD16 GT lx_hscan_clamp JNZ \
+                 lx_hscan_lp JMP \
+                 @lx_hscan_clamp lx_hs_x1 LOAD16 lx_hs_px STORE16 lx_hscan_lp JMP \
+                 @lx_hscan_done lx_hs_acc LOAD16 RET\n",
+            );
+        }
+        // map_rect_overlap ( x y w h flag -- bool ): scan every tile row the rect
+        // covers (hscan per row, one sample per tile) so an interior tile can't be
+        // missed. Returns on the first flagged row.
+        if self.helpers.maprect {
+            out.push_str(
+                "@lx_maprect\n  lx_mr_f STORE16 lx_mr_h STORE16 lx_mr_w STORE16 \
+                 lx_mr_y STORE16 lx_mr_x STORE16 \
+                 lx_mr_y LOAD16 lx_mr_py STORE16 \
+                 lx_mr_y LOAD16 lx_mr_h LOAD16 ADD #01 SUB lx_mr_y1 STORE16 \
+                 @lx_maprect_lp \
+                 lx_mr_x LOAD16 lx_mr_x LOAD16 lx_mr_w LOAD16 ADD #01 SUB \
+                 lx_mr_py LOAD16 lx_mr_f LOAD16 lx_hscan CALL \
+                 lx_maprect_hit JNZ \
+                 lx_mr_py LOAD16 lx_mr_y1 LOAD16 LT #00 EQ lx_maprect_miss JNZ \
+                 lx_mr_py LOAD16 #08 ADD lx_mr_py STORE16 \
+                 lx_mr_py LOAD16 lx_mr_y1 LOAD16 GT lx_maprect_clamp JNZ \
+                 lx_maprect_lp JMP \
+                 @lx_maprect_clamp lx_mr_y1 LOAD16 lx_mr_py STORE16 lx_maprect_lp JMP \
+                 @lx_maprect_hit #01 RET \
+                 @lx_maprect_miss #00 RET\n",
+            );
+        }
+        // touching_* ( x y w h flag -- bool ): scan the whole edge one pixel
+        // OUTSIDE the box (vscan for the vertical sides, hscan for top/bottom), so
+        // a box taller/wider than a tile still reports contact. Shared scratch.
+        if self.helpers.touch {
+            out.push_str(
+                "@lx_touching_left\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 #01 SUB lx_tc_y LOAD16 lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB \
+                 lx_tc_f LOAD16 lx_vscan CALL RET\n",
+            );
+            out.push_str(
+                "@lx_touching_right\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD lx_tc_y LOAD16 lx_tc_y LOAD16 lx_tc_h LOAD16 ADD #01 SUB \
+                 lx_tc_f LOAD16 lx_vscan CALL RET\n",
+            );
+            out.push_str(
+                "@lx_touching_floor\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 lx_tc_h LOAD16 ADD \
+                 lx_tc_f LOAD16 lx_hscan CALL RET\n",
+            );
+            out.push_str(
+                "@lx_touching_ceiling\n  lx_tc_f STORE16 lx_tc_h STORE16 lx_tc_w STORE16 \
+                 lx_tc_y STORE16 lx_tc_x STORE16 \
+                 lx_tc_x LOAD16 lx_tc_x LOAD16 lx_tc_w LOAD16 ADD #01 SUB lx_tc_y LOAD16 #01 SUB \
+                 lx_tc_f LOAD16 lx_hscan CALL RET\n",
+            );
+        }
+        // collide_x ( x y w h dx flag -- new_x ): move by signed dx; if the whole
+        // leading vertical edge (right side if dx>0, left if dx<0) hits a flagged
+        // tile (vscan covers every tile along it), snap to the tile boundary.
+        // Assumes the box starts clear and dx is small (no tunneling past a tile).
+        if self.helpers.collx {
+            out.push_str(
+                "@lx_collx\n  lx_cx_f STORE16 lx_cx_dx STORE16 lx_cx_h STORE16 lx_cx_w STORE16 \
+                 lx_cx_y STORE16 lx_cx_x STORE16 \
+                 lx_cx_x LOAD16 lx_cx_dx LOAD16 ADD lx_cx_t STORE16 \
+                 lx_cx_dx LOAD16 #8000 XOR #8000 GT lx_collx_right JNZ \
+                 lx_cx_dx LOAD16 #8000 XOR #8000 LT lx_collx_left JNZ \
+                 lx_cx_t LOAD16 RET \
+                 @lx_collx_right \
+                 lx_cx_t LOAD16 lx_cx_w LOAD16 ADD #01 SUB lx_cx_lead STORE16 \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB \
+                 lx_cx_f LOAD16 lx_vscan CALL \
+                 lx_collx_rhit JNZ \
+                 lx_cx_t LOAD16 RET \
+                 @lx_collx_rhit lx_cx_lead LOAD16 #03 SHR #03 SHL lx_cx_w LOAD16 SUB RET \
+                 @lx_collx_left \
+                 lx_cx_t LOAD16 lx_cx_lead STORE16 \
+                 lx_cx_lead LOAD16 lx_cx_y LOAD16 lx_cx_y LOAD16 lx_cx_h LOAD16 ADD #01 SUB \
+                 lx_cx_f LOAD16 lx_vscan CALL \
+                 lx_collx_lhit JNZ \
+                 lx_cx_t LOAD16 RET \
+                 @lx_collx_lhit lx_cx_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
+            );
+        }
+        // collide_y ( x y w h dy flag -- new_y ): the Y-axis mirror of collide_x
+        // (leading horizontal edge = bottom if dy>0, top if dy<0; hscan covers it).
+        if self.helpers.colly {
+            out.push_str(
+                "@lx_colly\n  lx_cy_f STORE16 lx_cy_dy STORE16 lx_cy_h STORE16 lx_cy_w STORE16 \
+                 lx_cy_y STORE16 lx_cy_x STORE16 \
+                 lx_cy_y LOAD16 lx_cy_dy LOAD16 ADD lx_cy_t STORE16 \
+                 lx_cy_dy LOAD16 #8000 XOR #8000 GT lx_colly_down JNZ \
+                 lx_cy_dy LOAD16 #8000 XOR #8000 LT lx_colly_up JNZ \
+                 lx_cy_t LOAD16 RET \
+                 @lx_colly_down \
+                 lx_cy_t LOAD16 lx_cy_h LOAD16 ADD #01 SUB lx_cy_lead STORE16 \
+                 lx_cy_x LOAD16 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 \
+                 lx_cy_f LOAD16 lx_hscan CALL \
+                 lx_colly_dhit JNZ \
+                 lx_cy_t LOAD16 RET \
+                 @lx_colly_dhit lx_cy_lead LOAD16 #03 SHR #03 SHL lx_cy_h LOAD16 SUB RET \
+                 @lx_colly_up \
+                 lx_cy_t LOAD16 lx_cy_lead STORE16 \
+                 lx_cy_x LOAD16 lx_cy_x LOAD16 lx_cy_w LOAD16 ADD #01 SUB lx_cy_lead LOAD16 \
+                 lx_cy_f LOAD16 lx_hscan CALL \
+                 lx_colly_uhit JNZ \
+                 lx_cy_t LOAD16 RET \
+                 @lx_colly_uhit lx_cy_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
+            );
+        }
+        // number ( n x y color -- ): render `n` in decimal at (x,y). Digits are
+        // extracted least-significant-first into a small buffer, then drawn
+        // left-to-right (4 px/glyph) via the font device.
+        if self.helpers.number {
+            out.push_str(
+                "@lx_number\n  #13 DEO #12 DEO lx_num_x STORE16 lx_num_n STORE16 \
+                 #00 lx_num_cnt STORE16 \
+                 @lx_number_ext \
+                 lx_num_n LOAD16 #0a MOD lx_num_buf lx_num_cnt LOAD16 ADD STORE8 \
+                 lx_num_cnt LOAD16 #01 ADD lx_num_cnt STORE16 \
+                 lx_num_n LOAD16 #0a DIV lx_num_n STORE16 \
+                 lx_num_n LOAD16 #00 EQ lx_number_draw JNZ \
+                 lx_number_ext JMP \
+                 @lx_number_draw \
+                 lx_num_cnt LOAD16 #01 SUB lx_num_j STORE16 \
+                 lx_num_x LOAD16 lx_num_px STORE16 \
+                 @lx_number_dloop \
+                 lx_num_px LOAD16 #11 DEO \
+                 #30 lx_num_buf lx_num_j LOAD16 ADD LOAD8 ADD #1c DEO \
+                 lx_num_px LOAD16 #04 ADD lx_num_px STORE16 \
+                 lx_num_j LOAD16 #00 EQ lx_number_done JNZ \
+                 lx_num_j LOAD16 #01 SUB lx_num_j STORE16 \
+                 lx_number_dloop JMP \
+                 @lx_number_done RET\n",
+            );
+        }
+        // clear ( addr n -- ): write n zero bytes from addr (memset for `clear`).
+        if self.helpers.clear {
+            out.push_str(
+                "@lx_clear\n  lx_cl_n STORE16 lx_cl_a STORE16 \
+                 @lx_clear_lp \
+                 lx_cl_n LOAD16 #00 EQ lx_clear_done JNZ \
+                 #00 lx_cl_a LOAD16 STORE8 \
+                 lx_cl_a LOAD16 #01 ADD lx_cl_a STORE16 \
+                 lx_cl_n LOAD16 #01 SUB lx_cl_n STORE16 \
+                 lx_clear_lp JMP \
+                 @lx_clear_done RET\n",
+            );
+        }
 
         // Data section.
         for line in &self.data {
@@ -1816,6 +2197,54 @@ impl Compiler {
         }
         if self.helpers.solid {
             out.push_str("@lx_sx .res 2\n@lx_sy .res 2\n");
+        }
+        if self.helpers.flagat {
+            out.push_str("@lx_fa_x .res 2\n@lx_fa_y .res 2\n@lx_fa_f .res 2\n");
+        }
+        if self.helpers.vscan {
+            out.push_str(
+                "@lx_vs_px .res 2\n@lx_vs_py .res 2\n@lx_vs_y1 .res 2\n@lx_vs_f .res 2\n@lx_vs_acc .res 2\n",
+            );
+        }
+        if self.helpers.hscan {
+            out.push_str(
+                "@lx_hs_px .res 2\n@lx_hs_x1 .res 2\n@lx_hs_py .res 2\n@lx_hs_f .res 2\n@lx_hs_acc .res 2\n",
+            );
+        }
+        if self.helpers.maprect {
+            out.push_str(
+                "@lx_mr_x .res 2\n@lx_mr_y .res 2\n@lx_mr_w .res 2\n@lx_mr_h .res 2\n@lx_mr_f .res 2\n\
+                 @lx_mr_py .res 2\n@lx_mr_y1 .res 2\n",
+            );
+        }
+        if self.helpers.touch {
+            out.push_str(
+                "@lx_tc_x .res 2\n@lx_tc_y .res 2\n@lx_tc_w .res 2\n@lx_tc_h .res 2\n@lx_tc_f .res 2\n",
+            );
+        }
+        if self.helpers.collx {
+            out.push_str(
+                "@lx_cx_x .res 2\n@lx_cx_y .res 2\n@lx_cx_w .res 2\n@lx_cx_h .res 2\n\
+                 @lx_cx_dx .res 2\n@lx_cx_f .res 2\n@lx_cx_t .res 2\n@lx_cx_lead .res 2\n",
+            );
+        }
+        if self.helpers.colly {
+            out.push_str(
+                "@lx_cy_x .res 2\n@lx_cy_y .res 2\n@lx_cy_w .res 2\n@lx_cy_h .res 2\n\
+                 @lx_cy_dy .res 2\n@lx_cy_f .res 2\n@lx_cy_t .res 2\n@lx_cy_lead .res 2\n",
+            );
+        }
+        if self.helpers.text {
+            out.push_str("@lx_txt_x .res 2\n");
+        }
+        if self.helpers.number {
+            out.push_str(
+                "@lx_num_n .res 2\n@lx_num_x .res 2\n@lx_num_cnt .res 2\n\
+                 @lx_num_j .res 2\n@lx_num_px .res 2\n@lx_num_buf .res 6\n",
+            );
+        }
+        if self.helpers.clear {
+            out.push_str("@lx_cl_a .res 2\n@lx_cl_n .res 2\n");
         }
         // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
         if !self.sprites.is_empty() {
@@ -1849,7 +2278,7 @@ fn fn_has_return(decl: &Decl) -> bool {
 mod tests {
     use super::*;
     use crate::vm::assembler::assemble;
-    use crate::vm::device::{BTN_LEFT, BTN_RIGHT};
+    use crate::vm::device::{SoundKind, BTN_A, BTN_LEFT, BTN_RIGHT};
     use crate::vm::VmConsole;
 
     fn compile_ok(src: &str) -> String {
@@ -1930,6 +2359,28 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 15);
+    }
+
+    #[test]
+    fn two_for_loops_same_var_in_one_function() {
+        // Reusing `i` across two sequential for-loops must reserve the counter
+        // slot once — a duplicate `.res` label used to break assembly / results.
+        let src = r#"
+            local a: word
+            local b: word
+            function draw()
+              a = 0
+              for i = 1, 3 do a = a + i end   -- 6
+              b = 0
+              for i = 1, 4 do b = b + i end   -- 10
+              entity(a, 0, 1)
+              entity(b, 0, 2)
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 6);
+        assert_eq!(o.entities[1].x, 10);
     }
 
     #[test]
@@ -2100,6 +2551,26 @@ mod tests {
     }
 
     #[test]
+    fn sprn_draws_block_row_major() {
+        // A 2×2 composite from four sheet tiles: ids advance row-major, cells are
+        // 8 px apart. Each sprite's top-left pixel marks which tile landed where.
+        let src = r#"
+            sprite a { 1....... }
+            sprite b { 2....... }
+            sprite c { 3....... }
+            sprite d { 4....... }
+            function draw() sprn(a, 0, 0, 2, 2, 0) end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 1);            // (0,0) id a
+        assert_eq!(c.vm.devices.framebuffer[8], 2);            // (8,0) id b
+        assert_eq!(c.vm.devices.framebuffer[8 * 128], 3);      // (0,8) id c
+        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4);  // (8,8) id d
+    }
+
+    #[test]
     fn tilemap_mget_mset() {
         let src = r#"
             tilemap level(4, 4)
@@ -2208,6 +2679,365 @@ mod tests {
         "#;
         let mut c = load(src);
         assert_eq!(c.run_frame(0).entities[0].x, 44); // 300 & 0xff
+    }
+
+    #[test]
+    fn btnp_fires_only_on_rising_edge() {
+        // A counter that increments once per fresh A press must not run away
+        // while A is held — that's the whole point of btnp vs btn.
+        let src = r#"
+            local n: word
+            function update() if btnp(A) then n = n + 1 end end
+            function draw() entity(n, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1);   // press -> +1
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1);   // still held -> no change
+        assert_eq!(c.run_frame(0).entities[0].x, 1);        // released
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 2);   // new press -> +1
+    }
+
+    #[test]
+    fn btnr_fires_on_release() {
+        let src = r#"
+            local n: word
+            function update() if btnr(A) then n = n + 1 end end
+            function draw() entity(n, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0);   // press: no release yet
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0);   // held
+        assert_eq!(c.run_frame(0).entities[0].x, 1);        // release -> +1
+        assert_eq!(c.run_frame(0).entities[0].x, 1);        // stays released
+    }
+
+    #[test]
+    fn frame_count_increments() {
+        let src = r#"
+            function draw() entity(frame_count(), 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+        assert_eq!(c.run_frame(0).entities[0].x, 2);
+        assert_eq!(c.run_frame(0).entities[0].x, 3);
+    }
+
+    #[test]
+    fn len_folds_to_array_length() {
+        // len(a) is a compile-time constant that drives the loop bound.
+        let src = r#"
+            local a: array(5, word)
+            local sum: word
+            function draw()
+              sum = 0
+              for i = 0, len(a) - 1 do a[i] = i  sum = sum + a[i] end  -- 0+1+2+3+4
+              entity(sum, 0, 1)
+              entity(len(a), 0, 2)
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 10);
+        assert_eq!(o.entities[1].x, 5);
+    }
+
+    #[test]
+    fn len_rejects_non_array() {
+        let c = compile("local x: word function draw() entity(len(x), 0, 1) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("len()")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn map_rect_overlap_corners() {
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init()
+              fset(5, SOLID, 1)
+              mset(2, 2, 5)                 -- solid tile at cell (2,2) = pixels 16..23
+            end
+            function draw()
+              out = 0
+              if map_rect_overlap(14, 14, 8, 8, SOLID) then out = out + 1 end  -- SE corner hits
+              if map_rect_overlap(0, 0, 8, 8, SOLID) then out = out + 2 end      -- clear
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn collide_x_stops_at_wall() {
+        // A solid wall column at cell x=4 (pixels 32..). An 8-px rect starting at
+        // x=20 and moving +5/frame must stop flush against the wall at x=24.
+        let src = r#"
+            tilemap level(8, 8)
+            local px: word
+            function init()
+              fset(5, SOLID, 1)
+              for y = 0, 7 do mset(4, y, 5) end
+              px = 20
+            end
+            function draw()
+              px = collide_x(px, 40, 8, 8, 5, SOLID)
+              entity(px, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 24); // snapped to the wall
+        assert_eq!(c.run_frame(0).entities[0].x, 24); // stays pinned
+    }
+
+    #[test]
+    fn collide_y_lands_on_floor() {
+        // Floor row at cell y=6 (pixels 48..). A rect falling +5/frame from y=30
+        // lands at y=40 (bottom edge 47, flush above the floor).
+        let src = r#"
+            tilemap level(8, 8)
+            local py: word
+            function init()
+              fset(5, SOLID, 1)
+              for x = 0, 7 do mset(x, 6, 5) end
+              py = 30
+            end
+            function draw()
+              py = collide_y(20, py, 8, 8, 5, SOLID)
+              entity(20, py, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].y, 35);
+        assert_eq!(c.run_frame(0).entities[0].y, 40); // reaches the floor
+        assert_eq!(c.run_frame(0).entities[0].y, 40); // and stops
+    }
+
+    #[test]
+    fn touching_floor_detects_ground() {
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init()
+              fset(5, SOLID, 1)
+              for x = 0, 7 do mset(x, 6, 5) end   -- floor row at cell y=6 (pixels 48..)
+            end
+            function draw()
+              out = 0
+              if touching_floor(20, 40, 8, 8, SOLID) then out = out + 1 end  -- bottom edge 47, floor below
+              if touching_floor(20, 20, 8, 8, SOLID) then out = out + 2 end   -- airborne
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn collide_x_scans_full_edge_no_tunnel() {
+        // Regression: a box TALLER than one tile whose leading edge only hits a
+        // solid tile in an intermediate row (both corners clear) must still stop.
+        // Box is 24 px tall (rows 0,1,2); the solid cell (4,1) sits in the middle
+        // row, so corner-only sampling (y=0 and y=23) would tunnel through it.
+        let src = r#"
+            tilemap level(8, 8)
+            local px: word
+            function init()
+              fset(5, SOLID, 1)
+              mset(4, 1, 5)          -- solid ONLY at the middle row (pixels y 8..15)
+              px = 20
+            end
+            function draw()
+              px = collide_x(px, 0, 8, 24, 5, SOLID)   -- moving +5 toward col 4 (x 32..)
+              entity(px, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 24); // snapped flush, not 25 (through the wall)
+    }
+
+    #[test]
+    fn map_rect_overlap_sees_interior_tile() {
+        // A rect three tiles wide with a solid cell only in the MIDDLE column —
+        // corner-only sampling misses it.
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init() fset(5, SOLID, 1)  mset(3, 0, 5) end   -- middle column
+            function draw()
+              out = 0
+              if map_rect_overlap(16, 0, 24, 8, SOLID) then out = 1 end
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn touching_right_scans_full_edge() {
+        // Tall box; a solid tile only in an intermediate row of the right edge.
+        let src = r#"
+            tilemap level(8, 8)
+            local out: word
+            function init() fset(5, SOLID, 1)  mset(3, 1, 5) end   -- right edge, middle row
+            function draw()
+              out = 0
+              if touching_right(16, 0, 8, 24, SOLID) then out = 1 end
+              entity(out, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 1);
+    }
+
+    #[test]
+    fn collision_helpers_need_tilemap() {
+        let c = compile("function draw() if collide_x(0,0,8,8,1,SOLID) > 0 then end end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("tilemap")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn text_draws_glyphs() {
+        // 'A' = rows [7,5,7,5,5]: top row is all three columns, row 1 is 1.1.
+        let src = r#"function draw() text("A", 0, 0, 7) end"#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 7);   // (0,0)
+        assert_eq!(c.vm.devices.framebuffer[1], 7);   // (1,0)
+        assert_eq!(c.vm.devices.framebuffer[2], 7);   // (2,0)
+        assert_eq!(c.vm.devices.framebuffer[128], 7); // (0,1)
+        assert_eq!(c.vm.devices.framebuffer[129], 0); // (1,1) gap
+    }
+
+    #[test]
+    fn text_advances_x_per_char() {
+        // Two glyphs 4 px apart: the second 'A' starts at x=4.
+        let src = r#"function draw() text("AA", 0, 0, 7) end"#;
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[4], 7); // (4,0) top of the 2nd 'A'
+        assert_eq!(c.vm.devices.framebuffer[5], 7);
+        assert_eq!(c.vm.devices.framebuffer[6], 7);
+    }
+
+    #[test]
+    fn number_renders_decimal_digits() {
+        // 123: '1' top row is .X. at x=0; '2'/'3' top rows are XXX at x=4 / x=8.
+        let src = r#"function draw() number(123, 0, 0, 7) end"#;
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 0); // '1' top-left empty
+        assert_eq!(c.vm.devices.framebuffer[1], 7); // '1' middle column
+        assert_eq!(c.vm.devices.framebuffer[4], 7); // '2' top-left
+        assert_eq!(c.vm.devices.framebuffer[8], 7); // '3' top-left
+    }
+
+    #[test]
+    fn number_zero_renders_one_digit() {
+        let src = r#"function draw() number(0, 0, 0, 7) end"#;
+        let mut c = load(src);
+        c.run_frame(0);
+        // '0' = [7,..,7]: full top and bottom rows.
+        assert_eq!(c.vm.devices.framebuffer[0], 7);
+        assert_eq!(c.vm.devices.framebuffer[1], 7);
+        assert_eq!(c.vm.devices.framebuffer[2], 7);
+    }
+
+    #[test]
+    fn string_only_valid_in_text() {
+        assert!(!compile(r#"local x = "hi"  function draw() end"#).ok());
+        let c = compile("function draw() text(1, 0, 0, 7) end"); // non-string first arg
+        assert!(!c.ok());
+    }
+
+    #[test]
+    fn unterminated_string_is_a_diagnostic() {
+        let c = compile("function draw() text(\"oops, 0, 0, 7) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("unterminated")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn clear_zeros_whole_array() {
+        let src = r#"
+            record Obj { x, y, alive }
+            local es: array(4, Obj)
+            local sum: word
+            function draw()
+              for i = 0, 3 do es[i].x = 9  es[i].y = 9  es[i].alive = 1 end
+              clear(es)
+              sum = 0
+              for i = 0, 3 do sum = sum + es[i].x + es[i].y + es[i].alive end
+              entity(sum, 0, 1)
+            end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 0);
+    }
+
+    #[test]
+    fn clear_zeros_one_element_only() {
+        let src = r#"
+            record Obj { x, y }
+            local es: array(3, Obj)
+            function draw()
+              es[0].x = 5  es[0].y = 6
+              es[1].x = 7  es[1].y = 8
+              clear(es[1])
+              entity(es[0].x + es[0].y, 0, 1)   -- untouched: 11
+              entity(es[1].x + es[1].y, 0, 2)   -- cleared: 0
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 11);
+        assert_eq!(o.entities[1].x, 0);
+        assert_eq!(o.entities[1].tag, 2);
+    }
+
+    #[test]
+    fn clear_zeros_a_record() {
+        let src = r#"
+            record P { a, b }
+            local p: P
+            function draw() p.a = 3  p.b = 4  clear(p)  entity(p.a + p.b, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 0);
+    }
+
+    #[test]
+    fn clear_rejects_scalar() {
+        let c = compile("local x: word function draw() clear(x) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("clear()")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn sound_triggers_reported_and_cleared() {
+        let src = r#"
+            local t: word
+            function update()
+              t = t + 1
+              if t == 1 then sfx(3) end
+              if t == 2 then music(1)  music_stop() end
+            end
+            function draw() end
+        "#;
+        let mut c = load(src);
+        let o1 = c.run_frame(0);
+        assert_eq!(o1.sound.len(), 1);
+        assert_eq!(o1.sound[0].kind, SoundKind::Sfx);
+        assert_eq!(o1.sound[0].id, 3);
+        let o2 = c.run_frame(0);
+        assert_eq!(o2.sound.len(), 2); // music then music_stop, in order
+        assert_eq!(o2.sound[0].kind, SoundKind::Music);
+        assert_eq!(o2.sound[1].kind, SoundKind::MusicStop);
+        let o3 = c.run_frame(0);
+        assert!(o3.sound.is_empty()); // cleared each frame
     }
 
     #[test]

@@ -79,8 +79,11 @@ Port byte = `(device << 4) | register`.
 | `0x14` | out | draw pixel at (x,y) |
 | `0x15` | out | draw 8×8 sprite from `mem[addr]` (32 bytes, 4bpp, hi-nibble = left) |
 | `0x16` | out | clear screen to colour |
-| `0x20` | in  | gamepad buttons bitfield |
+| `0x20` | in  | gamepad buttons bitfield (held) |
+| `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
+| `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
+| `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop (recorded, no audio yet) |
 | `0x40` `0x41` `0x42` | out/in/out | storage addr / read / write (256 bytes) |
 | `0x50` `0x51` `0x52` | out | debug entity: x, y, commit(tag) — reported in the observation |
 | `0x60` | out | console: write a byte to the text buffer |
@@ -104,7 +107,8 @@ game-reported `entities` for black-box tasks):
   "framebuffer_hash": "…", "changed_pixels_bbox": [31,60,31,60],
   "console": "", "fault": null, "halted": false,
   "vm": { "pc": 65535, "data_stack": [], "return_stack_depth": 0 },
-  "entities": [ {"tag": 1, "x": 31, "y": 60} ] }
+  "entities": [ {"tag": 1, "x": 31, "y": 60} ],
+  "sound": [ {"kind": "sfx", "id": 3} ] }
 ```
 
 ## Example: move a pixel with LEFT / RIGHT
@@ -220,11 +224,52 @@ end
   `(sx,sy)`. Per-tile flag bits: `fset(tile,flag,v)` / `fget(tile,flag)→0/1`;
   `solid(px,py)→0/1` is `fget(mget(px/8,py/8), SOLID)` — the platformer collision
   primitive. Flag constants: `SOLID` (0), `FLAG1..FLAG3`.
+- **Tilemap collision (phase 2):** higher-level helpers so the model doesn't
+  re-derive corner-sampling and snap-to-grid every game (all take a rect
+  `x,y,w,h` and a tile `flag`):
+  - `map_rect_overlap(x,y,w,h,flag)→bool` — does the rect touch any tile with
+    `flag` set? Scans every tile the rect covers (one sample per 8-px cell), so
+    boxes larger than a tile don't miss an interior tile.
+  - `collide_x(x,y,w,h,dx,flag)→new_x` / `collide_y(x,y,w,h,dy,flag)→new_y` —
+    move the box by a signed `dx`/`dy` and return the coordinate snapped flush
+    against the first flagged tile in the way (or the full move if clear). The
+    whole leading edge is scanned tile-by-tile, so a box taller/wider than a tile
+    can't slip past a tile between its corners. Resolve one axis at a time:
+    `nx = collide_x(x,y,w,h,vx,SOLID)` then `ny = collide_y(nx,y,w,h,vy,SOLID)`.
+    Assumes the box starts in a clear cell and the per-step move is smaller than a
+    tile (no tunneling across a full tile in one frame).
+  - `touching_left|right|floor|ceiling(x,y,w,h,flag)→bool` — is a flagged tile
+    directly against that edge? (Grounded checks, wall-slides, ceiling bonks.)
+  Jump *feel* (coyote time, jump buffering, double/wall-jump counters) stays in
+  luax — see `games/wall.lua`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
-  `id`; flags bit0/1 = flip x/y), `sspr(addr,x,y,flags)` (blit a raw 32-byte tile
-  at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
+  `id`; flags bit0/1 = flip x/y), `sprn(id,x,y,w,h,flags)` (draw a `w×h` block of
+  contiguous sheet tiles — id at col/row = `id + row*w + col` — for 16×16+
+  players/bosses/UI panels; flip applies per tile, the block isn't mirrored),
+  `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
+- **Input & timing:** `btn(mask)→0/1` (held), `btnp(mask)→0/1` (pressed *this*
+  frame — the rising edge), `btnr(mask)→0/1` (released this frame). Use `btnp`
+  for jumps, menu steps and fire-on-press so the model doesn't have to track the
+  previous frame's buttons by hand. `frame_count()→word` gives frames since
+  power-on (wraps at 65536) for blink/timers/periodic spawns.
+- **Arrays:** `len(arr)→word` is the array's declared length (a compile-time
+  constant) — write `for i = 0, len(bullets)-1 do` so the loop follows the array
+  size instead of a hand-written bound. `clear(x)` zeroes a record or whole array
+  in place (`clear(bullets)` resets a pool; `clear(bullets[i])` one element) —
+  cheaper and less error-prone than field-by-field reinitialization.
+- **Sound:** `sfx(id)`, `music(id)`, `music_stop()` fire sound triggers. The VM
+  is deterministic and headless, so nothing is synthesized yet — the triggers
+  are recorded and surfaced in the observation's `sound` array (so the agent
+  sees a sound "played"); host audio in the play windows is a follow-up. The
+  luax API is final.
+- **On-screen text:** `text("LITERAL", x, y, color)` draws a compile-time string
+  in a built-in 3×5 font (uppercase `A-Z`, `0-9`, space, `: ! . -`; lowercase
+  folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,
+  luax has no runtime strings. `number(n, x, y, color)` draws an integer in
+  decimal. For scores, titles, and `GAME OVER` — reset `camera(0,0)` first if the
+  world is scrolled. See the HUD in `games/shooter.lua`.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
 - Comments: `--` line, `--[[ … ]]` block.
 
@@ -286,6 +331,7 @@ kessel --play games/shooter.lua   # vertical shooter — arrows move, A fires
 kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
 kessel --play games/rogue.lua     # top-down roguelike — arrows move, bump orcs to fight
 kessel --play games/platform.lua  # tile platformer — arrows move, A jumps
+kessel --play games/wall.lua      # platformer — collide_x/y + touching_* + btnp double/wall-jump
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:

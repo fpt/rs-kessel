@@ -7,12 +7,16 @@
 //! | dev | name    | registers |
 //! |-----|---------|-----------|
 //! | 0x0 | system  | 0 halt · 1 pal-index · 2 pal-r · 3 pal-g · 4 pal-b (commit) |
-//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls |
-//! | 0x2 | gamepad | 0 buttons (read) |
+//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) |
+//! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) — all read |
 //! | 0x3 | rng     | 0 next (read) / set-seed (write) |
 //! | 0x4 | storage | 0 addr · 1 read · 2 write |
 //! | 0x5 | debug   | 0 ent-x · 1 ent-y · 2 ent-commit(tag) |
 //! | 0x6 | console | 0 write-byte |
+//! | 0x7 | tilemap | 0 base · 1 width · 2 tx · 3 ty · 4 sx · 5 sy · 6 tw · 7 th · 8 draw |
+//! | 0x8 | time    | 0 frame-count (read) |
+//! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop (recorded, no audio yet) |
+//! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 
 /// Screen edge length in pixels (square framebuffer).
 pub const SCREEN_DIM: usize = 128;
@@ -29,6 +33,57 @@ pub const BTN_B: u8 = 0x20;
 pub const BTN_START: u8 = 0x40;
 pub const BTN_SELECT: u8 = 0x80;
 
+/// The 3×5 pixel rows for one glyph (ASCII `code`), top to bottom. Each row is
+/// 3 bits — bit 2 is the leftmost column. Covers `A-Z` (lowercase folds up),
+/// `0-9`, space, and `: ! . -`; anything else is blank. Small enough to inline
+/// scores, titles and `GAME OVER` without a font ROM.
+fn glyph_rows(code: u8) -> [u8; 5] {
+    let c = code.to_ascii_uppercase();
+    match c {
+        b'0' => [7, 5, 5, 5, 7],
+        b'1' => [2, 6, 2, 2, 7],
+        b'2' => [7, 1, 7, 4, 7],
+        b'3' => [7, 1, 7, 1, 7],
+        b'4' => [5, 5, 7, 1, 1],
+        b'5' => [7, 4, 7, 1, 7],
+        b'6' => [7, 4, 7, 5, 7],
+        b'7' => [7, 1, 2, 2, 2],
+        b'8' => [7, 5, 7, 5, 7],
+        b'9' => [7, 5, 7, 1, 7],
+        b'A' => [7, 5, 7, 5, 5],
+        b'B' => [6, 5, 6, 5, 6],
+        b'C' => [7, 4, 4, 4, 7],
+        b'D' => [6, 5, 5, 5, 6],
+        b'E' => [7, 4, 7, 4, 7],
+        b'F' => [7, 4, 7, 4, 4],
+        b'G' => [7, 4, 5, 5, 7],
+        b'H' => [5, 5, 7, 5, 5],
+        b'I' => [7, 2, 2, 2, 7],
+        b'J' => [1, 1, 1, 5, 7],
+        b'K' => [5, 6, 4, 6, 5],
+        b'L' => [4, 4, 4, 4, 7],
+        b'M' => [5, 7, 7, 5, 5],
+        b'N' => [5, 7, 5, 5, 5],
+        b'O' => [7, 5, 5, 5, 7],
+        b'P' => [7, 5, 7, 4, 4],
+        b'Q' => [7, 5, 5, 7, 3],
+        b'R' => [7, 5, 7, 6, 5],
+        b'S' => [7, 4, 7, 1, 7],
+        b'T' => [7, 2, 2, 2, 2],
+        b'U' => [5, 5, 5, 5, 7],
+        b'V' => [5, 5, 5, 5, 2],
+        b'W' => [5, 5, 7, 7, 5],
+        b'X' => [5, 5, 2, 5, 5],
+        b'Y' => [5, 5, 2, 2, 2],
+        b'Z' => [7, 1, 2, 4, 7],
+        b':' => [0, 2, 0, 2, 0],
+        b'!' => [2, 2, 2, 0, 2],
+        b'.' => [0, 0, 0, 0, 2],
+        b'-' => [0, 0, 7, 0, 0],
+        _ => [0, 0, 0, 0, 0], // space + unknown
+    }
+}
+
 /// An entity record the running game reports to the debug port for observation.
 /// These are authored by the game (not inferred), so the harness can expose or
 /// hide internal state per experiment.
@@ -37,6 +92,24 @@ pub struct Entity {
     pub tag: u16,
     pub x: u16,
     pub y: u16,
+}
+
+/// What a game asked the (silent, for now) sound device to do this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundKind {
+    Sfx,
+    Music,
+    MusicStop,
+}
+
+/// A sound trigger the running game emitted this frame. The VM stays
+/// deterministic and headless — these are recorded for the observation record
+/// (so the agent sees that a sound "played") and for a future host audio path;
+/// nothing is synthesized yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoundEvent {
+    pub kind: SoundKind,
+    pub id: u16,
 }
 
 /// The default 16-colour palette (PICO-8's), RGB. Index 0 is treated as
@@ -68,6 +141,11 @@ pub struct Devices {
     pub palette: [(u8, u8, u8); 16],
     /// Current gamepad button bitfield.
     pub gamepad: u8,
+    /// Gamepad bitfield from the *previous* frame, for edge detection
+    /// (`btnp`/`btnr`).
+    pub prev_gamepad: u8,
+    /// Frames elapsed since power-on (wraps at 65536; drives blink/timers).
+    pub frame_count: u16,
     /// The frame vector the game installed via `screen/vector`; 0 = none.
     pub frame_vector: u16,
     /// Set when the game writes a non-zero value to `system/halt`.
@@ -76,6 +154,9 @@ pub struct Devices {
     pub entities: Vec<Entity>,
     /// Bytes written to the console this frame (cleared each frame).
     pub console: Vec<u8>,
+    /// Sound triggers emitted this frame (cleared each frame). Recorded only;
+    /// no audio is synthesized yet.
+    pub sound: Vec<SoundEvent>,
     /// Persistent storage (survives resets? no — power-on state, but survives frames).
     pub storage: [u8; 256],
 
@@ -109,6 +190,10 @@ pub struct Devices {
     map_sy: u16,
     map_tw: u16,
     map_th: u16,
+    // composite-sprite device (page 0xa): base tile id + block size
+    sprn_id: u16,
+    sprn_w: u16,
+    sprn_h: u16,
 }
 
 impl Default for Devices {
@@ -123,10 +208,13 @@ impl Devices {
             framebuffer: vec![0u8; SCREEN_PIXELS],
             palette: DEFAULT_PALETTE,
             gamepad: 0,
+            prev_gamepad: 0,
+            frame_count: 0,
             frame_vector: 0,
             halt_requested: false,
             entities: Vec::new(),
             console: Vec::new(),
+            sound: Vec::new(),
             storage: [0u8; 256],
             rng_state: 0x1234_5678,
             storage_addr: 0,
@@ -150,6 +238,9 @@ impl Devices {
             map_sy: 0,
             map_tw: 0,
             map_th: 0,
+            sprn_id: 0,
+            sprn_w: 0,
+            sprn_h: 0,
         }
     }
 
@@ -159,7 +250,13 @@ impl Devices {
         let reg = port & 0x0f;
         match (dev, reg) {
             (0x2, 0x0) => self.gamepad as u16,
+            // just-pressed this frame (rising edge): held now, not held before.
+            (0x2, 0x1) => (self.gamepad & !self.prev_gamepad) as u16,
+            // just-released this frame (falling edge): held before, not now.
+            (0x2, 0x2) => (!self.gamepad & self.prev_gamepad) as u16,
             (0x3, 0x0) => self.next_rand(),
+            // time device: frames since power-on.
+            (0x8, 0x0) => self.frame_count,
             (0x4, 0x1) => self.storage[self.storage_addr as usize] as u16,
             _ => 0,
         }
@@ -210,6 +307,8 @@ impl Devices {
                     self.blit_sprite(addr, mem);
                 }
                 0xb => self.tileset_base = val,
+                // Draw one 3×5 font glyph (ascii code = val) at (sx,sy) in scolor.
+                0xc => self.draw_glyph(val as u8),
                 _ => {}
             },
             0x3 => {
@@ -251,7 +350,61 @@ impl Devices {
                 0x8 => self.draw_map(mem),
                 _ => {}
             },
+            // Sound device: record a trigger (no audio synthesized yet).
+            0x9 => match reg {
+                0x0 => self.sound.push(SoundEvent { kind: SoundKind::Sfx, id: val }),
+                0x1 => self.sound.push(SoundEvent { kind: SoundKind::Music, id: val }),
+                0x2 => self.sound.push(SoundEvent { kind: SoundKind::MusicStop, id: 0 }),
+                _ => {}
+            },
+            // Composite-sprite device: draw a w×h block of sheet tiles at the
+            // pending screen (sx,sy) with the current sprite flags.
+            0xa => match reg {
+                0x0 => self.sprn_id = val,
+                0x1 => self.sprn_w = val,
+                0x2 => self.sprn_h = val,
+                0x3 => self.draw_sprn(mem),
+                _ => {}
+            },
             _ => {}
+        }
+    }
+
+    /// Draw a `sprn_w × sprn_h` block of sheet tiles anchored at the pending
+    /// screen `(sx,sy)`. Tile ids are row-major and contiguous from `sprn_id`
+    /// (id at col/row = `sprn_id + row*w + col`), each 8 px cell blitted from the
+    /// tileset. The current `sprite_flags` (flip) apply to every tile; the block
+    /// layout itself is not mirrored.
+    fn draw_sprn(&mut self, mem: &[u8]) {
+        let (base_x, base_y) = (self.sx, self.sy);
+        for row in 0..self.sprn_h {
+            for col in 0..self.sprn_w {
+                let id = self
+                    .sprn_id
+                    .wrapping_add(row.wrapping_mul(self.sprn_w))
+                    .wrapping_add(col);
+                let addr = self.tileset_base.wrapping_add(id.wrapping_mul(32));
+                self.sx = base_x.wrapping_add(col.wrapping_mul(8));
+                self.sy = base_y.wrapping_add(row.wrapping_mul(8));
+                self.blit_sprite(addr, mem);
+            }
+        }
+        self.sx = base_x;
+        self.sy = base_y;
+    }
+
+    /// Draw one 3×5 glyph (`code` = ASCII) at the pending `(sx,sy)` in `scolor`.
+    /// The caller advances x between characters (4 px/char). Unknown codes draw
+    /// nothing. Subject to the camera (via `put_pixel`) — reset `camera(0,0)`
+    /// before HUD text.
+    fn draw_glyph(&mut self, code: u8) {
+        let (x0, y0, color) = (self.sx, self.sy, self.scolor);
+        for (r, bits) in glyph_rows(code).iter().enumerate() {
+            for col in 0..3u16 {
+                if bits & (0x4 >> col) != 0 {
+                    self.put_pixel(x0 + col, y0 + r as u16, color);
+                }
+            }
         }
     }
 
@@ -280,11 +433,16 @@ impl Devices {
         self.sprite_flags = saved_flags;
     }
 
-    /// Clear the per-frame reported state (entities + console output).
+    /// Clear the per-frame reported state (entities + console output) and
+    /// advance per-frame input/timing: the previous gamepad snapshot (for
+    /// `btnp`/`btnr` edge detection) and the frame counter.
     pub fn begin_frame(&mut self, buttons: u8) {
+        self.prev_gamepad = self.gamepad;
         self.gamepad = buttons;
+        self.frame_count = self.frame_count.wrapping_add(1);
         self.entities.clear();
         self.console.clear();
+        self.sound.clear();
         self.halt_requested = false;
     }
 
