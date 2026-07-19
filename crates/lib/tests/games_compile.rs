@@ -49,8 +49,8 @@ fn assert_game_ok(name: &str, src: &str) {
         .unwrap_or_else(|e| panic!("{name}.lua assemble via VmConsole: {e}"));
     c.load_rom("g.lua")
         .unwrap_or_else(|e| panic!("{name}.lua load_rom (reset vector faulted?): {e}"));
-    // LEFT, RIGHT, UP, DOWN, A, A+DOWN, none — enough to drive every game's paths.
-    let inputs: [u8; 8] = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x18, 0x02];
+    // LEFT, RIGHT, UP, DOWN, A, B, A+DOWN, none — enough to drive every game's paths.
+    let inputs: [u8; 9] = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x18, 0x02];
     for f in 0..300u32 {
         let obs = c.run_frame(inputs[(f as usize) % inputs.len()]);
         assert!(
