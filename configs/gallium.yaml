@@ -6,7 +6,7 @@ llm:
   model: "qwen3.5:9b"
   harmonyTemplate: false
   temperature: 0.7
-  maxTokens: 2048
+  maxTokens: 4096
 
   # Local inference backend: "llamacpp" (default, in-process llama.cpp) or
   # "gallium" (native pure-Rust candle engine). The `INFERENCE_ENGINE` env var

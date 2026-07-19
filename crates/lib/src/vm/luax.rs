@@ -937,6 +937,16 @@ struct Compiler {
     tilemap: Option<(String, u16, u16)>,
     data: Vec<String>,
     label_ctr: usize,
+    /// Monotonic id for fresh local/for storage slots, so a newly-emitted `.res`
+    /// label can never collide with another.
+    slot_ctr: usize,
+    /// Storage slots currently live (a stack, in allocation order) and slots
+    /// released by ended scopes and available for reuse — each `(label, physical
+    /// size)`. Together they let disjoint declarations share a cell while a live
+    /// slot is never reused (so lexical shadows stay distinct). Reset per
+    /// function, since a callee's locals are live while the caller's are too.
+    live_slots: Vec<(String, u16)>,
+    free_slots: Vec<(String, u16)>,
     loop_ends: Vec<String>,
     cur_func: String,
     helpers: Helpers,
@@ -1057,6 +1067,9 @@ impl Compiler {
             tilemap: None,
             data: Vec::new(),
             label_ctr: 0,
+            slot_ctr: 0,
+            live_slots: Vec::new(),
+            free_slots: Vec::new(),
             loop_ends: Vec::new(),
             cur_func: String::new(),
             helpers: Helpers::default(),
@@ -1067,6 +1080,38 @@ impl Compiler {
         let l = format!("lx_L{}", self.label_ctr);
         self.label_ctr += 1;
         l
+    }
+
+    /// Allocate a storage slot of `size` bytes for a local named `name`, and
+    /// return its label. Slots are lifetime-scoped: a cell released by a block
+    /// that has ended (see [`Compiler::release_slots`]) is reused for a later
+    /// disjoint declaration, so sequential same-named locals / for-counters share
+    /// one cell — but a slot that is still live is never handed out, so a nested
+    /// shadow always gets a distinct cell. First-fit over the free list by
+    /// physical size (a bigger freed cell can back a smaller local); otherwise a
+    /// fresh, uniquely-labelled `.res` is emitted.
+    fn alloc_slot(&mut self, name: &str, size: u16) -> String {
+        if let Some(pos) = self.free_slots.iter().position(|(_, phys)| *phys >= size) {
+            let (label, phys) = self.free_slots.remove(pos);
+            self.live_slots.push((label.clone(), phys)); // keep the cell's real size
+            label
+        } else {
+            let label = format!("lx_l_{}_{}_{}", self.cur_func, name, self.slot_ctr);
+            self.slot_ctr += 1;
+            self.data.push(format!("@{label} .res {size}"));
+            self.live_slots.push((label.clone(), size));
+            label
+        }
+    }
+
+    /// Release every slot allocated since `mark` (a `live_slots` length captured
+    /// on block entry) back to the free list, newest first. Called when a lexical
+    /// scope ends, making those cells available to later disjoint declarations.
+    fn release_slots(&mut self, mark: usize) {
+        while self.live_slots.len() > mark {
+            let slot = self.live_slots.pop().expect("live_slots underflow");
+            self.free_slots.push(slot);
+        }
     }
 
     fn compile(&mut self, decls: &[Decl], d: &mut Vec<Diagnostic>) -> String {
@@ -1244,6 +1289,11 @@ impl Compiler {
         d: &mut Vec<Diagnostic>,
     ) -> String {
         self.locals.clear();
+        // Slot reuse is per-function: a callee's locals are live at the same time
+        // as the caller's, so a freed slot from another function must never be
+        // handed out here. Params stay live for the whole body (never released).
+        self.live_slots.clear();
+        self.free_slots.clear();
         self.cur_func = name.to_string();
 
         // Declare param slots. Aggregates are passed by address (word slot).
@@ -1272,10 +1322,20 @@ impl Compiler {
         format!("@lx_p_{name}\n  {}\n", out.join(" "))
     }
 
+    /// Generate a lexical block. Locals declared inside it are visible only
+    /// within it: the name→slot map is snapshotted on entry and restored on exit,
+    /// so an inner `local x` shadows an outer `x` for the block and the outer
+    /// binding comes back afterward (correct Lua scoping). Storage slots
+    /// (`alloc_slot`) are not freed — they're static — but their *names* fall out
+    /// of scope, which is what governs resolution.
     fn gen_block(&mut self, stmts: &[Stmt], out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
+        let saved = self.locals.clone();
+        let mark = self.live_slots.len();
         for s in stmts {
             self.gen_stmt(s, out, d);
         }
+        self.release_slots(mark); // block's slots become reusable
+        self.locals = saved;
     }
 
     fn gen_stmt(&mut self, s: &Stmt, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
@@ -1285,8 +1345,7 @@ impl Compiler {
                     Some(te) => self.resolve_type(te, d),
                     None => Ty::Word,
                 };
-                let label = format!("lx_l_{}_{}", self.cur_func, name);
-                self.data.push(format!("@{label} .res {}", vty.size()));
+                let label = self.alloc_slot(name, vty.size());
                 self.locals.insert(
                     name.clone(),
                     VarInfo { label: label.clone(), ty: vty.clone(), by_ref: false },
@@ -1348,35 +1407,41 @@ impl Compiler {
                         }
                     },
                 };
-                let label = format!("lx_l_{}_{}", self.cur_func, var);
-                // Two `for i` loops in the same function share this storage slot
-                // (they don't run at once) — reserve it once, not once per loop,
-                // or the duplicate `.res` label breaks assembly.
-                let decl = format!("@{label} .res 2");
-                if !self.data.contains(&decl) {
-                    self.data.push(decl);
-                }
+                // The counter is scoped to the loop: snapshot the binding map so
+                // it (and anything the body declares) falls out of scope after the
+                // loop, and mark the slot stack so the counter and limit cells are
+                // released (reusable) once the loop ends.
+                let saved = self.locals.clone();
+                let mark = self.live_slots.len();
+                let label = self.alloc_slot(var, Ty::Word.size());
+                let limit = self.alloc_slot(&format!("{var}_limit"), Ty::Word.size());
+                // Lua evaluates the numeric-for expressions ONCE, in the enclosing
+                // scope, BEFORE the counter exists — so `from`/`to` are generated
+                // here, while `var` still resolves to any outer binding (e.g.
+                // `for i = i, 3` reads the outer `i`), and the limit is fixed for
+                // the whole loop rather than re-evaluated each iteration.
+                self.gen_expr(from, out, d);
+                out.push(format!("{label} STORE16")); // i = from
+                self.gen_expr(to, out, d);
+                out.push(format!("{limit} STORE16")); // limit = to (once)
+                // Now bring the counter into scope for the body and increment.
                 self.locals.insert(
                     var.clone(),
                     VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
                 );
-                // i = from
-                self.gen_expr(from, out, d);
-                out.push(format!("{label} STORE16"));
                 let top = self.new_label();
                 let end = self.new_label();
                 out.push(format!("@{top}"));
-                // while i <= to  ->  !(i > to)
-                out.push(format!("{label} LOAD16"));
-                self.gen_expr(to, out, d);
-                out.push("GT #00 EQ".to_string());
-                out.push(format!("{end} JZ"));
+                // while i <= limit  ->  !(i > limit)
+                out.push(format!("{label} LOAD16 {limit} LOAD16 GT #00 EQ {end} JZ"));
                 self.loop_ends.push(end.clone());
                 self.gen_block(body, out, d);
                 self.loop_ends.pop();
                 // i = i + step
                 out.push(format!("{label} LOAD16 {step_val} ADD {label} STORE16"));
                 out.push(format!("{top} JMP @{end}"));
+                self.release_slots(mark); // counter + limit cells reusable
+                self.locals = saved; // counter leaves scope
             }
             Stmt::Break(line) => match self.loop_ends.last() {
                 Some(end) => out.push(format!("{end} JMP")),
@@ -2363,8 +2428,9 @@ mod tests {
 
     #[test]
     fn two_for_loops_same_var_in_one_function() {
-        // Reusing `i` across two sequential for-loops must reserve the counter
-        // slot once — a duplicate `.res` label used to break assembly / results.
+        // Reusing `i` across two sequential for-loops must compile: each gets its
+        // own scoped slot, so there's no duplicate `.res` label (the old bug) and
+        // the counters don't interfere.
         let src = r#"
             local a: word
             local b: word
@@ -2381,6 +2447,165 @@ mod tests {
         let o = c.run_frame(0);
         assert_eq!(o.entities[0].x, 6);
         assert_eq!(o.entities[1].x, 10);
+    }
+
+    #[test]
+    fn same_named_locals_in_disjoint_branches() {
+        // Reusing `local i` in disjoint branches of one function is valid Lua and
+        // must compile: block scoping gives each its own slot, so there's no
+        // duplicate `.res lx_l_run_i` label (the old bug).
+        let src = r#"
+            local g: word
+            local out: word
+            function run()
+              if g == 0 then
+                local i = 0
+                while i < 3 do i = i + 1 end
+                out = i
+              else
+                local i = 9
+                out = i
+              end
+            end
+            function init() g = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 3); // took the g==0 branch, counted to 3
+    }
+
+    #[test]
+    fn local_and_for_same_name_compile() {
+        // A `local i` and a `for i` in one function: distinct scoped slots, no
+        // duplicate label even though the local is a byte and the counter a word.
+        let src = r#"
+            local g: word
+            function run()
+              local i: byte
+              i = 1
+              g = g + i                       -- 1
+              for i = 0, 2 do g = g + i end    -- + 0+1+2 = 3  -> 4
+            end
+            function init() g = 0 end
+            function draw() run() entity(g, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 4);
+    }
+
+    fn local_slot_count(asm: &str) -> usize {
+        asm.lines()
+            .filter(|l| l.trim_start().starts_with("@lx_l_") && l.contains(".res"))
+            .count()
+    }
+
+    #[test]
+    fn disjoint_declarations_reuse_storage() {
+        // Two disjoint for-loops (counter + limit each) must SHARE cells once the
+        // first loop's scope ends — 2 slots total, not 4. This is the storage
+        // reuse the free list buys back on top of correct scoping.
+        let reuse = compile("function draw() for i = 0, 3 do end  for j = 0, 3 do end end");
+        assert!(reuse.ok(), "{:?}", reuse.diagnostics);
+        assert_eq!(local_slot_count(&reuse.asm), 2, "disjoint loops should reuse the same 2 cells");
+    }
+
+    #[test]
+    fn live_shadows_do_not_reuse_storage() {
+        // When the outer binding is still live, the inner shadow must get its OWN
+        // cell (not reuse the outer's) — here the outer `i` and the nested `i`
+        // are simultaneously live, so two distinct slots.
+        let shadow = compile(
+            "function draw() local i = 1  if i == 1 then local i = 2  entity(i,0,2) end  entity(i,0,1) end",
+        );
+        assert!(shadow.ok(), "{:?}", shadow.diagnostics);
+        assert_eq!(local_slot_count(&shadow.asm), 2, "live shadow needs a distinct cell");
+    }
+
+    #[test]
+    fn nested_local_shadowing_is_lexically_scoped() {
+        // The reviewer's case (PR #36): an inner `local i` shadows an outer one
+        // only within its block. Reading the outer `i` after the block must see
+        // the OUTER value — distinct slots + scope restore, not a shared cell that
+        // would leak the inner value out.
+        let src = r#"
+            local out: word
+            local inner: word
+            function run()
+              local i = 5
+              if out == 0 then
+                local i = 9      -- shadows for this block only
+                inner = i        -- 9
+              end
+              out = i            -- outer i -> 5 (not 9)
+            end
+            function init() out = 0  inner = 0 end
+            function draw() run()  entity(out, 0, 1)  entity(inner, 0, 2) end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 5); // outer restored after the inner block
+        assert_eq!(o.entities[1].x, 9); // inner saw the shadowing value
+    }
+
+    #[test]
+    fn for_control_expr_reads_outer_binding() {
+        // Reviewer's case (PR #36): `for i = i, N` — the `from` expression must
+        // read the OUTER `i`, evaluated before the counter is in scope, not the
+        // freshly allocated (0) counter slot.
+        let src = r#"
+            local out: word
+            function run()
+              local i = 2
+              local sum = 0
+              for i = i, 4 do sum = sum + 1 end   -- from = outer 2 -> i in 2,3,4 -> 3 iters
+              out = sum
+            end
+            function init() out = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 3); // not 5 (would-be from 0)
+    }
+
+    #[test]
+    fn for_limit_evaluated_once() {
+        // The numeric-for limit is fixed before the loop, not re-read each pass:
+        // clobbering `n` inside the body must not shorten the loop.
+        let src = r#"
+            local out: word
+            function run()
+              local n = 3
+              local cnt = 0
+              for i = 0, n do
+                cnt = cnt + 1
+                n = 0            -- if the limit were re-evaluated, we'd stop early
+              end
+              out = cnt
+            end
+            function init() out = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 4); // i in 0,1,2,3 regardless of n
+    }
+
+    #[test]
+    fn for_counter_leaves_scope_after_loop() {
+        // A `for` counter is scoped to its loop: a `local i` declared before the
+        // loop is the binding in effect again once the loop ends.
+        let src = r#"
+            local out: word
+            function run()
+              local i = 7
+              for i = 0, 3 do end   -- counter shadows within the loop only
+              out = i               -- back to the outer i = 7
+            end
+            function init() out = 0 end
+            function draw() run() entity(out, 0, 1) end
+        "#;
+        let mut c = load(src);
+        assert_eq!(c.run_frame(0).entities[0].x, 7);
     }
 
     #[test]

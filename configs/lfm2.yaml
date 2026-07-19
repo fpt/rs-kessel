@@ -14,7 +14,7 @@ llm:
   # LFM2.5 is a reasoning model: it emits a <think> block before the answer, so
   # the budget must cover BOTH. 512 was too low — long deliberation got truncated
   # mid-think, leaving no answer to print/speak.
-  maxTokens: 2048
+  maxTokens: 4096
 
 agent:
   language: "en"

@@ -7,7 +7,7 @@ llm:
   model: "qwen3.5:9b"
   harmonyTemplate: false
   temperature: 0.7
-  maxTokens: 2048
+  maxTokens: 4096
 
 agent:
   systemPromptPath: null
