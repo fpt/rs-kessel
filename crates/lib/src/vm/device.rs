@@ -7,7 +7,7 @@
 //! | dev | name    | registers |
 //! |-----|---------|-----------|
 //! | 0x0 | system  | 0 halt · 1 pal-index · 2 pal-r · 3 pal-g · 4 pal-b (commit) |
-//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base |
+//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) |
 //! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) — all read |
 //! | 0x3 | rng     | 0 next (read) / set-seed (write) |
 //! | 0x4 | storage | 0 addr · 1 read · 2 write |
@@ -31,6 +31,57 @@ pub const BTN_A: u8 = 0x10;
 pub const BTN_B: u8 = 0x20;
 pub const BTN_START: u8 = 0x40;
 pub const BTN_SELECT: u8 = 0x80;
+
+/// The 3×5 pixel rows for one glyph (ASCII `code`), top to bottom. Each row is
+/// 3 bits — bit 2 is the leftmost column. Covers `A-Z` (lowercase folds up),
+/// `0-9`, space, and `: ! . -`; anything else is blank. Small enough to inline
+/// scores, titles and `GAME OVER` without a font ROM.
+fn glyph_rows(code: u8) -> [u8; 5] {
+    let c = code.to_ascii_uppercase();
+    match c {
+        b'0' => [7, 5, 5, 5, 7],
+        b'1' => [2, 6, 2, 2, 7],
+        b'2' => [7, 1, 7, 4, 7],
+        b'3' => [7, 1, 7, 1, 7],
+        b'4' => [5, 5, 7, 1, 1],
+        b'5' => [7, 4, 7, 1, 7],
+        b'6' => [7, 4, 7, 5, 7],
+        b'7' => [7, 1, 2, 2, 2],
+        b'8' => [7, 5, 7, 5, 7],
+        b'9' => [7, 5, 7, 1, 7],
+        b'A' => [7, 5, 7, 5, 5],
+        b'B' => [6, 5, 6, 5, 6],
+        b'C' => [7, 4, 4, 4, 7],
+        b'D' => [6, 5, 5, 5, 6],
+        b'E' => [7, 4, 7, 4, 7],
+        b'F' => [7, 4, 7, 4, 4],
+        b'G' => [7, 4, 5, 5, 7],
+        b'H' => [5, 5, 7, 5, 5],
+        b'I' => [7, 2, 2, 2, 7],
+        b'J' => [1, 1, 1, 5, 7],
+        b'K' => [5, 6, 4, 6, 5],
+        b'L' => [4, 4, 4, 4, 7],
+        b'M' => [5, 7, 7, 5, 5],
+        b'N' => [5, 7, 5, 5, 5],
+        b'O' => [7, 5, 5, 5, 7],
+        b'P' => [7, 5, 7, 4, 4],
+        b'Q' => [7, 5, 5, 7, 3],
+        b'R' => [7, 5, 7, 6, 5],
+        b'S' => [7, 4, 7, 1, 7],
+        b'T' => [7, 2, 2, 2, 2],
+        b'U' => [5, 5, 5, 5, 7],
+        b'V' => [5, 5, 5, 5, 2],
+        b'W' => [5, 5, 7, 7, 5],
+        b'X' => [5, 5, 2, 5, 5],
+        b'Y' => [5, 5, 2, 2, 2],
+        b'Z' => [7, 1, 2, 4, 7],
+        b':' => [0, 2, 0, 2, 0],
+        b'!' => [2, 2, 2, 0, 2],
+        b'.' => [0, 0, 0, 0, 2],
+        b'-' => [0, 0, 7, 0, 0],
+        _ => [0, 0, 0, 0, 0], // space + unknown
+    }
+}
 
 /// An entity record the running game reports to the debug port for observation.
 /// These are authored by the game (not inferred), so the harness can expose or
@@ -233,6 +284,8 @@ impl Devices {
                     self.blit_sprite(addr, mem);
                 }
                 0xb => self.tileset_base = val,
+                // Draw one 3×5 font glyph (ascii code = val) at (sx,sy) in scolor.
+                0xc => self.draw_glyph(val as u8),
                 _ => {}
             },
             0x3 => {
@@ -308,6 +361,21 @@ impl Devices {
         }
         self.sx = base_x;
         self.sy = base_y;
+    }
+
+    /// Draw one 3×5 glyph (`code` = ASCII) at the pending `(sx,sy)` in `scolor`.
+    /// The caller advances x between characters (4 px/char). Unknown codes draw
+    /// nothing. Subject to the camera (via `put_pixel`) — reset `camera(0,0)`
+    /// before HUD text.
+    fn draw_glyph(&mut self, code: u8) {
+        let (x0, y0, color) = (self.sx, self.sy, self.scolor);
+        for (r, bits) in glyph_rows(code).iter().enumerate() {
+            for col in 0..3u16 {
+                if bits & (0x4 >> col) != 0 {
+                    self.put_pixel(x0 + col, y0 + r as u16, color);
+                }
+            }
+        }
     }
 
     /// Draw the pending map region: for each cell, read the tile id from

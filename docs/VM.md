@@ -252,6 +252,12 @@ end
 - **Arrays:** `len(arr)→word` is the array's declared length (a compile-time
   constant) — write `for i = 0, len(bullets)-1 do` so the loop follows the array
   size instead of a hand-written bound.
+- **On-screen text:** `text("LITERAL", x, y, color)` draws a compile-time string
+  in a built-in 3×5 font (uppercase `A-Z`, `0-9`, space, `: ! . -`; lowercase
+  folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,
+  luax has no runtime strings. `number(n, x, y, color)` draws an integer in
+  decimal. For scores, titles, and `GAME OVER` — reset `camera(0,0)` first if the
+  world is scrolled. See the HUD in `games/shooter.lua`.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
 - Comments: `--` line, `--[[ … ]]` block.
 

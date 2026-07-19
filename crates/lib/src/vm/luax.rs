@@ -80,6 +80,7 @@ fn err(line: usize, message: impl Into<String>) -> Diagnostic {
 enum Tok {
     Ident(String),
     Num(i64),
+    Str(String), // a "..." literal — only valid as text()'s first argument
     Sym(&'static str),
     Eof,
 }
@@ -141,6 +142,26 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                 tok: Tok::Ident(b[start..i].iter().collect()),
                 line,
             });
+            continue;
+        }
+        // String literal: "..." (no escapes; for text() titles/labels). Newlines
+        // inside are not allowed — an unterminated string is a diagnostic.
+        if c == '"' {
+            let start_line = line;
+            i += 1;
+            let s_start = i;
+            while i < b.len() && b[i] != '"' && b[i] != '\n' {
+                i += 1;
+            }
+            if i >= b.len() || b[i] == '\n' {
+                diagnostics.push(err(start_line, "unterminated string literal"));
+            } else {
+                out.push(Token {
+                    tok: Tok::Str(b[s_start..i].iter().collect()),
+                    line,
+                });
+                i += 1; // closing quote
+            }
             continue;
         }
         // Number.
@@ -279,6 +300,7 @@ enum TypeExpr {
 #[allow(dead_code)]
 enum Expr {
     Num(i64, usize),
+    Str(String, usize), // "..." literal — only valid as text()'s first arg
     Var(String, usize),
     Field(Box<Expr>, String, usize),
     Index(Box<Expr>, Box<Expr>, usize),
@@ -291,6 +313,7 @@ impl Expr {
     fn line(&self) -> usize {
         match self {
             Expr::Num(_, l)
+            | Expr::Str(_, l)
             | Expr::Var(_, l)
             | Expr::Field(_, _, l)
             | Expr::Index(_, _, l)
@@ -812,6 +835,10 @@ impl Parser {
                 self.advance();
                 Expr::Num(n, line)
             }
+            Tok::Str(s) => {
+                self.advance();
+                Expr::Str(s, line)
+            }
             Tok::Ident(k) if k == "true" => {
                 self.advance();
                 Expr::Num(1, line)
@@ -930,6 +957,8 @@ struct Helpers {
     touch: bool,   // @lx_touch_*: edge contact predicates
     collx: bool,   // @lx_collx: axis-resolving X movement
     colly: bool,   // @lx_colly: axis-resolving Y movement
+    text: bool,    // @lx_txt_x scratch for unrolled text()
+    number: bool,  // @lx_number: runtime decimal rendering
 }
 
 const BUTTON_CONSTS: &[(&str, i64)] = &[
@@ -990,6 +1019,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "touching_right" => (5, true),
         "touching_floor" => (5, true),
         "touching_ceiling" => (5, true),
+        "number" => (4, false),
         _ => return None,
     })
 }
@@ -1417,6 +1447,11 @@ impl Compiler {
                 out.push(((*n & 0xffff) as u16).to_string());
                 true
             }
+            Expr::Str(_, line) => {
+                d.push(err(*line, "string literals are only allowed as text()'s first argument"));
+                out.push("0".to_string());
+                true
+            }
             Expr::Var(name, _) => {
                 if let Some(v) = predefined_const(name) {
                     out.push(((v & 0xffff) as u16).to_string());
@@ -1526,6 +1561,7 @@ impl Compiler {
     fn type_of(&self, e: &Expr) -> Ty {
         match e {
             Expr::Num(..) => Ty::Word,
+            Expr::Str(..) => Ty::Word,
             Expr::Var(name, _) => {
                 if predefined_const(name).is_some() {
                     Ty::Word
@@ -1576,6 +1612,32 @@ impl Compiler {
             d.push(err(line, "len() takes one array argument"));
             out.push("0".to_string());
             return true;
+        }
+        // `text("literal", x, y, color)` unrolls one glyph draw per character
+        // (the string is compile-time). Colour and y are set once; x advances by
+        // 4 px per glyph. No value.
+        if name == "text" {
+            if let [Expr::Str(s, _), x, y, color] = args {
+                self.helpers.text = true;
+                self.gen_expr(color, out, d);
+                out.push("#13 DEO".to_string()); // scolor
+                self.gen_expr(y, out, d);
+                out.push("#12 DEO".to_string()); // sy
+                self.gen_expr(x, out, d);
+                out.push("lx_txt_x STORE16".to_string()); // base x
+                for (i, ch) in s.bytes().enumerate() {
+                    let off = i as u16 * 4;
+                    if off == 0 {
+                        out.push("lx_txt_x LOAD16 #11 DEO".to_string());
+                    } else {
+                        out.push(format!("lx_txt_x LOAD16 {off} ADD #11 DEO"));
+                    }
+                    out.push(format!("#{ch:02x} #1c DEO")); // draw glyph
+                }
+            } else {
+                d.push(err(line, "text() takes a string literal, then x, y, color"));
+            }
+            return false;
         }
         if let Some((argc, yields)) = builtin(name) {
             // On an arity mismatch, report it and emit nothing — a partial call
@@ -1716,6 +1778,10 @@ impl Compiler {
             "rect_overlap" => {
                 self.helpers.rect = true;
                 "lx_rect CALL"
+            }
+            "number" => {
+                self.helpers.number = true;
+                "lx_number CALL" // ( n x y color -- ) draw decimal at (x,y)
             }
             _ => "",
         };
@@ -1984,6 +2050,32 @@ impl Compiler {
                  @lx_colly_uhit lx_cy_lead LOAD16 #03 SHR #03 SHL #08 ADD RET\n",
             );
         }
+        // number ( n x y color -- ): render `n` in decimal at (x,y). Digits are
+        // extracted least-significant-first into a small buffer, then drawn
+        // left-to-right (4 px/glyph) via the font device.
+        if self.helpers.number {
+            out.push_str(
+                "@lx_number\n  #13 DEO #12 DEO lx_num_x STORE16 lx_num_n STORE16 \
+                 #00 lx_num_cnt STORE16 \
+                 @lx_number_ext \
+                 lx_num_n LOAD16 #0a MOD lx_num_buf lx_num_cnt LOAD16 ADD STORE8 \
+                 lx_num_cnt LOAD16 #01 ADD lx_num_cnt STORE16 \
+                 lx_num_n LOAD16 #0a DIV lx_num_n STORE16 \
+                 lx_num_n LOAD16 #00 EQ lx_number_draw JNZ \
+                 lx_number_ext JMP \
+                 @lx_number_draw \
+                 lx_num_cnt LOAD16 #01 SUB lx_num_j STORE16 \
+                 lx_num_x LOAD16 lx_num_px STORE16 \
+                 @lx_number_dloop \
+                 lx_num_px LOAD16 #11 DEO \
+                 #30 lx_num_buf lx_num_j LOAD16 ADD LOAD8 ADD #1c DEO \
+                 lx_num_px LOAD16 #04 ADD lx_num_px STORE16 \
+                 lx_num_j LOAD16 #00 EQ lx_number_done JNZ \
+                 lx_num_j LOAD16 #01 SUB lx_num_j STORE16 \
+                 lx_number_dloop JMP \
+                 @lx_number_done RET\n",
+            );
+        }
 
         // Data section.
         for line in &self.data {
@@ -2030,6 +2122,15 @@ impl Compiler {
             out.push_str(
                 "@lx_cy_x .res 2\n@lx_cy_y .res 2\n@lx_cy_w .res 2\n@lx_cy_h .res 2\n\
                  @lx_cy_dy .res 2\n@lx_cy_f .res 2\n@lx_cy_t .res 2\n@lx_cy_lead .res 2\n",
+            );
+        }
+        if self.helpers.text {
+            out.push_str("@lx_txt_x .res 2\n");
+        }
+        if self.helpers.number {
+            out.push_str(
+                "@lx_num_n .res 2\n@lx_num_x .res 2\n@lx_num_cnt .res 2\n\
+                 @lx_num_j .res 2\n@lx_num_px .res 2\n@lx_num_buf .res 6\n",
             );
         }
         // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
@@ -2602,6 +2703,68 @@ mod tests {
         let c = compile("function draw() if collide_x(0,0,8,8,1,SOLID) > 0 then end end");
         assert!(!c.ok());
         assert!(c.diagnostics.iter().any(|d| d.message.contains("tilemap")), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn text_draws_glyphs() {
+        // 'A' = rows [7,5,7,5,5]: top row is all three columns, row 1 is 1.1.
+        let src = r#"function draw() text("A", 0, 0, 7) end"#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 7);   // (0,0)
+        assert_eq!(c.vm.devices.framebuffer[1], 7);   // (1,0)
+        assert_eq!(c.vm.devices.framebuffer[2], 7);   // (2,0)
+        assert_eq!(c.vm.devices.framebuffer[128], 7); // (0,1)
+        assert_eq!(c.vm.devices.framebuffer[129], 0); // (1,1) gap
+    }
+
+    #[test]
+    fn text_advances_x_per_char() {
+        // Two glyphs 4 px apart: the second 'A' starts at x=4.
+        let src = r#"function draw() text("AA", 0, 0, 7) end"#;
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[4], 7); // (4,0) top of the 2nd 'A'
+        assert_eq!(c.vm.devices.framebuffer[5], 7);
+        assert_eq!(c.vm.devices.framebuffer[6], 7);
+    }
+
+    #[test]
+    fn number_renders_decimal_digits() {
+        // 123: '1' top row is .X. at x=0; '2'/'3' top rows are XXX at x=4 / x=8.
+        let src = r#"function draw() number(123, 0, 0, 7) end"#;
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 0); // '1' top-left empty
+        assert_eq!(c.vm.devices.framebuffer[1], 7); // '1' middle column
+        assert_eq!(c.vm.devices.framebuffer[4], 7); // '2' top-left
+        assert_eq!(c.vm.devices.framebuffer[8], 7); // '3' top-left
+    }
+
+    #[test]
+    fn number_zero_renders_one_digit() {
+        let src = r#"function draw() number(0, 0, 0, 7) end"#;
+        let mut c = load(src);
+        c.run_frame(0);
+        // '0' = [7,..,7]: full top and bottom rows.
+        assert_eq!(c.vm.devices.framebuffer[0], 7);
+        assert_eq!(c.vm.devices.framebuffer[1], 7);
+        assert_eq!(c.vm.devices.framebuffer[2], 7);
+    }
+
+    #[test]
+    fn string_only_valid_in_text() {
+        assert!(!compile(r#"local x = "hi"  function draw() end"#).ok());
+        let c = compile("function draw() text(1, 0, 0, 7) end"); // non-string first arg
+        assert!(!c.ok());
+    }
+
+    #[test]
+    fn unterminated_string_is_a_diagnostic() {
+        let c = compile("function draw() text(\"oops, 0, 0, 7) end");
+        assert!(!c.ok());
+        assert!(c.diagnostics.iter().any(|d| d.message.contains("unterminated")), "{:?}", c.diagnostics);
     }
 
     #[test]

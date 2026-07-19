@@ -145,5 +145,7 @@ function draw()
     if foes[i].alive == 1 then spr(foe, foes[i].x, foes[i].y, 0) end
     i = i + 1
   end
+  text("SCORE", 2, 2, 7)          -- HUD: a label...
+  number(score, 40, 2, 7)          -- ...and the live score
   entity(px, 112, 1)
 end
