@@ -32,19 +32,78 @@ pub struct GemmaCall {
 /// both engines' real outputs contain it.
 pub fn parse_native_tool_calls(text: &str) -> Vec<GemmaCall> {
     use std::sync::OnceLock;
-    // `call:NAME{ body }`. Names allow the MCP charset (letters/digits/._-).
-    // The `<|"|>` string tokens contain no braces, so the `[^{}]*` body capture
-    // is safe for the flat Gemma arg format.
-    static CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let call_re = CALL_RE
-        .get_or_init(|| regex::Regex::new(r"call:\s*([A-Za-z0-9_.\-]+)\s*\{([^{}]*)\}").unwrap());
-    call_re
-        .captures_iter(text)
-        .map(|cap| GemmaCall {
-            name: cap[1].to_string(),
-            arguments: parse_kv_args(&cap[2]),
-        })
-        .collect()
+    // Match only the *opening* `call:NAME{` (names use the MCP charset
+    // letters/digits/._-). The body is then scanned by [`scan_call_body`], which
+    // is `<|"|>`-string-aware: a string argument value may itself contain `{`/`}`
+    // (any code the model writes as an arg), so a `[^{}]*` body capture would
+    // silently fail to match the whole call and drop it — the model's turn then
+    // leaks raw `<|tool_call>` markup as a "text" answer.
+    static OPEN_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let open_re =
+        OPEN_RE.get_or_init(|| regex::Regex::new(r"call:\s*([A-Za-z0-9_.\-]+)\s*\{").unwrap());
+
+    let mut calls = Vec::new();
+    let mut from = 0;
+    while let Some(cap) = open_re.captures(&text[from..]) {
+        let whole = cap.get(0).unwrap();
+        let name = cap[1].to_string();
+        let body_start = from + whole.end();
+        match scan_call_body(text, body_start) {
+            Some((body, next)) => {
+                calls.push(GemmaCall {
+                    name,
+                    arguments: parse_kv_args(&body),
+                });
+                from = next;
+            }
+            None => {
+                // No matching close brace: consume the remainder as the body so a
+                // truncated final call is still recovered, then stop.
+                calls.push(GemmaCall {
+                    name,
+                    arguments: parse_kv_args(&text[body_start..]),
+                });
+                break;
+            }
+        }
+    }
+    calls
+}
+
+/// Scan the body of a `call:NAME{ ... }` starting just after the opening `{`
+/// (at byte offset `start`). Returns the body text (between the braces) and the
+/// offset just past the matching `}`. Brace depth is tracked only **outside**
+/// `<|"|>`-delimited strings, so braces inside a string argument value are
+/// ignored. Returns `None` if no matching close brace is found.
+fn scan_call_body(text: &str, start: usize) -> Option<(String, usize)> {
+    let mut depth = 1usize;
+    let mut in_str = false;
+    let mut idx = start;
+    while idx < text.len() {
+        let rest = &text[idx..];
+        if let Some(after) = rest.strip_prefix(STR_DELIM) {
+            in_str = !in_str;
+            idx = text.len() - after.len();
+            continue;
+        }
+        // `idx` is always on a char boundary: `start` is right after `{`, and we
+        // only advance by whole chars or by the (ASCII) `STR_DELIM` length.
+        let ch = rest.chars().next().unwrap();
+        if !in_str {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((text[start..idx].to_string(), idx + 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        idx += ch.len_utf8();
+    }
+    None
 }
 
 /// Parse a `key:<|"|>strval<|"|>, key2:scalar, ...` body into a JSON object.
@@ -187,6 +246,35 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "read");
         assert_eq!(calls[1].name, "glob");
+    }
+
+    #[test]
+    fn string_value_may_contain_braces() {
+        // Regression: a string arg holding content with `{`/`}` (source code,
+        // JSON, a shell command, …) must not defeat the body scan — it silently
+        // dropped the call and leaked raw `<|tool_call>` markup as a text answer
+        // for gemma-4-26B.
+        let content = "{\n  \"level\": 1,\n  \"spawn\": { \"x\": 5 }\n}\n";
+        let raw = format!(
+            "<|channel>thought<channel|><|tool_call>call:write{{file_path:<|\"|>data.json<|\"|>,content:<|\"|>{content}<|\"|>}}<tool_call|>"
+        );
+        let calls = parse_native_tool_calls(&raw);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write");
+        assert_eq!(calls[0].arguments["file_path"], "data.json");
+        assert_eq!(calls[0].arguments["content"], content);
+    }
+
+    #[test]
+    fn multiple_calls_with_braced_string_values() {
+        let raw = "call:write{file_path:<|\"|>run.sh<|\"|>,content:<|\"|>for i in {1..3}; do echo $i; done<|\"|>} \
+                   call:read{file_path:<|\"|>run.sh<|\"|>}";
+        let calls = parse_native_tool_calls(raw);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "write");
+        assert_eq!(calls[0].arguments["content"], "for i in {1..3}; do echo $i; done");
+        assert_eq!(calls[1].name, "read");
+        assert_eq!(calls[1].arguments["file_path"], "run.sh");
     }
 
     #[test]
