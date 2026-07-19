@@ -3,6 +3,12 @@
 --
 --   kessel --play games/brick.lua
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move the paddle
+  pause = START
+}
+
 sprite ballspr {
   ..7777..
   .777777.

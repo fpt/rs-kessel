@@ -3,6 +3,13 @@
 --
 --   kessel --play games/platform.lua
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows move
+  a = "jump"
+  pause = START
+}
+
 sprite hero {
   ..7777..
   .777777.

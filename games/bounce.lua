@@ -3,6 +3,12 @@
 --
 --   kessel --play games/bounce.lua
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = false      -- self-animating demo, no input
+  pause = START
+}
+
 record Ball { x, y, vx, vy }
 local b: Ball
 

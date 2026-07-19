@@ -38,6 +38,13 @@ pub struct VmConsole {
     sources: HashMap<String, String>,
     /// Assembled ROMs, keyed by source path.
     roms: HashMap<String, Vec<u8>>,
+    /// Control-layout metadata, keyed by source path (see [`luax::Controls`]).
+    controls: HashMap<String, luax::Controls>,
+    /// Control metadata of the currently loaded ROM (default until a load).
+    active_controls: luax::Controls,
+    /// Host-play pause state (managed by [`play_tick`](Self::play_tick)).
+    paused: bool,
+    prev_pause_down: bool,
     /// Saved states, keyed by snapshot id.
     snapshots: HashMap<String, Snapshot>,
     snap_counter: u64,
@@ -66,6 +73,10 @@ impl VmConsole {
             prev_fb: vec![0u8; device::SCREEN_PIXELS],
             sources: HashMap::new(),
             roms: HashMap::new(),
+            controls: HashMap::new(),
+            active_controls: luax::Controls::default(),
+            paused: false,
+            prev_pause_down: false,
             snapshots: HashMap::new(),
             snap_counter: 0,
         }
@@ -91,8 +102,9 @@ impl VmConsole {
             .ok_or_else(|| format!("no source written at '{path}'"))?;
 
         // luax (Lua-ish) dialect: compile to assembler first. Compiler
-        // diagnostics are returned in an otherwise-empty `Assembled`.
-        let built = if is_lua(path) {
+        // diagnostics are returned in an otherwise-empty `Assembled`. The
+        // control-layout metadata rides along and is cached for `load_rom`.
+        let (built, controls) = if is_lua(path) {
             let compiled = luax::compile(src);
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
@@ -101,13 +113,15 @@ impl VmConsole {
                     labels: Default::default(),
                 });
             }
-            assembler::assemble(&compiled.asm)
+            (assembler::assemble(&compiled.asm), compiled.controls)
         } else {
-            assembler::assemble(src)
+            // Raw assembly has no `controls` block; use the default layout.
+            (assembler::assemble(src), luax::Controls::default())
         };
 
         if built.ok() {
             self.roms.insert(path.to_string(), built.rom.clone());
+            self.controls.insert(path.to_string(), controls);
         }
         Ok(built)
     }
@@ -123,7 +137,40 @@ impl VmConsole {
         self.rom_loaded = true;
         self.frame = 0;
         self.prev_fb = self.vm.devices.framebuffer.clone();
+        self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
+        self.paused = false;
+        self.prev_pause_down = false;
         Ok(outcome)
+    }
+
+    /// The control-layout metadata of the currently loaded ROM.
+    pub fn controls(&self) -> &luax::Controls {
+        &self.active_controls
+    }
+
+    /// Whether host play is currently paused (see [`play_tick`](Self::play_tick)).
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// A host-play frame tick: toggle pause on the rising edge of the ROM's
+    /// pause button, then advance one frame **unless** paused. The pause button
+    /// (default START) comes from the ROM's `controls` metadata; it is a host
+    /// control, so its bit is **masked out** of the buttons handed to the game —
+    /// the game never sees it, not even on the frame play resumes (otherwise the
+    /// resume press would leak in as a `btn`/`btnp` on the pause button). Used by
+    /// the play window; the agent's `vm_run_frame` drives
+    /// [`run_frame`](Self::run_frame) directly instead.
+    pub fn play_tick(&mut self, buttons: u8) {
+        let pause_bit = self.active_controls.pause_bit();
+        let down = pause_bit != 0 && buttons & pause_bit != 0;
+        if down && !self.prev_pause_down {
+            self.paused = !self.paused;
+        }
+        self.prev_pause_down = down;
+        if !self.paused {
+            self.run_frame(buttons & !pause_bit);
+        }
     }
 
     /// Advance one frame with `buttons` held; returns the observation record.
@@ -202,9 +249,11 @@ impl VmConsole {
     pub fn reset(&mut self) {
         let keep_sources = std::mem::take(&mut self.sources);
         let keep_roms = std::mem::take(&mut self.roms);
+        let keep_controls = std::mem::take(&mut self.controls);
         *self = VmConsole::new();
         self.sources = keep_sources;
         self.roms = keep_roms;
+        self.controls = keep_controls;
     }
 }
 
@@ -380,6 +429,49 @@ mod tests {
         let o2 = c.run_frame(device::BTN_LEFT);
         assert_eq!(o2.buttons, vec!["LEFT"]);
         assert_eq!(o2.entities[0].x, 31);
+    }
+
+    #[test]
+    fn play_tick_pauses_and_masks_the_pause_button() {
+        // A game that (a) advances a counter each frame and (b) reacts to the
+        // pause button (START) itself via btnp — reporting the counter as an
+        // entity so we can read it. Pause must freeze the counter AND the game
+        // must never observe a START press (default pause button), even on the
+        // frame play resumes.
+        let src = r#"
+            local n = 0
+            local hits = 0
+            function update()
+              n = n + 1
+              if btnp(START) then hits = hits + 1 end
+            end
+            function draw() cls(0)  entity(n, hits, 1) end
+        "#;
+        let mut c = VmConsole::new();
+        c.write_source("p.lua", src);
+        assert!(c.assemble("p.lua").unwrap().ok());
+        c.load_rom("p.lua").unwrap();
+
+        // The last entity reported: (x = n, y = hits).
+        let read = |c: &VmConsole| {
+            let e = c.vm.devices.entities.last().copied().unwrap();
+            (e.x, e.y)
+        };
+
+        c.play_tick(0); // n=1
+        c.play_tick(0); // n=2
+        assert_eq!(read(&c), (2, 0));
+        assert!(!c.is_paused());
+
+        c.play_tick(device::BTN_START); // pause (down edge): frame skipped
+        assert!(c.is_paused());
+        assert_eq!(read(&c), (2, 0), "frozen while paused");
+        c.play_tick(0); // release, still paused
+        c.play_tick(device::BTN_START); // resume (down edge)
+        assert!(!c.is_paused());
+        // n advanced to 3, but hits is STILL 0: the pause button was masked out,
+        // so btnp(START) never fired despite the game watching for it.
+        assert_eq!(read(&c), (3, 0), "pause button leaked into the game");
     }
 
     #[test]

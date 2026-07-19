@@ -271,6 +271,25 @@ end
   decimal. For scores, titles, and `GAME OVER` — reset `camera(0,0)` first if the
   world is scrolled. See the HUD in `games/shooter.lua`.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
+- **Controls metadata:** an optional top-level `controls { … }` block records the
+  game's input layout **as ROM metadata** — a host UI (on-screen buttons, help
+  text, a smartphone virtual pad) reads it instead of guessing from source
+  comments. It is **irrelevant to VM execution**; the machine only ever sees the
+  raw gamepad bitfield.
+  ```lua
+  controls {
+    dpad = true       -- is the movement pad used
+    a = "jump"        -- action labels for the A / B / Start / Select buttons
+    b = "dash"
+    pause = START     -- which physical button pauses (default START)
+  }
+  ```
+  Keys: `dpad` (bool), `a`/`b`/`start`/`select` (a `"..."` label), and `pause` (a
+  button name). Entries are separated by whitespace (commas optional). Every game
+  has a **pause** binding by default (`START`) even with no block, so the host
+  always has a pause control to offer — the play window freezes/resumes the game
+  on that button and shows "PAUSED" in the title. `VmPlayer.controls_json()`
+  hands the whole layout to the host as JSON.
 - Comments: `--` line, `--[[ … ]]` block.
 
 ### Tutorial snippets
@@ -347,7 +366,9 @@ the `tilemap` and mutated with `mset`, `text`/`number` HUD).
 `VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,
 and on a 60 Hz timer calls `tick(buttons)` + `framebuffer_rgba()`, blitting the
 128×128 framebuffer scaled up with nearest-neighbour. The keyboard maps to the
-gamepad. `games/` holds sample ROMs.
+gamepad. Pressing the ROM's **pause** button (from its `controls` metadata,
+default `START` = Return) freezes the game and the title shows "PAUSED"; `tick`
+handles this in the player, so both host windows get it for free. `games/` holds sample ROMs.
 
 Under the hood the render loop is just: expand the palette-indexed framebuffer to
 RGBA (`Devices::framebuffer_rgba`), hand it to a `CGImage`, and draw it with

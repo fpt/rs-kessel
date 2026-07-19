@@ -357,6 +357,11 @@ void*_Nonnull uniffi_kessel_core_fn_constructor_vmplayer_new(RustCallStatus *_No
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_CONTROLS_JSON
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_CONTROLS_JSON
+RustBuffer uniffi_kessel_core_fn_method_vmplayer_controls_json(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
 RustBuffer uniffi_kessel_core_fn_method_vmplayer_framebuffer_rgba(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -370,6 +375,11 @@ int8_t uniffi_kessel_core_fn_method_vmplayer_has_rom(void*_Nonnull ptr, RustCall
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_IS_HALTED
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_IS_HALTED
 int8_t uniffi_kessel_core_fn_method_vmplayer_is_halted(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_IS_PAUSED
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_IS_PAUSED
+int8_t uniffi_kessel_core_fn_method_vmplayer_is_paused(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_VMPLAYER_LOAD
@@ -774,6 +784,12 @@ uint16_t uniffi_kessel_core_checksum_method_agent_submit_capture_result(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_CONTROLS_JSON
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_CONTROLS_JSON
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_controls_json(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_FRAMEBUFFER_RGBA
 uint16_t uniffi_kessel_core_checksum_method_vmplayer_framebuffer_rgba(void
@@ -789,6 +805,12 @@ uint16_t uniffi_kessel_core_checksum_method_vmplayer_has_rom(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_IS_HALTED
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_IS_HALTED
 uint16_t uniffi_kessel_core_checksum_method_vmplayer_is_halted(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_IS_PAUSED
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_VMPLAYER_IS_PAUSED
+uint16_t uniffi_kessel_core_checksum_method_vmplayer_is_paused(void
     
 );
 #endif

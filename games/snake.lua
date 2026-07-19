@@ -3,6 +3,13 @@
 --
 --   kessel --play games/snake.lua
 
+-- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+controls {
+  dpad = true       -- arrows steer
+  a = "restart"
+  pause = START
+}
+
 sprite seg {
   .bbbbbb.
   bbbbbbbb
