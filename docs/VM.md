@@ -79,6 +79,9 @@ Port byte = `(device << 4) | register`.
 | `0x14` | out | draw pixel at (x,y) |
 | `0x15` | out | draw 8×8 sprite from `mem[addr]` (32 bytes, 4bpp, hi-nibble = left) |
 | `0x16` | out | clear screen to colour |
+| `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
+| `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id (scaled tile at screen x/y) |
+| `0xc0` | in/out | trig: write angle (0..255 = a turn) → read sin; `0xc1` reads cos. Signed 8.8 fixed (-256..256) |
 | `0x20` | in  | gamepad buttons bitfield (held) |
 | `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
@@ -249,6 +252,22 @@ end
   `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
+- **Pseudo-3D / scaling (racers, mode-7-ish effects):**
+  - `hline(x1,x2,y,c)` — fill a horizontal span at row `y`. The endpoints are
+    signed, so a span whose left edge runs off-screen clips cleanly. Drawing one
+    span per scanline gives a perspective road/floor cheaply (see
+    `games/outrun.lua`).
+  - `spr_scaled(id,x,y,scale,flags)` — nearest-neighbour scaled sheet tile;
+    `scale` is 8.8 fixed (`256` = 1.0, `512` = 2×, `128` = ½×). For
+    distance-scaled cars, trees and signs. Prefer angle-specific sprites over
+    runtime rotation (there is no rotate builtin — it costs a lot for little).
+  - `sin(a)→int` / `cos(a)→int` — fixed-point trig with `a` in `0..255` for a
+    full turn (`64` = 90°). The result is **signed** 8.8 fixed in `[-256,256]`
+    (`256` = 1.0), so `if cos(a) < 0` works. Note `/` is **always unsigned**, so
+    `cos(a)*speed/256` does *not* auto-handle a negative product — branch on the
+    sign and divide the magnitude, e.g.
+    `if s < 0 then d = 0 - ((0 - s) / 40) else d = s / 40 end` (see the bobbing
+    sun in `outrun.lua`).
 - **Input & timing:** `btn(mask)→0/1` (held), `btnp(mask)→0/1` (pressed *this*
   frame — the rising edge), `btnr(mask)→0/1` (released this frame). Use `btnp`
   for jumps, menu steps and fire-on-press so the model doesn't have to track the
@@ -352,6 +371,7 @@ kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-dr
 kessel --play games/rogue.lua     # top-down action — arrows move, A swings a sword
 kessel --play games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
 kessel --play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
+kessel --play games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:
@@ -363,7 +383,9 @@ rotation, a `tilemap` well + line clears, `min`-clamped difficulty), `rogue`
 (`tilemap` + `fset`/`solid` collision + simple enemy AI + `min`-capped healing),
 `platform` (tile collision, gravity, wall-jumps, collectibles, and enemies), and
 `sokoban` (grid puzzle — `btnp` step input, a board held in the `tilemap` and
-mutated with `mset`, `text`/`number` HUD).
+mutated with `mset`, `text`/`number` HUD), and `outrun` (a pseudo-3D road racer
+— per-scanline `hline` road with a parabolic curve, `spr_scaled` roadside trees,
+and a `sin`-bobbed sun).
 
 > Note on `min`/`max`: they compile to the VM's **unsigned** `LT`/`GT`, so only
 > clamp values that stay non-negative with them (e.g. a score-derived level).

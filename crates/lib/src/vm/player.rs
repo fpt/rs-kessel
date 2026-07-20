@@ -264,6 +264,7 @@ mod tests {
             (include_str!("../../../../games/sprite.lua"), "sprite.lua"),
             (include_str!("../../../../games/platform.lua"), "platform.lua"),
             (include_str!("../../../../games/sokoban.lua"), "sokoban.lua"),
+            (include_str!("../../../../games/outrun.lua"), "outrun.lua"),
         ] {
             let p = VmPlayer::new();
             let err = p.load(src.to_string(), name.to_string());

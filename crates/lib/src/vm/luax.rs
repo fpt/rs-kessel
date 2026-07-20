@@ -1182,7 +1182,9 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
     Some(match name {
         "cls" => (1, false),
         "pset" => (3, false),
+        "hline" => (4, false),
         "spr" => (4, false),
+        "spr_scaled" => (5, false),
         "sprn" => (6, false),
         "sspr" => (4, false),
         "entity" => (3, false),
@@ -1193,6 +1195,8 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "btnp" => (1, true),
         "btnr" => (1, true),
         "frame_count" => (0, true),
+        "sin" => (1, true),
+        "cos" => (1, true),
         "rnd" => (1, true),
         "peek" => (1, true),
         "peek16" => (1, true),
@@ -1853,7 +1857,11 @@ impl Compiler {
                     Ty::Word
                 }
             }
-            Expr::Call(..) => Ty::Word,
+            // sin/cos return a signed 8.8 fixed value; the rest are unsigned.
+            Expr::Call(name, ..) => match name.as_str() {
+                "sin" | "cos" => Ty::Int,
+                _ => Ty::Word,
+            },
         }
     }
 
@@ -2023,7 +2031,11 @@ impl Compiler {
         let seq: &str = match name {
             "cls" => "#16 DEO",
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
+            // ( x1 x2 y color ) fill a horizontal span at row y — pseudo-3D road.
+            "hline" => "#13 DEO #12 DEO SWAP #11 DEO #1d DEO",
             "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO",      // ( id x y flags ) blit by id
+            // ( id x y scale flags ) nearest-neighbour scaled tile (256 = 1.0).
+            "spr_scaled" => "#19 DEO #b0 DEO #12 DEO #11 DEO #b1 DEO",
             // ( id x y w h flags ) draw a w×h block of contiguous sheet tiles.
             "sprn" => "#19 DEO #a2 DEO #a1 DEO #12 DEO #11 DEO #a0 DEO #00 #a3 DEO",
             "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO",     // ( addr x y flags ) raw blit
@@ -2034,6 +2046,8 @@ impl Compiler {
             "btnp" => "#21 DEI AND #00 NE", // just-pressed this frame
             "btnr" => "#22 DEI AND #00 NE", // just-released this frame
             "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
+            "sin" => "#c0 DEO #c0 DEI",      // ( angle ) -> signed 8.8 fixed sin
+            "cos" => "#c0 DEO #c1 DEI",      // ( angle ) -> signed 8.8 fixed cos
             "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
             "music" => "#91 DEO",           // ( id ) start a music track
             "music_stop" => "#00 #92 DEO",  // stop music
@@ -2973,6 +2987,80 @@ mod tests {
         assert_eq!(c.vm.devices.framebuffer[8], 2);            // (8,0) id b
         assert_eq!(c.vm.devices.framebuffer[8 * 128], 3);      // (0,8) id c
         assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4);  // (8,8) id d
+    }
+
+    #[test]
+    fn hline_fills_a_span() {
+        // hline(10, 20, 5, 7): row 5, columns 10..=20 become colour 7; the cells
+        // just outside stay background. Order-free (x1 > x2 draws the same span).
+        let src = r#"
+            function draw()
+              cls(0)
+              hline(10, 20, 5, 7)
+              hline(30, 25, 6, 3)   -- reversed args draw the same span
+            end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!(fb[5 * 128 + 9], 0, "left of span untouched");
+        assert_eq!(fb[5 * 128 + 10], 7, "span start");
+        assert_eq!(fb[5 * 128 + 20], 7, "span end (inclusive)");
+        assert_eq!(fb[5 * 128 + 21], 0, "right of span untouched");
+        assert_eq!(fb[6 * 128 + 25], 3, "reversed span start");
+        assert_eq!(fb[6 * 128 + 30], 3, "reversed span end");
+    }
+
+    #[test]
+    fn spr_scaled_scales_a_tile() {
+        // A solid 8×8 tile drawn at scale 512 (2.0) covers a 16×16 block.
+        let src = r#"
+            sprite box {
+              77777777
+              77777777
+              77777777
+              77777777
+              77777777
+              77777777
+              77777777
+              77777777
+            }
+            function draw() cls(0)  spr_scaled(box, 0, 0, 512, 0) end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!(fb[0], 7, "top-left drawn");
+        assert_eq!(fb[15 * 128 + 15], 7, "16x16 block filled at 2x scale");
+        assert_eq!(fb[16 * 128 + 16], 0, "nothing past the scaled bounds");
+    }
+
+    #[test]
+    fn sin_cos_fixed_point_and_signed() {
+        // Cardinal angles are exact (8.8 fixed: 256 = 1.0). sin/cos are typed
+        // `int`, so a negative result compares as signed — the useful property
+        // for direction tests. (Division stays unsigned; games negate by hand.)
+        let src = r#"
+            function draw()
+              entity(sin(0), 0, 1)      -- 0
+              entity(sin(64), 0, 2)     -- 256  (90 deg)
+              entity(cos(0), 0, 3)      -- 256
+              entity(cos(64), 0, 4)     -- 0    (90 deg)
+              entity(0 - cos(128), 0, 5)  -- cos(180) = -256, negated = 256
+              if cos(128) < 0 then entity(1, 0, 6) else entity(0, 0, 6) end -- signed
+            end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(o.entities[0].x, 0);
+        assert_eq!(o.entities[1].x, 256);
+        assert_eq!(o.entities[2].x, 256);
+        assert_eq!(o.entities[3].x, 0);
+        assert_eq!(o.entities[4].x, 256, "cos(180) is -256 in two's complement");
+        assert_eq!(o.entities[5].x, 1, "cos(180) < 0 read as signed");
     }
 
     #[test]
