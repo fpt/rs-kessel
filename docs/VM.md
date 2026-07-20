@@ -240,8 +240,8 @@ end
     tile (no tunneling across a full tile in one frame).
   - `touching_left|right|floor|ceiling(x,y,w,h,flag)→bool` — is a flagged tile
     directly against that edge? (Grounded checks, wall-slides, ceiling bonks.)
-  Jump *feel* (coyote time, jump buffering, double/wall-jump counters) stays in
-  luax — see `games/wall.lua`.
+  Jump *feel* (coyote time, jump buffering, wall-slides, and wall-jumps) stays in
+  luax — see `games/platform.lua`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
   `id`; flags bit0/1 = flip x/y), `sprn(id,x,y,w,h,flags)` (draw a `w×h` block of
   contiguous sheet tiles — id at col/row = `id + row*w + col` — for 16×16+
@@ -350,8 +350,7 @@ kessel --play games/brick.lua     # Breakout — arrows move the paddle
 kessel --play games/shooter.lua   # vertical shooter — arrows move, A fires
 kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
 kessel --play games/rogue.lua     # top-down action — arrows move, A swings a sword
-kessel --play games/platform.lua  # tile platformer — arrows move, A jumps
-kessel --play games/wall.lua      # platformer — collide_x/y + touching_* + btnp double/wall-jump
+kessel --play games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
 kessel --play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
 ```
 
@@ -360,9 +359,10 @@ The `games/` set doubles as worked luax examples spanning the builtins:
 grid movement), `brick` (signed `int` velocity + AABB
 brick hits), `shooter` (entity pools + `rect_overlap`), `tetris` (bitmask pieces,
 runtime rotation, a `tilemap` well + line clears), `rogue` (`tilemap` +
-`fset`/`solid` collision + simple enemy AI), `platform` (tile collision +
-gravity + jump), and `sokoban` (grid puzzle — `btnp` step input, a board held in
-the `tilemap` and mutated with `mset`, `text`/`number` HUD).
+`fset`/`solid` collision + simple enemy AI), `platform` (tile collision,
+gravity, wall-jumps, collectibles, and enemies), and `sokoban` (grid puzzle —
+`btnp` step input, a board held in the `tilemap` and mutated with `mset`,
+`text`/`number` HUD).
 
 `--play` needs no model or API key. It loads a `.lua`/`.asm` file into a standalone
 `VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,
