@@ -231,7 +231,7 @@ function try_move(nx, ny)
   if chest_opened == 0 and hx == chest_x and hy == chest_y then
     chest_opened = 1
     loot = loot + 1
-    if hp < 5 then hp = hp + 1 end
+    hp = min(hp + 1, 5)     -- heal one, capped at full (hp is non-negative)
   end
   if hx == stair_x and hy == stair_y then load_stage(stage + 1) end
 end
