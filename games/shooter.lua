@@ -153,8 +153,11 @@ end
 function draw()
   cls(0)
   if dead == 0 then spr(ship, px, 112, 0) end
+  -- Each pool is walked by its own len(), so the two arrays stay independent.
   for i = 0, len(bullets) - 1 do
     if bullets[i].alive == 1 then spr(bull, bullets[i].x, bullets[i].y, 0) end
+  end
+  for i = 0, len(foes) - 1 do
     if foes[i].alive == 1 then spr(foe, foes[i].x, foes[i].y, 0) end
   end
   text("SCORE", 2, 2, 7)          -- HUD: a label...
