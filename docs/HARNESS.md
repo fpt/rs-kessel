@@ -119,7 +119,16 @@ instruction-cap exceeded; likely loop at game.lua:132
 
 With symbols, replace "read address 0x1068" with `inspect("player.vy") → -1`.
 Reading state by name is dramatically easier for an LLM than decoding raw memory
-and stacks.
+and stacks. Today the only inspection tool is `vm_inspect_memory` by numeric
+address, so this is net-new tooling.
+
+Scope it in two steps. **Globals and record fields are the easy win**: luax
+already lowers them to stable named labels (`lx_g_*`), so mapping a name → address
+→ typed read is a small addition on top of the symbol table (§4.1). **Function
+locals and parameters are harder** and should come later: they are allocated as
+static compiler slots (`lx_l_*`) with no lifetime information, so inspecting them
+by source name means teaching the IR to preserve each local's name, type, and
+live range. Start with globals/records; treat locals as a follow-up.
 
 ### 4.3 Frame history & time-travel
 
@@ -242,7 +251,18 @@ Warning: START pause control declared but unused
 ```
 
 This is where the `controls {}` metadata (see [VM.md](VM.md)) pays off — declared
-controls give the check something concrete to exercise and to warn about.
+controls give the check something concrete to exercise.
+
+Note the "declared but unused" warning is **not** possible from the metadata as
+it stands: `controls {}` records only the labels and the pause binding, and the
+runtime just consumes the supplied gamepad bitfield — nothing tracks whether the
+code ever reads a given button. Making that warning real needs one of two new
+capabilities: **static** — have the compiler record which button ports each
+`btn`/`btnp`/`btnr` call reads, so a declared control with no corresponding read
+is flagged; or **runtime** — track which button ports were actually read during
+the random-play frames (§4.8) and flag any declared control never exercised. The
+static form is the more reliable signal; either is a small addition once the
+symbol/debug-info work (§4.1) exists.
 
 ### 4.11 Prompt → acceptance tests
 
