@@ -19,21 +19,36 @@ use super::{buttons_from_names, VmConsole};
 
 type Shared = Arc<Mutex<VmConsole>>;
 
+/// Construct one shared [`VmConsole`] and build every `vm_*` tool over it.
+///
+/// The tools share the console, so their order does not matter but the set must
+/// stay together (they drive one VM). Used two ways: registered into a local
+/// `ToolRegistry` by [`register_vm_tools`] (in-process agent), or wrapped as
+/// `acp_client::ClientTool`s and served to a remote backend over ACP (kessel as
+/// an ACP client hosting the resident VM).
+pub fn vm_tool_handlers() -> Vec<Box<dyn ToolHandler>> {
+    let console: Shared = Arc::new(Mutex::new(VmConsole::new()));
+    vec![
+        Box::new(WriteSource(console.clone())),
+        Box::new(Assemble(console.clone())),
+        Box::new(LoadRom(console.clone())),
+        Box::new(RunCycles(console.clone())),
+        Box::new(RunFrame(console.clone())),
+        Box::new(InspectMemory(console.clone())),
+        Box::new(InspectStacks(console.clone())),
+        Box::new(GetFramebuffer(console.clone())),
+        Box::new(Snapshot(console.clone())),
+        Box::new(Restore(console.clone())),
+        Box::new(Reset(console)),
+    ]
+}
+
 /// Construct one shared [`VmConsole`] and register every `vm_*` tool onto
 /// `registry`.
 pub fn register_vm_tools(registry: &mut ToolRegistry) {
-    let console: Shared = Arc::new(Mutex::new(VmConsole::new()));
-    registry.register(Box::new(WriteSource(console.clone())));
-    registry.register(Box::new(Assemble(console.clone())));
-    registry.register(Box::new(LoadRom(console.clone())));
-    registry.register(Box::new(RunCycles(console.clone())));
-    registry.register(Box::new(RunFrame(console.clone())));
-    registry.register(Box::new(InspectMemory(console.clone())));
-    registry.register(Box::new(InspectStacks(console.clone())));
-    registry.register(Box::new(GetFramebuffer(console.clone())));
-    registry.register(Box::new(Snapshot(console.clone())));
-    registry.register(Box::new(Restore(console.clone())));
-    registry.register(Box::new(Reset(console)));
+    for handler in vm_tool_handlers() {
+        registry.register(handler);
+    }
 }
 
 // ---- helpers ----
