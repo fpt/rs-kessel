@@ -55,12 +55,8 @@ local score = 0
 local dead = 0
 
 function init()
-  local i = 0
-  while i < 6 do
-    bullets[i].alive = 0
-    foes[i].alive = 0
-    i = i + 1
-  end
+  clear(bullets)                    -- zero both pools in one call (alive -> 0)
+  clear(foes)
   px = 60
   cd = 0
   spawn = 0
@@ -69,8 +65,9 @@ function init()
 end
 
 function fire()
-  local i = 0
-  while i < 6 do
+  -- len(bullets) follows the array's declared size, so resizing the pool needs
+  -- no edits here (or in any other loop below).
+  for i = 0, len(bullets) - 1 do
     if bullets[i].alive == 0 then
       -- The bullet sprite's visible pixels are columns 3-4, matching the ship's
       -- centreline when both sprites share the same x origin.
@@ -79,20 +76,17 @@ function fire()
       bullets[i].alive = 1
       return
     end
-    i = i + 1
   end
 end
 
 function spawn_foe()
-  local i = 0
-  while i < 6 do
+  for i = 0, len(foes) - 1 do
     if foes[i].alive == 0 then
       foes[i].x = rnd(120)
       foes[i].y = 0
       foes[i].alive = 1
       return
     end
-    i = i + 1
   end
 end
 
@@ -104,6 +98,8 @@ function update()
 
   if btn(LEFT)  then px = px - 2 end
   if btn(RIGHT) then px = px + 2 end
+  -- px is a signed int (goes negative at the left edge), so clamp with signed
+  -- comparisons — min/max use unsigned LT/GT and would wrap a negative px.
   if px < 0 then px = 0 end
   if px > 120 then px = 120 end
 
@@ -111,8 +107,7 @@ function update()
   if btn(A) and cd == 0 then fire()  cd = 8 end
 
   -- move bullets up
-  local i = 0
-  while i < 6 do
+  for i = 0, len(bullets) - 1 do
     if bullets[i].alive == 1 then
       if bullets[i].y < 3 then
         bullets[i].alive = 0
@@ -120,58 +115,50 @@ function update()
         bullets[i].y = bullets[i].y - 3
       end
     end
-    i = i + 1
   end
 
   -- spawn + advance foes
   spawn = spawn + 1
   if spawn % 30 == 0 then spawn_foe() end
-  i = 0
-  while i < 6 do
+  for i = 0, len(foes) - 1 do
     if foes[i].alive == 1 then
       foes[i].y = foes[i].y + 1
       if foes[i].y >= 128 then foes[i].alive = 0 end
     end
-    i = i + 1
   end
 
   -- Use an inset ship hitbox so transparent wing corners do not feel unfair.
-  i = 0
-  while i < 6 do
+  for i = 0, len(foes) - 1 do
     if foes[i].alive == 1 and rect_overlap(px + 1, 113, 6, 6, foes[i].x, foes[i].y, 8, 8) then
       dead = 1
       return
     end
-    i = i + 1
   end
 
   -- bullet vs foe
-  i = 0
-  while i < 6 do
+  for i = 0, len(bullets) - 1 do
     if bullets[i].alive == 1 then
-      local j = 0
-      while j < 6 do
+      for j = 0, len(foes) - 1 do
         if foes[j].alive == 1 and rect_overlap(bullets[i].x + 3, bullets[i].y, 2, 4, foes[j].x, foes[j].y, 8, 8) then
           foes[j].alive = 0
           bullets[i].alive = 0
           score = score + 1
           break                 -- this bullet is spent: don't let it kill more foes
         end
-        j = j + 1
       end
     end
-    i = i + 1
   end
 end
 
 function draw()
   cls(0)
   if dead == 0 then spr(ship, px, 112, 0) end
-  local i = 0
-  while i < 6 do
+  -- Each pool is walked by its own len(), so the two arrays stay independent.
+  for i = 0, len(bullets) - 1 do
     if bullets[i].alive == 1 then spr(bull, bullets[i].x, bullets[i].y, 0) end
+  end
+  for i = 0, len(foes) - 1 do
     if foes[i].alive == 1 then spr(foe, foes[i].x, foes[i].y, 0) end
-    i = i + 1
   end
   text("SCORE", 2, 2, 7)          -- HUD: a label...
   number(score, 40, 2, 7)          -- ...and the live score

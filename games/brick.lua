@@ -61,8 +61,8 @@ function launch_ball()
 end
 
 function init()
-  local i = 0
-  while i < 60 do alive[i] = 1  i = i + 1 end
+  -- len(alive) tracks the array's declared size (BCOLS*BROWS) automatically.
+  for i = 0, len(alive) - 1 do alive[i] = 1 end
   padx = 52
   launch_ball()
 end

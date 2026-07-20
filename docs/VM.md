@@ -356,13 +356,20 @@ kessel --play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), ms
 
 The `games/` set doubles as worked luax examples spanning the builtins:
 `2048` (array transforms + edge-triggered grid input), `snake` (record arrays +
-grid movement), `brick` (signed `int` velocity + AABB
-brick hits), `shooter` (entity pools + `rect_overlap`), `tetris` (bitmask pieces,
-runtime rotation, a `tilemap` well + line clears), `rogue` (`tilemap` +
-`fset`/`solid` collision + simple enemy AI), `platform` (tile collision,
-gravity, wall-jumps, collectibles, and enemies), and `sokoban` (grid puzzle —
-`btnp` step input, a board held in the `tilemap` and mutated with `mset`,
-`text`/`number` HUD).
+grid movement), `brick` (signed `int` velocity + AABB brick hits + a
+`len`-bounded pool init), `shooter` (entity pools driven by `len` +
+`clear`-reset pools + `rect_overlap`), `tetris` (bitmask pieces, runtime
+rotation, a `tilemap` well + line clears, `min`-clamped difficulty), `rogue`
+(`tilemap` + `fset`/`solid` collision + simple enemy AI + `min`-capped healing),
+`platform` (tile collision, gravity, wall-jumps, collectibles, and enemies), and
+`sokoban` (grid puzzle — `btnp` step input, a board held in the `tilemap` and
+mutated with `mset`, `text`/`number` HUD).
+
+> Note on `min`/`max`: they compile to the VM's **unsigned** `LT`/`GT`, so only
+> clamp values that stay non-negative with them (e.g. a score-derived level).
+> For a signed `int` that can go negative (a velocity or an off-screen
+> coordinate), keep explicit `if x < 0` comparisons — see `shooter`'s player
+> clamp — since `min`/`max` would treat the wrapped negative as a huge number.
 
 `--play` needs no model or API key. It loads a `.lua`/`.asm` file into a standalone
 `VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,

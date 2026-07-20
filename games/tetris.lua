@@ -131,8 +131,8 @@ end
 
 -- Gravity starts gently, then gains one speed level per 500 points.
 function drop_delay()
-  local level = score / 500
-  if level > 7 then level = 7 end
+  -- level is non-negative (score/500), so unsigned min() clamps it safely.
+  local level = min(score / 500, 7)
   return 36 - level * 4
 end
 
