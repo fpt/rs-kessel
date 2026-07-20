@@ -7,7 +7,7 @@
 //! | dev | name    | registers |
 //! |-----|---------|-----------|
 //! | 0x0 | system  | 0 halt · 1 pal-index · 2 pal-r · 3 pal-g · 4 pal-b (commit) |
-//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) |
+//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) · d hspan(x2) |
 //! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) — all read |
 //! | 0x3 | rng     | 0 next (read) / set-seed (write) |
 //! | 0x4 | storage | 0 addr · 1 read · 2 write |
@@ -17,6 +17,8 @@
 //! | 0x8 | time    | 0 frame-count (read) |
 //! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop (recorded, no audio yet) |
 //! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
+//! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
+//! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
 
 /// Screen edge length in pixels (square framebuffer).
 pub const SCREEN_DIM: usize = 128;
@@ -82,6 +84,18 @@ fn glyph_rows(code: u8) -> [u8; 5] {
         b'-' => [0, 0, 7, 0, 0],
         _ => [0, 0, 0, 0, 0], // space + unknown
     }
+}
+
+/// Fixed-point sine/cosine of `angle`, where 0..256 spans a full turn (so 64 =
+/// 90°, 128 = 180°, 192 = 270°). The result is signed 8.8 fixed in [-256, 256]
+/// (256 = 1.0), returned as two's-complement `u16`. Games use it as
+/// `vx = cos(a) * speed / 256`. Exact at the cardinal angles: sin(0)=0,
+/// sin(64)=256, sin(128)=0, sin(192)=-256.
+fn trig_fp(angle: u16, cosine: bool) -> u16 {
+    let radians = (angle & 0xff) as f64 / 256.0 * std::f64::consts::TAU;
+    let v = if cosine { radians.cos() } else { radians.sin() };
+    let scaled = (v * 256.0).round() as i32;
+    scaled.clamp(-256, 256) as i16 as u16
 }
 
 /// An entity record the running game reports to the debug port for observation.
@@ -194,6 +208,10 @@ pub struct Devices {
     sprn_id: u16,
     sprn_w: u16,
     sprn_h: u16,
+    // scaled-sprite device (page 0xb): pending scale (8.8 fixed, 256 = 1.0)
+    scale_fp: u16,
+    // trig device (page 0xc): latched angle (0..255 = a full turn)
+    trig_angle: u16,
 }
 
 impl Default for Devices {
@@ -241,6 +259,8 @@ impl Devices {
             sprn_id: 0,
             sprn_w: 0,
             sprn_h: 0,
+            scale_fp: 256,
+            trig_angle: 0,
         }
     }
 
@@ -258,6 +278,9 @@ impl Devices {
             // time device: frames since power-on.
             (0x8, 0x0) => self.frame_count,
             (0x4, 0x1) => self.storage[self.storage_addr as usize] as u16,
+            // trig device: sin/cos of the latched angle, signed 8.8 fixed.
+            (0xc, 0x0) => trig_fp(self.trig_angle, false),
+            (0xc, 0x1) => trig_fp(self.trig_angle, true),
             _ => 0,
         }
     }
@@ -309,6 +332,9 @@ impl Devices {
                 0xb => self.tileset_base = val,
                 // Draw one 3×5 font glyph (ascii code = val) at (sx,sy) in scolor.
                 0xc => self.draw_glyph(val as u8),
+                // Horizontal span from the pending sx to x2 (=val) at row sy in
+                // scolor — the pseudo-3D road/scanline primitive.
+                0xd => self.draw_hline(self.sx, val, self.sy, self.scolor),
                 _ => {}
             },
             0x3 => {
@@ -366,6 +392,18 @@ impl Devices {
                 0x3 => self.draw_sprn(mem),
                 _ => {}
             },
+            // Scaled-sprite device: latch a scale, then blit a sheet tile scaled.
+            0xb => match reg {
+                0x0 => self.scale_fp = val,
+                0x1 => self.draw_sprite_scaled(val, mem),
+                _ => {}
+            },
+            // Trig device: latch the angle; sin/cos are read back via `read`.
+            0xc => {
+                if reg == 0x0 {
+                    self.trig_angle = val;
+                }
+            }
             _ => {}
         }
     }
@@ -474,6 +512,58 @@ impl Devices {
                 let ci = if src_col % 2 == 0 { byte >> 4 } else { byte & 0x0f };
                 if ci != 0 {
                     self.put_pixel(self.sx.wrapping_add(col), self.sy.wrapping_add(row), ci);
+                }
+            }
+        }
+    }
+
+    /// Fill a horizontal span from world x `xa`..`xb` (inclusive, order-free) at
+    /// row `y` in `color`. The camera translates world→screen and the span is
+    /// clipped to the framebuffer, so the loop runs at most one screen width —
+    /// cheap enough to draw a full pseudo-3D road one row at a time.
+    fn draw_hline(&mut self, xa: u16, xb: u16, y: u16, color: u8) {
+        let sy = y as i32 - self.cam_y as i32;
+        if !(0..SCREEN_DIM as i32).contains(&sy) {
+            return;
+        }
+        // Interpret the endpoints as signed, so a span whose left edge runs off
+        // the screen (a road center that dips below 0) clips instead of wrapping
+        // to a huge positive x and vanishing.
+        let (xa, xb) = (xa as i16 as i32, xb as i16 as i32);
+        let (lo, hi) = if xa <= xb { (xa, xb) } else { (xb, xa) };
+        let sxa = (lo - self.cam_x as i32).max(0);
+        let sxb = (hi - self.cam_x as i32).min(SCREEN_DIM as i32 - 1);
+        let c = color & 0x0f;
+        let row = sy as usize * SCREEN_DIM;
+        let mut sx = sxa;
+        while sx <= sxb {
+            self.framebuffer[row + sx as usize] = c;
+            sx += 1;
+        }
+    }
+
+    /// Blit sheet tile `id` at the pending `(sx,sy)`, nearest-neighbour scaled by
+    /// `scale_fp` (8.8 fixed: 256 = 1.0). Colour 0 stays transparent and the
+    /// current `sprite_flags` (flip) apply. The destination side is clamped to a
+    /// screen width so an absurd scale can't blow up the pixel loop — for
+    /// distance-scaled cars, signs and trees in a racer.
+    fn draw_sprite_scaled(&mut self, id: u16, mem: &[u8]) {
+        let addr = self.tileset_base.wrapping_add(id.wrapping_mul(32));
+        let flip_x = self.sprite_flags & 0x01 != 0;
+        let flip_y = self.sprite_flags & 0x02 != 0;
+        // Destination side length in px = 8 * scale / 256, at least 1.
+        let dst = ((8u32 * self.scale_fp as u32 / 256).max(1)).min(SCREEN_DIM as u32) as u16;
+        for dy in 0..dst {
+            let src_row0 = (dy as u32 * 8 / dst as u32) as u16; // 0..7
+            let src_row = if flip_y { 7 - src_row0 } else { src_row0 };
+            for dx in 0..dst {
+                let src_col0 = (dx as u32 * 8 / dst as u32) as u16;
+                let src_col = if flip_x { 7 - src_col0 } else { src_col0 };
+                let byte_addr = addr.wrapping_add(src_row * 4 + src_col / 2) as usize;
+                let byte = mem.get(byte_addr).copied().unwrap_or(0);
+                let ci = if src_col % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+                if ci != 0 {
+                    self.put_pixel(self.sx.wrapping_add(dx), self.sy.wrapping_add(dy), ci);
                 }
             }
         }
@@ -681,5 +771,48 @@ mod tests {
         let rgba = d.framebuffer_rgba();
         assert_eq!(&rgba[0..4], &[0xFF, 0xF1, 0xE8, 0xFF]);
         assert_eq!(rgba.len(), SCREEN_PIXELS * 4);
+    }
+
+    #[test]
+    fn trig_fp_cardinal_points() {
+        // 0..256 = one turn; results are signed 8.8 fixed, exact at the axes.
+        assert_eq!(trig_fp(0, false) as i16, 0); // sin 0
+        assert_eq!(trig_fp(64, false) as i16, 256); // sin 90
+        assert_eq!(trig_fp(128, false) as i16, 0); // sin 180
+        assert_eq!(trig_fp(192, false) as i16, -256); // sin 270
+        assert_eq!(trig_fp(0, true) as i16, 256); // cos 0
+        assert_eq!(trig_fp(64, true) as i16, 0); // cos 90
+        assert_eq!(trig_fp(128, true) as i16, -256); // cos 180
+        // Mid-angle magnitude is bounded and non-trivial.
+        assert_eq!(trig_fp(32, false) as i16, 181); // sin 45 ~ 0.707*256
+    }
+
+    #[test]
+    fn hline_via_device_port() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 5, &mem); // scolor = 5
+        d.write(0x12, 3, &mem); // sy = 3
+        d.write(0x11, 10, &mem); // sx = 10 (x1)
+        d.write(0x1d, 14, &mem); // x2 = 14 -> draw span 10..=14 at row 3
+        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 9], 0);
+        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 10], 5);
+        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 14], 5);
+        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 15], 0);
+    }
+
+    #[test]
+    fn hline_clips_negative_left_edge() {
+        // x1 = -20 (0xFFEC) means "off the left edge": the span should still fill
+        // 0..=30, not wrap to a huge positive x and draw nothing.
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 9, &mem); // color 9
+        d.write(0x12, 2, &mem); // row 2
+        d.write(0x11, 0xFFEC, &mem); // x1 = -20 as u16
+        d.write(0x1d, 30, &mem); // x2 = 30
+        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 0], 9, "left edge drawn");
+        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 30], 9, "right end drawn");
+        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 31], 0);
     }
 }

@@ -662,6 +662,7 @@ macro_rules! games_ok {
 
 games_ok! {
     game_2048_ok => "2048",
+    outrun_ok => "outrun",
     bounce_ok => "bounce",
     mover_ok => "mover",
     sprite_ok => "sprite",
