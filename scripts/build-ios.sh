@@ -2,10 +2,10 @@
 # Build Rust kessel_core for iOS (device + simulator).
 # Produces an XCFramework at swift/AgentApp/kessel_core.xcframework
 #
-# Usage:
-#   bash scripts/build-ios.sh              # OpenAI only (no llama.cpp)
-#   bash scripts/build-ios.sh --local      # With llama.cpp for on-device inference
+# kessel is a pure ACP client (no in-process inference), so the core has no
+# feature flags — one build covers every target.
 #
+# Usage: bash scripts/build-ios.sh
 # Prerequisites: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 
 set -euo pipefail
@@ -16,14 +16,7 @@ CRATES_DIR="$ROOT_DIR/crates"
 OUTPUT_DIR="$ROOT_DIR/swift/AgentApp"
 CARGO_TOML="$CRATES_DIR/lib/Cargo.toml"
 
-# Parse args
-FEATURES_FLAG="--no-default-features"
-if [[ "${1:-}" == "--local" ]]; then
-    FEATURES_FLAG=""
-    echo "Building kessel_core for iOS WITH llama.cpp..."
-else
-    echo "Building kessel_core for iOS (OpenAI only)..."
-fi
+echo "Building kessel_core for iOS..."
 
 # Temporarily remove cdylib from crate-type (iOS cross-link fails for dylibs
 # due to libc++ tbd stub mismatch in Xcode 26 beta).
@@ -38,13 +31,13 @@ export IPHONEOS_DEPLOYMENT_TARGET=26.2
 echo "  [1/3] Building for iOS device (aarch64-apple-ios)..."
 cd "$CRATES_DIR"
 SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path) \
-    cargo build -p kessel-core --release $FEATURES_FLAG \
+    cargo build -p kessel-core --release \
     --target aarch64-apple-ios 2>&1 | tail -3
 
 # Build for simulator (aarch64-apple-ios-sim)
 echo "  [2/3] Building for iOS simulator (aarch64-apple-ios-sim)..."
 SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path) \
-    cargo build -p kessel-core --release $FEATURES_FLAG \
+    cargo build -p kessel-core --release \
     --target aarch64-apple-ios-sim 2>&1 | tail -3
 
 # Create XCFramework

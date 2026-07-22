@@ -2,7 +2,6 @@ import Foundation
 import AgentBridge
 import Util
 import TTS
-import Watcher
 
 /// Shared agent lifecycle — usable from CLI, iOS, or any other frontend.
 public class AgentSession: @unchecked Sendable {
@@ -15,19 +14,13 @@ public class AgentSession: @unchecked Sendable {
     public let language: String
     public let configPath: String
 
-    /// Called when a watcher event is pushed to situation context (for logging).
-    public var onWatcherEvent: (@Sendable (String) -> Void)?
-
     // MARK: - Private state
 
     private let logger = Logger("AgentSession")
-    private var socketReceiver: SocketReceiver?
-    private var sessionWatcher: SessionJSONLWatcher?
 
     // MARK: - Init
 
     /// Initialize agent, TTS, and load skills.
-    /// Does NOT start watcher — call `start()` for that.
     public init(config: Config, configPath: String) async throws {
         self.config = config
         self.configPath = configPath
@@ -139,18 +132,13 @@ public class AgentSession: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// Start watcher event sources.
-    public func start() {
-        startWatcher()
-    }
+    /// Start background event sources. Currently a no-op — the Claude Code
+    /// watcher was removed; ambient context is fed via `pushSituationMessage`
+    /// from the frontend's window-list poller.
+    public func start() {}
 
-    /// Stop watcher resources.
-    public func stop() {
-        sessionWatcher?.stop()
-        sessionWatcher = nil
-        socketReceiver?.stop()
-        socketReceiver = nil
-    }
+    /// Stop background resources. Currently a no-op (see `start()`).
+    public func stop() {}
 
     // MARK: - Agent calls
 
@@ -194,46 +182,4 @@ public class AgentSession: @unchecked Sendable {
             : text
     }
 
-    // MARK: - Private
-
-    private func startWatcher() {
-        guard let wc = config.watcher, wc.enabled else { return }
-
-        // Session JSONL watcher
-        let sessionPath = wc.sessionPath ?? SessionJSONLWatcher.findActiveSessionJSONL()
-        if let sp = sessionPath {
-            logger.info("Watching session JSONL: \(sp)")
-            let watcher = SessionJSONLWatcher(filePath: sp)
-            sessionWatcher = watcher
-            Task.detached { [agent, onWatcherEvent] in
-                for await event in watcher.events() {
-                    if let json = event.toRouterJSON() {
-                        try? agent.feedWatcherEvent(json: json)
-                        onWatcherEvent?(json)
-                    }
-                }
-            }
-        } else {
-            logger.warning("No active session JSONL found to watch")
-        }
-
-        // Socket receiver
-        let sockPath = wc.socketPath ?? "/tmp/kessel-cli-\(getuid()).sock"
-        let receiver = SocketReceiver(socketPath: sockPath)
-        socketReceiver = receiver
-        do {
-            try receiver.start()
-            logger.info("Socket receiver listening on \(sockPath)")
-            Task.detached { [agent, onWatcherEvent] in
-                for await event in receiver.events() {
-                    if let json = event.toRouterJSON() {
-                        try? agent.feedWatcherEvent(json: json)
-                        onWatcherEvent?(json)
-                    }
-                }
-            }
-        } catch {
-            logger.error("Failed to start socket receiver: \(error)")
-        }
-    }
 }

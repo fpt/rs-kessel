@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use crate::tool::ToolHandler;
-use crate::AgentError;
-
 /// A skill is a named prompt template that the agent can look up and apply.
 pub struct Skill {
     pub name: String,
@@ -57,88 +54,29 @@ impl SkillRegistry {
         skills.get(name).map(|s| s.prompt.clone())
     }
 
-    /// Build a catalog string for injection into system prompt.
-    /// Returns None if no skills registered.
+    /// Build a catalog string for injection into the backend thread's developer
+    /// instructions. Each skill's full prompt is inlined (there is no lookup tool
+    /// over ACP — the backend gets everything up front). Returns None if no skills
+    /// are registered.
     pub fn catalog(&self) -> Option<String> {
         let skills = self.skills.read().unwrap();
         if skills.is_empty() {
             return None;
         }
-        let mut lines: Vec<String> = skills
-            .values()
-            .map(|s| format!("- {}: {}", s.name, s.description))
-            .collect();
-        lines.sort();
-        Some(format!(
-            "Available skills (use lookup_skill tool to get full instructions):\n{}",
-            lines.join("\n")
-        ))
-    }
-}
-
-/// Tool that lets the LLM look up skills from the registry.
-pub struct SkillLookupTool {
-    registry: std::sync::Arc<SkillRegistry>,
-}
-
-impl SkillLookupTool {
-    pub fn new(registry: std::sync::Arc<SkillRegistry>) -> Self {
-        Self { registry }
-    }
-}
-
-impl ToolHandler for SkillLookupTool {
-    fn name(&self) -> &str {
-        "lookup_skill"
-    }
-
-    fn description(&self) -> &str {
-        "Look up available skills. Use action 'list' to see all skills with descriptions, or action 'get' with a skill name to retrieve the full prompt instructions."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["list", "get"],
-                    "description": "Action to perform: 'list' all skills or 'get' a specific skill"
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Skill name (required when action is 'get')"
-                }
-            },
-            "required": ["action"]
-        })
-    }
-
-    fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
-        let action = args["action"]
-            .as_str()
-            .ok_or_else(|| AgentError::ParseError("Missing 'action' field".to_string()))?;
-
-        match action {
-            "list" => Ok(crate::tool::ToolResult::text(self.registry.list())),
-            "get" => {
-                let name = args["name"]
-                    .as_str()
-                    .ok_or_else(|| AgentError::ParseError("Missing 'name' field for 'get' action".to_string()))?;
-                match self.registry.get(name) {
-                    Some(prompt) => Ok(crate::tool::ToolResult::text(format!("## Skill: {}\n\n{}", name, prompt))),
-                    None => Ok(crate::tool::ToolResult::text(format!("Skill '{}' not found. Use action 'list' to see available skills.", name))),
-                }
-            }
-            _ => Err(AgentError::ParseError(format!("Unknown action: {}", action))),
+        let mut entries: Vec<&Skill> = skills.values().collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut out =
+            String::from("Available skills — apply the relevant one's instructions when it fits the request:\n");
+        for s in entries {
+            out.push_str(&format!("\n## {} — {}\n{}\n", s.name, s.description, s.prompt));
         }
+        Some(out)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn test_skill_registry() {
@@ -156,30 +94,19 @@ mod tests {
         assert!(registry.list().contains("A test skill"));
         assert_eq!(registry.get("test-skill"), Some("Do the test thing.".to_string()));
         assert_eq!(registry.get("nonexistent"), None);
-        assert!(registry.catalog().unwrap().contains("lookup_skill"));
     }
 
     #[test]
-    fn test_skill_lookup_tool() {
-        let registry = Arc::new(SkillRegistry::new());
+    fn catalog_inlines_names_descriptions_and_prompts() {
+        let registry = SkillRegistry::new();
         registry.add(
             "greeting".to_string(),
             "Greet the user".to_string(),
             "Say hello warmly.".to_string(),
         );
-
-        let tool = SkillLookupTool::new(registry);
-
-        // List
-        let result = tool.call(serde_json::json!({"action": "list"})).unwrap().text;
-        assert!(result.contains("greeting"));
-
-        // Get existing
-        let result = tool.call(serde_json::json!({"action": "get", "name": "greeting"})).unwrap().text;
-        assert!(result.contains("Say hello warmly."));
-
-        // Get nonexistent
-        let result = tool.call(serde_json::json!({"action": "get", "name": "nope"})).unwrap().text;
-        assert!(result.contains("not found"));
+        let catalog = registry.catalog().unwrap();
+        assert!(catalog.contains("greeting"));
+        assert!(catalog.contains("Greet the user"));
+        assert!(catalog.contains("Say hello warmly."));
     }
 }

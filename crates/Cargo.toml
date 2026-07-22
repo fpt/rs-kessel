@@ -2,16 +2,6 @@
 resolver = "2"
 members = [
     "lib",
-    "app",
-    "gallium-core",
-    "gallium-models",
-]
-# A bare `cargo build`/`cargo test` stays light (cloud + llama.cpp only). The
-# gallium crates pull in candle, so they build only via `--workspace`, an
-# explicit `-p gallium-*`, or `lib`'s `gallium` feature.
-default-members = [
-    "lib",
-    "app",
 ]
 
 [workspace.package]
@@ -25,9 +15,6 @@ authors = ["Kessel Contributors"]
 crossbeam = "0.8"
 parking_lot = "0.12"
 
-# HTTP client (blocking)
-ureq = { version = "2.10", features = ["json", "native-tls"] }
-
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -40,20 +27,5 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# HTTP server (sync)
-tiny_http = "0.12"
-
 # UniFFI
 uniffi = "0.28"
-
-# Native (candle) inference backend — gallium. Pinned candle rev matches the
-# hand-written model implementations in gallium-models.
-candle-core = { git = "https://github.com/huggingface/candle.git", rev = "097655a2" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", rev = "097655a2" }
-gallium-core = { path = "gallium-core" }
-gallium-models = { path = "gallium-models" }
-tokenizers = "0.21"
-hf-hub = "0.4"
-memmap2 = "0.9"
-rayon = "1"
-rand = "0.8"

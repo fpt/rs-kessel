@@ -1,99 +1,97 @@
 # Kessel
 
-A voice-and-text assistant that runs on **macOS and Windows**, backed by local models (llama.cpp, in-process) or cloud LLMs. Tool calling via a ReAct loop, MCP client support, and Claude Code activity monitoring.
+A voice-and-text assistant and fantasy-console VM that runs on **macOS and
+Windows**. Kessel does **no LLM inference of its own** — it is an **ACP client**:
+it spawns a backend agent and drives it a turn at a time over JSON-RPC, serving
+its resident tools (the VM, screen capture) back to the backend.
 
-The agent core is Rust; each platform has a native frontend on top of it.
+The frontend is native per platform; the agent backend is a separate binary
+(`gallium` by default) found on PATH.
 
 ## Platforms
 
-| | Frontend | Speech | Claude Code watcher |
-|---|---|---|---|
-| **macOS 26+** | Swift — `kessel` | Apple SpeechTranscriber (STT) + AVSpeechSynthesizer (TTS) | yes |
-| **Windows** | C# / .NET 8 — `kessel.exe` | `System.Speech` recognizer + synthesizer | not yet |
-| **any** | Rust — `kessel-cli` | none (text only) | — |
+| | Frontend | Speech |
+|---|---|---|
+| **macOS 26+** | Swift — `kessel` | Apple SpeechTranscriber (STT) + AVSpeechSynthesizer (TTS) |
+| **Windows** | C# / .NET 8 — `kessel.exe` | `System.Speech` recognizer + synthesizer |
 
-`kessel-cli` is the headless core: a text REPL, plus an `app-server` mode that
-exposes the agent as a JSON-RPC backend for another agent (see
-[App-server](#app-server)). It is the same binary on every platform and needs no
-frontend.
+The backend is swappable: `gallium` and `codex` both speak the same
+codex-app-server JSON-RPC subset. Select it with `KESSEL_ACP_BACKEND` (default
+`gallium`).
 
 ## Features
 
-- **Dual LLM backend**: local models via llama.cpp FFI (Gemma 4, Qwen3.5, LFM2 — auto-downloaded) or the OpenAI Responses API
-- **Tool calling**: ReAct loop with built-in tools — file `read`/`write`/`edit`, `multi_edit` (atomic multi-file batch), `glob`, `ls`, `grep`, `bash`, `tasks`, and skills
-- **MCP client**: connect to external MCP servers over stdio or Streamable HTTP; their tools join the agent's toolset ([details](#mcp))
+- **Backend-agnostic ACP client**: spawns and drives whatever app-server it's pointed at; no local inference or agent loop of its own
+- **Fantasy-console VM**: a tiny stack VM + a statically-typed Lua-ish front-end (`luax`); served to the backend as `vm_*` client tools so the model can write → assemble → run → observe → debug games. Playable standalone via `kessel --play` ([details](docs/VM.md))
+- **Screen awareness**: window capture / OCR client tools + an ambient situation feed
+- **MCP**: `mcpServers` are forwarded to the backend, which connects them ([details](#mcp))
 - **Voice I/O**: continuous conversation, half-duplex (mic muted during playback to prevent echo)
-- **Claude Code watcher** (macOS): monitors Claude Code via hooks and reports activity aloud
 - **Multi-language**: English and Japanese, with configurable system-prompt templates
 
 ## Requirements
 
 **Common**
 - Rust toolchain
-- 16GB RAM recommended for local models (see [model sizes](CLAUDE.md#troubleshooting))
+- A backend on PATH — build/install `gallium` from [`../rs-gallium`](https://github.com/fpt/rs-gallium), or point `KESSEL_ACP_BACKEND` at `codex`
 
 **macOS**
 - macOS 26+ (Apple SpeechTranscriber)
 - Xcode Command Line Tools
 
 **Windows**
-- .NET 8 SDK
-- For local llama.cpp models: Visual Studio Build Tools with "Desktop development with C++", and an MSVC rustup toolchain. Cloud-only builds need neither.
+- .NET 8 SDK (the Rust cdylib has no C++ deps — any toolchain works)
 
 ## Quick Start
 
 ### macOS
 
 ```bash
-# Build both binaries and install them to ~/bin
+# Build the Rust core + Swift app and install `kessel` to ~/bin
 make install
 
-# Run with OpenAI
-export OPENAI_API_KEY=sk-...
-kessel --config configs/openai.yaml
+# Run against the local gallium backend (auto-downloads the model on first run)
+kessel --config configs/gallium.yaml
 
-# ...or a local model (auto-downloads on first run)
-kessel --config configs/gemma4.yaml
+# ...or a cloud backend
+export OPENAI_API_KEY=sk-...
+KESSEL_ACP_BACKEND=codex kessel --config configs/codex.yaml
 ```
 
-`make install` produces two binaries — they are **not** interchangeable:
-
-- `kessel` — the voice app
-- `kessel-cli` — the headless Rust core (text REPL + `app-server`)
+`make install` installs a single binary, **`kessel`** (the voice app). The agent
+backend (`gallium`) is installed separately from its own repo and found on PATH.
 
 ### Windows
 
 ```bash
-# Builds the Rust cdylib + kessel-cli.exe, then the C# frontend
+# Build the Rust cdylib (kessel_core.dll), then the C# frontend
 make build-win
 
 # Generate the C# bindings once (see CLAUDE.md for the one-time install)
 bash scripts/gen_uniffi_cs.sh
 
 # Run
-win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/default.yaml
+win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/gallium.yaml
 ```
 
 The Windows REPL has two modes, toggled with **Shift+Tab**: `text` (type → printed
 reply) and `listen` (speak → reply printed *and* spoken).
 
-Cloud-only (no llama.cpp, no C++ toolchain needed):
-
-```bash
-cd crates && cargo build --release --no-default-features -p kessel-core -p kessel-cli
-```
-
 ## Configuration
 
-YAML configs live in `configs/`. The same schema is read by every frontend.
+YAML configs live in `configs/`; the same schema is read by every frontend. Two
+are shipped, one per backend flavor:
+
+| config | backend | notes |
+|--------|---------|-------|
+| `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
+| `codex.yaml` | `codex` (cloud) | set `KESSEL_ACP_BACKEND=codex` + `OPENAI_API_KEY` |
 
 ```yaml
-llm:
-  # Local model: `hf:` specs auto-download into the HuggingFace cache.
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-  # ...or omit modelPath and set a cloud endpoint instead:
-  baseURL: "https://api.openai.com/v1"
+llm:                                  # forwarded to the backend as environment
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # local (MODEL_PATH)
+  baseURL: "https://api.openai.com/v1"                            # cloud (LLM_BASE_URL)
   model: "gpt-5.6-luna"
+  inferenceEngine: "gallium"          # backend's local engine: llamacpp | gallium
   temperature: 0.7
   maxTokens: 2048
 
@@ -102,45 +100,24 @@ agent:
   maxTurns: 50
   language: "en"                        # "en" or "ja"
 
-# External MCP servers — see the MCP section below.
-mcpServers:
+mcpServers:                             # forwarded to the backend, which connects them
   - command: "godevmcp"
     args: ["serve"]
   - url: "http://127.0.0.1:27182/mcp"
 
-tts:
-  enabled: true
-  voice: "com.apple.voice.enhanced.en-US.Zoe"   # macOS voice ids
-
-stt:
-  enabled: true
-  locale: "en-US"
-
-watcher:          # macOS only
-  enabled: true
-  debounceInterval: 3.0
+tts: { enabled: true, voice: "com.apple.voice.enhanced.en-US.Zoe" }
+stt: { enabled: true, locale: "en-US" }
 ```
 
-Available configs: `default.yaml`, `openai.yaml`, `openai-ja.yaml`, `qwen3.yaml`,
-`gemma4.yaml`, `lfm2.yaml`.
-
-Model files are cached in the standard HuggingFace location, honoring
-`HF_HUB_CACHE` / `HUGGINGFACE_HUB_CACHE` / `HF_HOME` (all work on Windows), so a
-model already pulled by `huggingface-cli` is reused rather than re-downloaded.
+The `llm:` block is **forwarded to the backend** — kessel does not interpret it.
+Backend selection is via `KESSEL_ACP_BACKEND` (env), not the config.
 
 ## MCP
 
-Kessel is an **MCP client**: it connects to external MCP servers at startup and
-registers their tools alongside its built-ins, so the model can call them like
-any other tool. This works on **both macOS and Windows** — the client lives in
-the Rust core, not in a frontend.
-
-Two transports, chosen per entry:
-
-| Entry has | Transport |
-|-----------|-----------|
-| `command` (+ optional `args`) | **stdio** — kessel spawns the server as a subprocess |
-| `url` | **Streamable HTTP** — with `Mcp-Session-Id`, JSON and SSE responses |
+Kessel forwards the config's `mcpServers` to the backend over `thread/start`; the
+**backend** connects them (stdio via `command`/`args`, or Streamable HTTP via
+`url`) and exposes their tools to the model. A server that fails to connect is
+logged and skipped.
 
 ```yaml
 mcpServers:
@@ -149,46 +126,23 @@ mcpServers:
   - url: "http://127.0.0.1:27182/mcp"       # Streamable HTTP
 ```
 
-On Windows the stdio transport resolves `npx`/`pnpm`-style `.cmd`/`.bat` shims via
-`PATH`+`PATHEXT`, which a bare process spawn does not do.
+## ACP client
 
-A server that fails to connect is logged and skipped, so one bad entry cannot take
-down the agent.
+`kessel` spawns the backend (`gallium app-server` by default) and drives it as a
+**whole-turn** ACP client over line-delimited JSON-RPC on stdio — it sends
+`initialize`/`thread/start`/`turn/start` and handles the backend's inbound
+`item/tool/call` + approval requests. The backend runs its own ReAct loop, tools,
+and MCP connections inside each turn; kessel serves the VM (`vm_*`), screen
+capture, and situation reader back as `dynamicTools`.
 
-The headless `kessel-cli` reads stdio servers from the `MCP_SERVERS` environment
-variable instead (comma-separated `command arg1 arg2`).
-
-## App-server
-
-`kessel-cli app-server` exposes the agent as a **whole-turn backend** over
-line-delimited JSON-RPC on stdio: a driving client hands kessel an entire
-conversation turn and gets back the final text, while kessel runs its own ReAct
-loop, tools and MCP connections inside that turn.
-
-It speaks a subset of the codex app-server protocol, so a client that already
-drives `codex app-server` can drive kessel by swapping the binary. This is how
-[klein](https://github.com/fpt/klein-cli) uses it (`llm.backend: "kessel"`).
-
-```bash
-OPENAI_API_KEY=sk-... kessel-cli app-server
-```
-
-## Claude Code Integration
-
-*(macOS only — the Windows frontend has no watcher yet.)*
-
-The watcher monitors Claude Code activity and speaks brief summaries when it
-edits files, runs tests, or commits.
-
-```bash
-bash scripts/install-claude-hook.sh     # installs the hook into ~/.claude/settings.json
-kessel --config configs/openai.yaml
-```
+Override the backend program with `KESSEL_ACP_BACKEND` (default `gallium`; may be
+`"prog arg1 arg2"`). See [CLAUDE.md](CLAUDE.md) and [docs/REFACTOR.md](docs/REFACTOR.md).
 
 ## Skills
 
 Skills load from `skills/` (project) and `~/.claude/plugins/`. Each is a `SKILL.md`
-with YAML frontmatter:
+with YAML frontmatter; its catalog is injected into the backend thread's developer
+instructions.
 
 ```markdown
 ---
@@ -229,23 +183,19 @@ Prompt body injected as system context...
 
 ```
 macOS:    Mic -> SpeechTranscriber -> Swift CLI ─┐
-Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust Agent
-any:                                 Rust CLI  ──┘            -> ReAct loop
-                                                                 (LLM + tools + MCP)
+Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust ACP client
+                                                 │              │  spawns + drives
+                                                 │              v
+                                                 │       gallium app-server
+                                                 │       (ReAct + LLM + tools + MCP)
+                                                 └───<── item/tool/call (vm_*, capture)
 ```
 
-- **Rust** (`crates/lib`): agent core — LLM providers, ReAct loop, tools, skills, MCP, memory
-- **Rust** (`crates/app`): `kessel-cli` — headless REPL + `app-server`
-- **Swift** (`swift/`): macOS voice app, audio pipeline, TTS, watcher
-- **C#** (`win/`): Windows frontend
-- **UniFFI**: generates the Swift and C# bindings to the Rust core
-
-### LLM Providers
-
-| Provider | Backend | Tool Calling | Notes |
-|----------|---------|--------------|-------|
-| `LlamaLocalProvider` | llama-cpp-2 FFI | Native (per the model's chat template) | In-process; no server needed |
-| `OpenAiProvider` | Responses API | Native | Supports reasoning models |
+- **Rust** (`crates/lib`, `kessel_core`): ACP client, the VM, client tools, and local orchestration (goals, situation, backchannel). No inference.
+- **Swift** (`swift/`): macOS voice app, audio pipeline, TTS.
+- **C#** (`win/`): Windows frontend.
+- **UniFFI**: generates the Swift and C# bindings to the Rust core.
+- The agent backend (ReAct loop, LLM providers, tools, MCP) lives in [`../rs-gallium`](https://github.com/fpt/rs-gallium).
 
 ## Development
 

@@ -281,11 +281,6 @@ RustBuffer uniffi_kessel_core_fn_method_agent_drain_capture_requests(void*_Nonnu
 RustBuffer uniffi_kessel_core_fn_method_agent_evaluate_goal(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_FEED_WATCHER_EVENT
-#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_FEED_WATCHER_EVENT
-void uniffi_kessel_core_fn_method_agent_feed_watcher_event(void*_Nonnull ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_GET_CONVERSATION_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_AGENT_GET_CONVERSATION_HISTORY
 RustBuffer uniffi_kessel_core_fn_method_agent_get_conversation_history(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -709,12 +704,6 @@ uint16_t uniffi_kessel_core_checksum_method_agent_drain_capture_requests(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_EVALUATE_GOAL
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_EVALUATE_GOAL
 uint16_t uniffi_kessel_core_checksum_method_agent_evaluate_goal(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_FEED_WATCHER_EVENT
-#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_FEED_WATCHER_EVENT
-uint16_t uniffi_kessel_core_checksum_method_agent_feed_watcher_event(void
     
 );
 #endif

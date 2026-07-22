@@ -8,7 +8,7 @@ import TTS
 import Audio
 import ScreenCapture
 
-// Nonisolated so the @Sendable watcher/detached closures can log. As top-level
+// Nonisolated so the @Sendable detached poller closures can log. As top-level
 // code (main.swift), an unannotated global would be inferred @MainActor.
 nonisolated(unsafe) let logger = Logger("Main")
 
@@ -72,7 +72,7 @@ func runMain() async {
 
 // Parse command line arguments
 let arguments = CommandLine.arguments
-var configPath = "configs/default.yaml"
+var configPath = "configs/gallium.yaml"
 // Force the text REPL even when STT is enabled in the config.
 var forceText = false
 // One-shot: run a single agent turn with this prompt, print the reply, exit.
@@ -95,8 +95,8 @@ for (index, arg) in arguments.enumerated() {
 
 func printHelp() {
     // Derived from argv[0]: this is installed as `kessel`, but still runs as
-    // `kessel-cli` in-repo via `swift run kessel-cli`. (The Rust core owns the
-    // installed `kessel-cli` name — it is the one with the `app-server` mode.)
+    // `kessel-cli` in-repo via `swift run kessel-cli` (the Swift package's
+    // executable product name).
     let name = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "kessel"
     print("""
     Kessel - Local Voice Assistant
@@ -104,7 +104,7 @@ func printHelp() {
     Usage: \(name) [OPTIONS]
 
     Options:
-        --config PATH      Path to configuration file (default: configs/default.yaml)
+        --config PATH      Path to configuration file (default: configs/gallium.yaml)
         --play FILE        Open the fantasy-console game window and play a ROM
                            (.lua or .asm); no model/API key needed
         --text, --no-voice Force the text REPL even if the config enables STT/voice
@@ -115,8 +115,8 @@ func printHelp() {
     Examples:
         \(name)
         \(name) --config custom.yaml
-        \(name) --config configs/openai.yaml --text
-        \(name) --config configs/openai.yaml -p "write a pong game on the VM and run 3 frames"
+        \(name) --config configs/codex.yaml --text
+        \(name) --config configs/codex.yaml -p "write a pong game on the VM and run 3 frames"
         \(name) --verbose
     """)
 }
@@ -187,12 +187,7 @@ if sttConfig.enabled && !forceText && oneShotPrompt == nil {
     }
 }
 
-// Watcher events are pushed to situation context — just log them.
-session.onWatcherEvent = { @Sendable json in
-    logger.debug("[Watcher] \(json)")
-}
-
-// Start watcher + summary poller
+// Start background event sources (currently a no-op).
 session.start()
 
 // Periodic window list (every 30s) -> situation message
@@ -442,7 +437,7 @@ func runTextMode() async {
 ===========================================
 
 Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
-Endpoint: \(config.llm.baseURL ?? "in-process llama.cpp")
+Endpoint: \(config.llm.baseURL ?? "local (gallium backend)")
 
 Type your messages below. Commands:
   /reset    - Clear conversation history
@@ -781,7 +776,7 @@ func runContinuousVoiceMode() async {
 ===========================================
 
 Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
-Endpoint: \(config.llm.baseURL ?? "in-process llama.cpp")
+Endpoint: \(config.llm.baseURL ?? "local (gallium backend)")
 STT: Apple SpeechTranscriber (\(locale.identifier))
 
 Start speaking or type below. Press Ctrl+C to exit.

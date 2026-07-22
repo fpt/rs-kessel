@@ -2,11 +2,15 @@
 
 ## Overview
 
-A macOS voice assistant with local and cloud LLM support, continuous voice I/O, tool calling, and Claude Code activity monitoring.
+A macOS/Windows voice assistant and fantasy-console VM frontend. Kessel does **no
+LLM inference of its own** — it is an **ACP client** that spawns a backend agent
+(`gallium` by default; `codex` via `KESSEL_ACP_BACKEND`) and drives it a turn at a
+time over JSON-RPC, serving its resident tools (the VM, screen capture, situation)
+back to the backend as `dynamicTools`.
 
-- **Platform**: macOS 26+ (requires Apple SpeechTranscriber)
+- **Platform**: macOS 26+ (requires Apple SpeechTranscriber); Windows via the C# frontend
 - **Swift**: swift-tools-version 6.1, `.swiftLanguageMode(.v5)` on all targets
-- **Rust**: workspace in `crates/` with two members: `lib` (library) and `app` (binary)
+- **Rust**: workspace in `crates/` with a single member, `lib` (the `kessel_core` cdylib)
 
 ## Architecture
 
@@ -14,157 +18,94 @@ A macOS voice assistant with local and cloud LLM support, continuous voice I/O, 
 Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
     -> Swift CLI (main.swift)
     -> UniFFI bridge
-    -> Rust Agent (lib.rs)
-    -> ReAct loop (react.rs) with LLM provider + tool registry
-    -> Response
+    -> Rust Agent (lib.rs) — an ACP client
+    -> spawns + drives  ==>  gallium app-server (the backend agent:
+                              ReAct loop, LLM providers, tools, MCP)
+    <-  item/tool/call   <==  backend calls kessel's client tools (vm_*, capture, situation)
+    -> final turn text
     -> AVSpeechSynthesizer (TTS) -> Speaker
 ```
 
-### Rust Crates (`crates/`)
+The backend is swappable: `gallium` and `codex` both speak the same
+codex-app-server JSON-RPC subset. See **[docs/REFACTOR.md](docs/REFACTOR.md)** for
+the split (kessel = VM + platform + ACP client; the agent core lives in
+`../rs-gallium`).
+
+### Rust Crate (`crates/lib`, `kessel_core`)
 
 | File | Purpose |
 |------|---------|
-| `lib/src/lib.rs` | Agent struct, UniFFI exports, provider factory |
-| `lib/src/llm.rs` | LlmProvider trait, OpenAiProvider (Responses API) |
-| `lib/src/llm_local.rs` | LlamaLocalProvider (in-process llama-cpp-2 FFI) |
-| `lib/src/llm_gallium.rs` | GalliumProvider (native candle inference) + arch/format auto-detecting loader — `gallium` feature |
-| `lib/src/protocol.rs` | ModelProtocol adapters (Harmony/Gemma/Qwen) for the gallium provider — `gallium` feature |
-| `lib/src/gemma.rs` | Shared Gemma native tool-call parsing (wire format + `<\|"\|>` KV args + name/path aliases), used by **both** local backends — `local`/`gallium` |
-| `gallium-core/` | Composable transformer building blocks + generation (candle) — vendored from rs-gallium |
-| `gallium-models/` | Hand-written GPT-OSS / Qwen 3.5 / Gemma 4 / LFM2.5 model implementations — vendored from rs-gallium |
-| `lib/src/react.rs` | Provider-agnostic ReAct loop |
-| `lib/src/tool.rs` | ToolRegistry, ToolHandler trait, ToolAccess trait, built-in tools, ToolSession (read-tracking + permissions) |
-| `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + a statically-typed Lua-ish front-end (`luax.rs`, `.lua` → assembler; records, arrays, `for`, game builtins) + `vm_*` tools for the model's write→assemble→run→observe→debug loop — registered **only** in `agent_new` (standalone app), absent from `kessel-cli`/app-server. Playable via `kessel --play` (`player.rs` `VmPlayer` + Swift/C# `PlayWindow`). See **[docs/VM.md](docs/VM.md)** |
-| `lib/src/skill.rs` | SkillRegistry, lookup_skill tool |
-| `lib/src/memory.rs` | ConversationMemory (thread-safe) |
-| `lib/src/state_capsule.rs` | State capsule for context injection |
-| `lib/src/state_updater.rs` | Rule-based state extraction from responses |
-| `lib/src/harmony.rs` | Harmony template parser (for gpt-oss models) |
-| `lib/src/appserver/` | JSON-RPC app-server: exposes the agent as a whole-turn backend (see below) |
-| `lib/src/agent.udl` | UniFFI interface definition |
-| `app/src/main.rs` | Standalone Rust CLI (REPL + `app-server` subcommand) |
+| `lib/src/lib.rs` | `Agent` struct + UniFFI exports. Spawns the backend, forwards config as env, serves client tools, drives turns. Goals, situation, backchannel, and the conversation mirror stay local. |
+| `lib/src/acp_client.rs` | ACP client: spawns `gallium app-server` (etc.) and drives it over line-delimited JSON-RPC, reusing the symmetric `appserver::rpc` transport. Sends `initialize`/`thread/start`/`turn/start`; handles inbound `item/tool/call` + approval requests. `ClientTool`/`HandlerClientTool` wrap any `ToolHandler` to serve it back to the backend. |
+| `lib/src/appserver/rpc.rs` | Symmetric JSON-RPC 2.0 transport over stdio (answers inbound requests on their own threads, delivers inbound responses to outbound requests). Shared by the ACP client. |
+| `lib/src/appserver/mod.rs` | Just re-exports `rpc` now (the in-process server was removed with the agent core). |
+| `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`, `ToolDefinition`, `ToolCallInfo`. No provider layer. |
+| `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
+| `lib/src/tool.rs` | The tool trait surface the VM/capture/situation client tools implement: `ToolHandler`, `ToolResult`, `ToolRegistry`, `ToolAccess`. (The built-in file/bash tools and their permission machinery were removed — the backend owns those now.) |
+| `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + a statically-typed Lua-ish front-end (`luax.rs`) + `vm_*` tools. The VM stays resident in kessel and is served to the backend as client tools; playable via `kessel --play`. See **[docs/VM.md](docs/VM.md)**. |
+| `lib/src/capture.rs` | Screen capture / find-window / OCR / list-windows tools (executed macOS-side via Swift; served to the backend as client tools). |
+| `lib/src/situation.rs` | `SituationMessages` ambient-context stack + `read_situation_messages` client tool. Fed by the frontend's periodic window-list poller (`push_situation_message`). |
+| `lib/src/goal.rs` | Session goal state + evaluation (runs on a throwaway backend thread). |
+| `lib/src/skill.rs` | `SkillRegistry`; skill catalogs are injected into the backend thread's developer instructions. |
+| `lib/src/memory.rs` | `ConversationMemory` — the local mirror of the conversation (authoritative history lives in the backend thread). |
+| `lib/src/state_updater.rs` | Rule-based backchannel detection. |
+| `lib/src/agent.udl` | UniFFI interface definition. |
 
 ### Swift Packages (`swift/Sources/`)
 
 | Package | Purpose |
 |---------|---------|
-| `KesselCli` | Main entry point, text/voice mode, watcher integration |
+| `KesselCli` | Main entry point (text/voice REPL), window-list + capture pollers |
+| `AgentKit` | `AgentSession` — shared agent lifecycle (init, skills, TTS) usable from CLI/iOS |
 | `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
 | `TTS` | AVSpeechSynthesizer wrapper |
-| `Watcher` | SessionJSONLWatcher, SocketReceiver, EventPipeline |
-| `Util` | Config, Logger, HarmonyParser, SkillLoader, WhisperModelDownloader |
+| `ScreenCapture` | WindowManager / window info for the capture client tools |
+| `Util` | Config, Logger, HarmonyParser, SkillLoader |
 | `AgentBridge` | Generated UniFFI Swift bindings |
 | `AgentBridgeFFI` | C module map for FFI |
-| `LLM` | LanguageClient protocol (experimental) |
 
 ### Key Patterns
 
-- `ChatMessage` has `#[serde(skip)]` fields for tool state; use helper methods (`ChatMessage::user()`, `ChatMessage::assistant()`, etc.) not struct literals
-- ReAct loop in `react.rs` is provider-agnostic; each provider serializes to its own wire format in `chat_with_tools()`
-- OpenAI provider uses Responses API (`/v1/responses`) with `function_call`/`function_call_output` input items
-- Local LLM tool calling (`llm_local.rs`, llama-cpp-2 0.1.151): the GGUF's embedded jinja chat template is rendered with **minijinja** (0.1.150 removed llama-cpp-2's OAI-compat/jinja chat layer). Templates that declare tools natively (gemma 4's `<|tool>` / `<|tool_call>`) get the tools passed through the template itself, so the model sees them in the form it was trained on; otherwise tools are injected into the system prompt with a JSON output protocol. The reply is parsed leniently in multiple formats (JSON object/array, OpenAI `tool_calls`, Python/Llama `[name(arg=val)]`, and gemma's native `<|tool_call>call:…`), after stripping `<think>` blocks. Fallbacks: system-role fold (for templates that reject a system role — **not** gemma 4, which accepts one) → manual ChatML. Verified with gemma-4-E4B and LFM2.5-8B-A1B. See **[docs/GEMMA4.md](docs/GEMMA4.md)** for the wire format. The gemma native tool-call parsing (`<|tool_call>call:NAME{…}` + `<|"|>` KV args + name/path alias folding) lives in the shared **`gemma.rs`** module so this backend and the gallium `GemmaProtocol` parse it identically; llama.cpp keeps tool names verbatim (MCP), while gallium opts into alias folding.
-- `ToolAccess` trait abstracts `ToolRegistry` and `FilteredToolRegistry` for restricted tool access
-- Built-in tools (`create_default_registry`): `read`, `glob`, `ls`, `grep`, `write`, `edit`, `multi_edit`, `bash`, `tasks`, `lookup_skill`, `read_situation_messages` (+ `capture_screen`/`find_window`/`apply_ocr` from `lib.rs`, + MCP tools)
-- **Mutation safety** (`ToolSession`, shared per-agent): `edit`, `multi_edit` and overwriting `write` require the file to have been `read` first (read-first, like klein-cli). `write`/`edit`/`multi_edit` and non-whitelisted `bash` commands prompt on the terminal (`1` yes / `2` yes-to-all (remembered for the session) / `3` no); `multi_edit` prompts **once for the whole batch**.
-- `multi_edit` is **all-or-nothing**: every edit is validated against an in-memory copy of the files before anything is written, so one bad `old_string` aborts the batch with nothing changed (a mid-write I/O failure rolls back what was already written). Edits to the same file compose in order. Note klein's `MultiEdit` advertises "atomic" but applies edits sequentially and keeps going past a failure, leaving a half-edited tree — kessel's does not. `bash` runs a default allowlist (make, go, gcc, uv, cargo, ls, ps, cd, pwd, grep, …; extend via `KESSEL_BASH_ALLOW`) without prompting. Non-interactive contexts (no TTY) deny mutations unless `KESSEL_AUTO_APPROVE=1`.
-- Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback
+- **Kessel runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `KESSEL_ACP_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step`/`observe`/`evaluate_goal` each run a backend turn; `observe`/`evaluate_goal` use throwaway threads so they don't pollute history.
+- **Client tools** (`acp_client::ClientTool`): the VM's `vm_*`, screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident kessel state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
+- `ChatMessage` has `#[serde(skip)]` fields for tool state; use helper methods (`ChatMessage::user()`, `ChatMessage::assistant()`, etc.) not struct literals.
+- The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
+- **Approvals**: there is no TTY, so mutation approvals raised by the backend are answered by an `Approver` (default `DeclineApprover`). Kessel has no sandbox.
+- Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback.
 
 ## Configuration
 
-YAML configs in `configs/`. System prompt supports `{language}` template variable.
+YAML configs in `configs/`. Two are shipped, one per backend flavor; the system
+prompt supports the `{language}` template variable.
+
+| config | backend | notes |
+|--------|---------|-------|
+| `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
+| `codex.yaml` | `codex` (cloud) | set `KESSEL_ACP_BACKEND=codex` + `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
 
 ```yaml
 llm:
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # Local provider; auto-downloads
-  # modelPath: "../models/Qwen3.5-9B-Q4_K_M.gguf"  # ...or a plain path to an existing GGUF
-  inferenceEngine: "llamacpp"                    # Local backend: "llamacpp" (default) or "gallium"; INFERENCE_ENGINE env overrides
-  baseURL: "https://api.openai.com/v1"          # For OpenAI provider
-  model: "gpt-5.6-luna"
-  apiKey: ""                                     # Or OPENAI_API_KEY env var
-  harmonyTemplate: false
+  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # forwarded as MODEL_PATH (auto-downloaded by the backend)
+  baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL (cloud)
+  model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
+  apiKey: ""                            # or OPENAI_API_KEY env var
+  inferenceEngine: "gallium"            # forwarded as INFERENCE_ENGINE (backend's local engine: llamacpp | gallium)
   temperature: 0.7
   maxTokens: 2048
-  reasoningEffort: "medium"                      # For reasoning models
+  reasoningEffort: "medium"
 
 agent:
-  systemPromptPath: "system-prompt.md"           # Relative to config dir
+  systemPromptPath: "system-prompt.md"  # relative to config dir; carried into the backend thread as developer instructions
   maxTurns: 50
-  language: "en"                                 # "en" or "ja"
+  language: "en"                        # "en" or "ja"
 
-tts:
-  enabled: true
-  voice: "com.apple.voice.enhanced.en-US.Zoe"
-  rate: 0.5
-  pitchMultiplier: 1.0
-  volume: 1.0
-
-stt:
-  enabled: true
-  locale: "en-US"                                # BCP47 locale
-  censor: false
-
-watcher:
-  enabled: true
-  debounceInterval: 3.0
+tts:  { enabled: true, voice: "com.apple.voice.enhanced.en-US.Zoe", rate: 0.5, pitchMultiplier: 1.0, volume: 1.0 }
+stt:  { enabled: true, locale: "en-US", censor: false }
 ```
 
-Provider selection logic: with `modelPath` set, the **inference engine** decides the local backend — `llm.inference_engine` (config) or the `INFERENCE_ENGINE` env var, values `llamacpp` (default) or `gallium` (needs the `gallium` feature); env overrides config. With no `modelPath` but a `baseURL`, it's `OpenAiProvider`. `modelPath` itself is **neutral** to the engine — the same `hf:`/local spec drives either backend. Resolution lives in `llm::resolve_inference_engine`.
-
-### Native gallium provider (`lib/src/llm_gallium.rs`, `gallium` feature)
-
-An alternative local backend to llama.cpp: a **pure-Rust candle** inference
-engine (crates `gallium-core` + `gallium-models`, vendored from `../rs-gallium`)
-with hand-written GPT-OSS / Qwen 3.5 / Gemma 4 / LFM2.5 implementations. Off by default —
-it pulls in candle, so build with `--features gallium` (and keep `local` too for
-a runtime switch: `--features "local gallium"`). The gallium crates are
-workspace members but excluded from `default-members`, so a bare `cargo build`
-does not compile candle.
-
-Selected by `inference_engine: "gallium"` (config or env) — **not** by the model
-path, which stays an ordinary `hf:ORG/REPO/file.gguf` / local spec, identical to
-the llama.cpp path. gallium **auto-detects**:
-
-- **format** from the path — a `.gguf` suffix is GGUF, otherwise safetensors (a
-  bare `hf:ORG/REPO` repo of shards or a local directory).
-- **arch** from the model — the GGUF `general.architecture` metadata, or
-  `config.json` `model_type`/`architectures` for safetensors — mapping to the
-  model impl **and** its `ModelProtocol` in `protocol.rs` (Harmony tool-calling
-  for GPT-OSS, ChatML for Qwen, Gemini template for Gemma, ChatML +
-  `[func(arg=val)]` tool calls for LFM2). Undetectable → error.
-
-LFM2.5 (`lfm2moe`) is a **hybrid** MoE (short-conv + GQA blocks, sparse
-sigmoid-gated experts); its GGUF experts are Q4_K, dequantized one expert at a
-time via `gallium_core::QExperts` (the generic counterpart to the MXFP4-only
-`Tq2Tensor`). GGUF-only for now (no safetensors path).
-
-Gemma 4 covers **both** variants in one impl (`gemma4_q.rs`): the dense E4B
-(with per-layer embeddings) and the 26B-A4B **MoE** (per-layer KV-head arrays —
-sliding layers 8 heads × 256 dim, global layers 2 × 512; **shared K=V** on
-global layers, which have no `attn_v`; and a shared GEGLU MLP + 128-expert
-top-8 softmax-routed MoE per block, experts via `QExperts`, router computed on
-the post-attention residual per llama.cpp's `models/gemma4.cpp`).
-
-GGUF resolves through the shared `model_downloader::ensure_model` (same cache as
-llama.cpp); the tokenizer comes from a `tokenizer.json` beside the GGUF, else
-fetched from the model's HF repo (llama.cpp reads the GGUF's embedded tokenizer,
-gallium needs the HF `tokenizer.json`). Safetensors HF repos download via
-`hf-hub`. Env knobs: `KESSEL_GALLIUM_TOKENIZER_REPO`, `KESSEL_GALLIUM_DTYPE`
-(`f16`/`bf16`/`f32`, safetensors only), `KESSEL_GALLIUM_THINKING` (Gemma 4).
-Device is CPU-only for now. See `configs/gallium.yaml`.
-
-### Model auto-download (`lib/src/model_downloader.rs`)
-
-`modelPath` may be a HuggingFace spec instead of a local path:
-`hf:ORG/REPO[@REVISION]/path/to/file.gguf` (e.g.
-`hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf`). On first use the
-local provider downloads it into the HuggingFace hub cache
-(`HF_HUB_CACHE`/`HUGGINGFACE_HUB_CACHE`/`HF_HOME`/`~/.cache/huggingface/hub`),
-laid out as `models--org--name/{blobs,snapshots/<commit>,refs}` like
-`huggingface_hub`. Downloads are **transactional** (stream to
-`blobs/<etag>.incomplete`, atomic-rename on success) and **resumable** (a
-leftover `.incomplete` continues via an HTTP `Range` request). Set `HF_TOKEN` /
-`HUGGING_FACE_HUB_TOKEN` for gated/private repos. A plain `modelPath` that is an
-existing file is used as-is.
+The `llm:` block is **forwarded to the backend as environment** — kessel does not
+interpret it beyond that. Backend selection is via `KESSEL_ACP_BACKEND` (env), not
+the config.
 
 ## Skills
 
@@ -172,202 +113,96 @@ Skills are `SKILL.md` files with YAML frontmatter loaded from:
 1. `skills/` directory (relative to config file's parent)
 2. `~/.claude/plugins/` (recursive)
 
-The `claude-activity-report` skill is used by the watcher via `chat_once(input, skillName:)`.
+A skill's catalog is injected into the backend thread's developer instructions.
 
 ## Build & Run
 
 ```bash
-# Rust
+# Rust core (cdylib for the frontends)
 cd crates && cargo build --release
 cd crates && cargo test
 
 # UniFFI (after .udl changes)
-bash scripts/gen_uniffi.sh
-cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/
+bash scripts/gen_uniffi.sh          # builds release + regenerates + copies into swift/Sources/AgentBridge
 
 # Swift
 cd swift && swift build
 
-# Run
-cd swift && swift run kessel-cli --config ../configs/openai.yaml
-cd swift && swift run kessel-cli --config ../configs/qwen3.yaml
-
-# Local model standalone (Rust only, no Swift)
-MODEL_PATH=hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf cargo run -p kessel-cli
-
-# As a whole-turn backend for another agent (see "App-server mode")
-OPENAI_API_KEY=sk-... cargo run -p kessel-cli -- app-server
+# Run (needs a backend on PATH — install `gallium` from ../rs-gallium)
+cd swift && swift run kessel-cli --config ../configs/gallium.yaml           # local backend
+KESSEL_ACP_BACKEND=codex OPENAI_API_KEY=sk-... \
+  swift run kessel-cli --config ../configs/codex.yaml --text                # cloud backend
 ```
 
-### `make install` — two binaries
+### `make install` — one binary
 
-`make install` installs **both** builds into `$PREFIX/bin` (default `~/bin`).
-They are not interchangeable:
+`make install` builds and installs the Swift voice app as **`kessel`** into
+`$PREFIX/bin` (default `~/bin`). It links `libkessel_core.dylib` by **absolute
+path** into this repo's `crates/target/release`, so the repo must stay put.
 
-| Installed as | Built from | What it is |
-|--------------|-----------|------------|
-| `kessel-cli` | `crates/` (Rust) | Text REPL **plus `app-server`** — the JSON-RPC whole-turn backend. Statically linked, so it runs from anywhere. |
-| `kessel` | `swift/` | The voice app: TTS/STT and the Claude Code watcher. Links `libkessel_core.dylib` by **absolute path** into this repo, so the repo must stay put. |
-
-Only `kessel-cli` understands `app-server`, and [klein](../klein-cli) spawns
-`kessel-cli app-server` by default (`kessel_path` in its settings). The Swift
-binary silently ignores an `app-server` argument and boots the voice agent
-instead, so installing it under that name breaks klein's kessel backend.
+The **agent backend is a separate binary** (`gallium`, built and installed from
+`../rs-gallium`) found on PATH at runtime — kessel spawns `gallium app-server`.
 
 ## Windows CLI (`win/`)
 
-A C# console frontend (text REPL) that consumes the same Rust `kessel_core`
-library through **UniFFI C# bindings** — the Windows analogue of the Swift CLI.
-Mirrors the `../rs-gallium` approach (cdylib + `uniffi-bindgen-cs` + .NET).
-
-Windows produces **two binaries**, the same split as macOS (see `make install`):
-
-| Binary | Built from | What it is |
-|--------|-----------|------------|
-| `kessel-cli.exe` | `crates/` (Rust) | REPL **plus `app-server`** — the JSON-RPC backend klein spawns. Statically links `kessel_core`, so it needs no DLL beside it. |
-| `kessel.exe` | `win/KesselCli/` (C#) | The frontend: text/listen REPL, TTS/STT. Needs `uniffi_kessel_core.dll` beside it (the csproj copies the cdylib under that name). |
-
-Only `kessel-cli.exe` understands `app-server`. The build scripts build the
-cdylib **and** `kessel-cli.exe` in a single cargo invocation with the same
-feature — building them separately would resolve `kessel-core` differently for
-each and overwrite the GPU `kessel_core.dll` with a CPU one.
+A C# console frontend (text/listen REPL) that consumes the `kessel_core` cdylib
+through **UniFFI C# bindings**. It produces `kessel.exe`, which needs
+`uniffi_kessel_core.dll` beside it (the csproj copies the cdylib under that name).
+Because kessel no longer does in-process inference, the cdylib has **no C++ deps
+and no feature flags** — an ordinary `cargo build` with any toolchain.
 
 ```bash
-# 1a. Cloud-only (no llama.cpp; uses whatever cargo is on PATH):
-cd crates && cargo build --release --no-default-features -p kessel-core -p kessel-cli
-#     -> crates/target/release/{kessel_core.dll, kessel-cli.exe}
-
-# 1b. With in-process llama.cpp (local GGUF models): use the helper script.
-#     It enters the MSVC dev env (vcvars64), forces cmake's Ninja generator, and
-#     uses rustup's MSVC toolchain so the C++ libs (common.lib/llama.lib, built by
-#     cl.exe) match what rustc links. Building with the GNU toolchain fails with
-#     "could not find native static library `common`".
-#     Requires: VS Build Tools w/ "Desktop development with C++" (cl.exe + Windows
-#     SDK + bundled Ninja), and an up-to-date rustup MSVC toolchain (rustup update stable).
+# 1. Build the cdylib (kessel_core.dll)
 scripts/build-win-local.bat
-
-# 1c. GPU-accelerated llama.cpp. Cargo features: cuda / metal / vulkan (each implies
-#     local). On Windows with NVIDIA:
-scripts/build-win-cuda.bat   # CUDA build; pins a Pascal-capable toolkit + sm_61
-#     NOTE: CUDA 13 dropped Pascal (GTX 10xx). The script defaults to CUDA_VER=v12.9,
-#     CUDA_ARCH=61 (GTX 1060); override for other GPUs, e.g.:
-#       set CUDA_VER=v12.9 & set CUDA_ARCH=86 & scripts\build-win-cuda.bat
-#     The provider offloads all layers by default; cap it for small VRAM via
-#     KESSEL_GPU_LAYERS=N (e.g. 20 on a 6 GB card with a big model).
+#    -> crates/target/release/kessel_core.dll
 
 # 2. Generate C# bindings into win/vendor/ (install once:
 #    cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3)
 bash scripts/gen_uniffi_cs.sh
 
-# 3. Build & run the C# frontend (net8.0, x64). The build copies kessel_core.dll
-#    next to the exe as uniffi_kessel_core.dll (the DllImport name the bindings
-#    expect). Emits kessel.exe.
+# 3. Build & run the C# frontend (net8.0, x64). Copies the cdylib next to the exe
+#    as uniffi_kessel_core.dll. Emits kessel.exe.
 dotnet build win/KesselCli/KesselCli.csproj -c Release
-win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/default.yaml
-
-# 4. The Rust CLI came out of step 1 and needs no dotnet build. Point klein's
-#    `kessel_path` at it (or put it on PATH as kessel-cli.exe).
-crates\target\release\kessel-cli.exe app-server
+win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/gallium.yaml
 ```
 
-- `win/KesselCli/Program.cs` — REPL with two modes toggled by **Shift+Tab** (like Claude Code's plan/auto cycle): `text` (type → printed reply) ⇄ `listen` (speak → reply printed **and** spoken). Interactive terminals use a key-level loop (`ReadLineOrToggle`/`TogglePressed`); piped stdin (the testsuite) uses a plain line loop with no mode switching. Commands: `/listen` (one-shot), `/reset`, `/history`, `/help`, `/quit`.
-- `win/KesselCli/SpeechInput.cs` — STT via `System.Speech` (Windows desktop recognizer). `RecognizeOnce()` for the `/listen` command; `Listen(toggleRequested)` for continuous listen mode (async recognition + key polling so Shift+Tab stays responsive; mic released during TTS = half-duplex). Requires `net8.0-windows`.
-- `win/KesselCli/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`; strips `<think>` blocks and markdown before speaking.
-- `win/KesselCli/PlayWindow.cs` — `kessel --play <file.ux|.asm>` opens a WinForms game window (needs `<UseWindowsForms>`) backed by the standalone `VmPlayer` UniFFI object (no LLM). Runs the UI on an STA thread; a 60 Hz timer ticks the VM and blits the 128×128 framebuffer (RGBA→BGRA) into a `Bitmap` drawn nearest-neighbour; keyboard → gamepad. The macOS analogue is `swift/Sources/KesselCli/PlayWindow.swift`. See **[docs/VM.md](docs/VM.md)**.
-- `win/KesselCli/DotEnv.cs` — loads a local `.env` at startup (nearest from cwd, nearest from the exe dir, then `~/.cache/kessel/.env`) so keys like `OPENAI_API_KEY` can live in a file. Parses `KEY=VALUE` (tolerates `export`, `#` comments, quotes); existing environment variables are not overridden. Runs before config load, so `.env` may also set `KESSEL_CONFIG`.
-- `win/KesselCli/AppConfig.cs` — YAML loader (YamlDotNet) for the same `configs/*.yaml` schema; API key falls back to `OPENAI_API_KEY` (which `.env` can supply). Config resolution order: `--config` → `KESSEL_CONFIG` env → **`~/.cache/kessel/config.yml`** (the user default; `.yaml` also accepted) → repo `configs/default.yaml` (cwd or walked up from the exe). If nothing is found, a commented starter config (LLM + TTS/STT + `mcpServers` example) is scaffolded at `~/.cache/kessel/config.yml`.
-- MCP client works on Windows. Config `mcpServers:` entries are either **stdio** (`command` + `args`) or **Streamable HTTP** (`url:`); `agent_new` picks the transport per entry. stdio (`mcp_client.rs`) resolves `npx`/`pnpm`/etc. `.cmd`/`.bat` shims via PATH+PATHEXT (`Command::new` doesn't), and its JSON-RPC read loop skips notifications/log lines while waiting for the matching id. HTTP (`mcp_client_http.rs`) speaks Streamable HTTP with `Mcp-Session-Id` and JSON/SSE responses. Verified against `npx -y @modelcontextprotocol/server-everything` (stdio) and the Autodesk Fusion MCP server at `http://127.0.0.1:27182/mcp` (HTTP — discovered & called `fusion_mcp_read`).
-- `win/vendor/kessel_core.cs` — generated bindings (gitignored; namespace `uniffi.kessel_core`, `DllImport("uniffi_kessel_core")`)
-- No watcher integration yet.
+- `win/KesselCli/Program.cs` — REPL with two modes toggled by **Shift+Tab**: `text` ⇄ `listen`. Commands: `/listen`, `/reset`, `/history`, `/help`, `/quit`.
+- `win/KesselCli/SpeechInput.cs` — STT via `System.Speech`. `win/KesselCli/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`.
+- `win/KesselCli/PlayWindow.cs` — `kessel --play <file.ux|.asm>` opens a WinForms game window backed by the standalone `VmPlayer` (no LLM). macOS analogue: `swift/Sources/KesselCli/PlayWindow.swift`. See **[docs/VM.md](docs/VM.md)**.
+- `win/KesselCli/DotEnv.cs` — loads a local `.env` at startup. `win/KesselCli/AppConfig.cs` — YAML loader (config resolution: `--config` → `KESSEL_CONFIG` → `~/.cache/kessel/config.yml` → `configs/gallium.yaml`).
 
-## App-server mode (`lib/src/appserver/`)
+## ACP client mode (`lib/src/acp_client.rs`)
 
-`kessel-cli app-server` exposes the agent as a **whole-turn backend** over
-line-delimited JSON-RPC 2.0 on stdio: a driving client hands kessel an entire
-conversation turn and takes back the final text, while kessel runs its own ReAct
-loop, tools, and MCP connections inside that turn.
-
-It speaks a **subset of the codex app-server protocol**, so a client that already
-drives `codex app-server` can drive kessel by swapping the binary. This is how
-[klein](../klein-cli) consumes it: `llm.backend: "kessel"` in klein's
-`settings.json`, served by `internal/agentserver` — the same runner it uses for
-codex.
-
-```bash
-OPENAI_API_KEY=sk-... kessel-cli app-server   # or MODEL_PATH=/path/to.gguf
-```
+`agent_new` spawns the backend and drives it as a **whole-turn** ACP client over
+line-delimited JSON-RPC 2.0 on the child's stdio — the mirror of the
+codex-app-server protocol.
 
 | Method | Direction | Purpose |
 |--------|-----------|---------|
-| `initialize` | in | capability negotiation (`experimentalApi`) |
-| `account/read` | in | readiness probe; kessel reports no auth requirement |
-| `thread/start` | in | create a thread (an LLM provider + tool registry + history) |
-| `turn/start` | in | run one turn, block until it completes |
-| `item/tool/call` | **out** | invoke a client-provided `dynamicTools` tool |
-| `item/{commandExecution,fileChange}/requestApproval` | **out** | ask the client to permit a mutation |
-| `item/completed`, `turn/completed`, `turn/failed` | **out** | progress notifications |
+| `initialize` | out | capability negotiation |
+| `thread/start` | out | open a thread (cwd, model, developer instructions, approval policy, MCP config) |
+| `turn/start` | out | run one turn, block until it completes |
+| `item/tool/call` | **in** | backend invokes one of kessel's client tools |
+| `item/{commandExecution,fileChange}/requestApproval` | **in** | backend asks kessel to permit a mutation |
+| `item/completed` | **in** | carries the turn's final `agentMessage` text |
 
 Key points:
 
-- **The transport is bidirectional** (`rpc.rs`), unlike `mcp_server.rs`'s strict
-  request→response loop. Inbound requests are dispatched on their own threads so
-  a long `turn/start` can originate tool-call requests while the reader keeps
-  running — both sides block on each other otherwise. `serve()` joins in-flight
-  handlers before returning, and cancels pending outbound requests first so a
-  handler awaiting a hung-up client cannot deadlock the join.
-- **Client tools** (`thread/start`'s `dynamicTools`) become `ToolHandler`s that
-  call back over the connection — the mirror image of `McpRemoteTool`, which
-  wraps a tool living in a subprocess *we* spawned.
-- **Approvals**: there is no TTY, so `ToolSession`'s terminal prompt would fail
-  closed on every `write`/`edit`/`bash`. `ApprovalSink` redirects the question to
-  the client. `approvalPolicy: "never"` installs `AutoApproveSink` instead.
-  Kessel has **no sandbox**, so this is the only gate on mutations.
-- **Logs go to stderr** in this mode — stdout carries the JSON-RPC stream.
-- `react::run_observed` reports each tool call/result so progress notifications
-  can be emitted mid-turn rather than going silent for minutes.
-
-## Claude Code Watcher
-
-Monitors Claude Code via hooks (PostToolUse, Stop events) sent over a Unix domain socket.
-
-- **Hook script**: `scripts/claude-hook.sh` forwards stdin JSON to `/tmp/kessel-cli-<uid>.sock`
-- **Install**: `bash scripts/install-claude-hook.sh` copies hook and updates `~/.claude/settings.json`
-- **SocketReceiver** (`swift/Sources/Watcher/`): listens on the socket, parses ndjson
-- **EventPipeline**: debounces events, summarizes via `EventSummarizer`, calls `agent.chatOnce()` with the `claude-activity-report` skill
-- **SessionJSONLWatcher**: also watches Claude Code's session JSONL file for events
+- **The transport is bidirectional** (`rpc.rs`): inbound requests are dispatched on their own threads so a `turn/start` in flight can be answered by client-tool calls the backend originates.
+- `config.mcp_servers` is forwarded to the backend via `thread/start`'s `config.mcp_servers`; the backend connects them.
+- Known degradations vs. the old in-process agent: `step` returns text only (no keyword hints / token counts); `observe`/`step_with_allowed_tools` can't restrict the backend's own tool set (advisory only).
 
 ## Project Structure
 
 ```
-kessel-cli/
-├── configs/                    # YAML configurations
-│   ├── default.yaml            # Default (OpenAI, English)
-│   ├── openai.yaml             # OpenAI with watcher
-│   ├── openai-ja.yaml          # OpenAI, Japanese
-│   ├── qwen3.yaml              # Local Qwen3.5-9B
-│   ├── gemma4.yaml             # Local Gemma 4 26B-A4B (QAT)
-│   └── system-prompt.md        # System prompt template ({language})
-├── skills/                     # Project-local skills
-│   └── claude-activity-report/SKILL.md
-├── crates/                     # Rust workspace
-│   ├── lib/src/                # Agent core library (kessel_core)
-│   └── app/src/                # Standalone Rust CLI
-├── swift/                      # Swift package
-│   └── Sources/
-│       ├── KesselCli/      # Main entry point
-│       ├── Audio/              # SpeechTranscriber, AudioCapture
-│       ├── TTS/                # AVSpeechSynthesizer
-│       ├── Watcher/            # Claude Code monitoring
-│       ├── Util/               # Config, Logger, SkillLoader
-│       ├── AgentBridge/        # UniFFI Swift bindings
-│       └── AgentBridgeFFI/     # C module map
-├── scripts/
-│   ├── gen_uniffi.sh           # Generate UniFFI bindings
-│   ├── install-claude-hook.sh  # Install Claude Code hook
-│   ├── claude-hook.sh          # Hook script (stdin -> socket)
-│   └── ...
-├── vendor/uniffi-swift/        # Generated UniFFI outputs
-└── models/                     # GGUF models (gitignored)
+kessel/
+├── configs/                    # gallium.yaml (local), codex.yaml (cloud), system-prompt.md
+├── skills/                     # project-local skills
+├── crates/lib/src/             # kessel_core (cdylib): ACP client, VM, client tools, orchestration
+├── swift/Sources/              # KesselCli, AgentKit, Audio, TTS, ScreenCapture, Util, AgentBridge(FFI)
+├── win/KesselCli/              # C# frontend
+├── scripts/                    # gen_uniffi{,_cs}.sh, build-win-local.bat, build-ios.sh
+└── docs/                       # REFACTOR.md, VM.md, HARNESS.md, VOICE_PROCESSING_IO.md
 ```
 
 ## Troubleshooting
@@ -376,14 +211,8 @@ kessel-cli/
 
 **"no such module 'kessel_coreFFI'"**: `bash scripts/gen_uniffi.sh`
 
-**UniFFI checksum mismatch**: Regenerate bindings and copy: `bash scripts/gen_uniffi.sh && cp vendor/uniffi-swift/kessel_core.swift swift/Sources/AgentBridge/`
+**UniFFI checksum mismatch**: regenerate and the script copies for you: `bash scripts/gen_uniffi.sh`
 
-**Local model OOM**: Use a smaller quantization or model. Rough weights-on-disk for the shipped configs:
+**"spawn backend 'gallium': No such file"**: the backend isn't on PATH. Build/install `gallium` from `../rs-gallium`, or set `KESSEL_ACP_BACKEND` to another codex-app-server binary (e.g. `codex`).
 
-| config | model | size |
-|--------|-------|------|
-| `gemma4.yaml` | gemma-4-26B-A4B-it-qat (UD-Q4_K_XL) | 14.3GB |
-| `qwen3.yaml` | Qwen3.5-9B (Q4_K_M) | 5.7GB |
-| `lfm2.yaml` | LFM2.5-8B-A1B (Q4_K_M) | 5.2GB |
-
-`gemma4.yaml` is the big one — it is a 26B mixture-of-experts (only ~4B active per token, but **all** weights must be resident). If it will not fit, swap `modelPath` for `hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf` (~5.0GB, identical prompt format), or pick a smaller quant from the model's repo.
+**Model OOM / local inference issues**: these are the **backend's** concern now — tune the model/quant in the backend (`../rs-gallium`). Kessel only forwards `MODEL_PATH`/`INFERENCE_ENGINE`.

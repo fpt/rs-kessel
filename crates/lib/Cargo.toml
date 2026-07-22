@@ -9,21 +9,9 @@ authors.workspace = true
 crate-type = ["lib", "staticlib", "cdylib"]
 name = "kessel_core"
 
-[features]
-default = ["local"]
-local = ["dep:llama-cpp-2", "dep:minijinja", "dep:minijinja-contrib"]
-# GPU backends for the in-process llama.cpp (each implies `local`).
-cuda = ["local", "llama-cpp-2/cuda"]
-metal = ["local", "llama-cpp-2/metal"]
-vulkan = ["local", "llama-cpp-2/vulkan"]
-# Native pure-Rust inference backend (candle) via the gallium engine. Off by
-# default — it pulls in candle and the hand-written model implementations.
-gallium = ["dep:gallium-core", "dep:gallium-models", "dep:candle-core", "dep:tokenizers", "dep:hf-hub"]
-
 [dependencies]
 crossbeam.workspace = true
 parking_lot.workspace = true
-ureq.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
@@ -32,25 +20,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uniffi = { workspace = true, features = [ "cli" ] }
 uniffi_bindgen = "0.28"
-camino = "1.1"
-schemars = { version = "0.8", features = ["derive"] }
 glob = "0.3"
 regex = "1"
-tiny_http.workspace = true
-llama-cpp-2 = { version = "0.1.151", optional = true, default-features = false, features = ["common"] }
-# Render GGUF chat templates (jinja) for the local provider — llama-cpp-2 0.1.150
-# dropped its jinja-capable chat layer, so we render the embedded template here.
-minijinja = { version = "2", optional = true, features = ["loop_controls"] }
-minijinja-contrib = { version = "2", optional = true, features = ["pycompat"] }
-encoding_rs = "0.8"
-native-tls = "0.2"
-# Native (candle) inference backend — gallium. Optional; enabled by `gallium`.
-gallium-core = { workspace = true, optional = true }
-gallium-models = { workspace = true, optional = true }
-candle-core = { workspace = true, optional = true }
-tokenizers = { workspace = true, optional = true }
-hf-hub = { workspace = true, optional = true }
-
 
 [dev-dependencies]
 tempfile = "3"

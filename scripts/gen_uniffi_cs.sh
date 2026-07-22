@@ -8,8 +8,7 @@ set -e
 #     --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3
 #
 # The Rust crate must be built first so the cdylib exists:
-#   cd crates && cargo build --release --no-default-features   # cloud-only
-#   (add --features local for in-process llama.cpp; needs a C/C++ toolchain)
+#   cd crates && cargo build --release
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$ROOT/win/vendor"

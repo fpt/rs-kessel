@@ -1,0 +1,38 @@
+# Codex / cloud backend
+#
+# kessel is an ACP client: it spawns a backend agent and drives it a turn at a
+# time. This config points the frontend at a cloud backend. Select it with:
+#
+#   KESSEL_ACP_BACKEND=codex   OPENAI_API_KEY=sk-...   kessel --config configs/codex.yaml
+#
+# `KESSEL_ACP_BACKEND` names the backend program on PATH (default: `gallium`).
+# Use `codex` for OpenAI's codex app-server, or any binary speaking the same
+# codex-app-server JSON-RPC subset. The `llm:` fields below are forwarded to the
+# backend as environment (baseURL/model/apiKey/…); the backend runs the ReAct
+# loop, tools, and MCP.
+
+llm:
+  baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL
+  model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
+  apiKey: ""                            # empty → read from OPENAI_API_KEY env var
+  harmonyTemplate: false
+  maxTokens: 8192
+  reasoningEffort: "medium"             # low | medium | high (reasoning-capable models)
+
+agent:
+  systemPromptPath: "system-prompt.md"  # carried into the backend thread as developer instructions
+  maxTurns: 50
+  language: "en"                        # "en" or "ja" (affects STT, TTS voice selection)
+  skillPaths: ["../skills"]             # SKILL.md dirs (relative to this config's dir)
+
+tts:
+  enabled: true
+  voice: "com.apple.voice.enhanced.en-US.Zoe"  # com.apple.voice.enhanced.ja-JP.Kyoko for Japanese
+  rate: 0.5
+  pitchMultiplier: 1.0
+  volume: 1.0
+
+stt:
+  enabled: true                              # Enable speech-to-text (Apple SpeechTranscriber)
+  locale: "en-US"                            # BCP47 locale for transcription
+  censor: false                              # Enable etiquette replacements
