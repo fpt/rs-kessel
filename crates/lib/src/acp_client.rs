@@ -1,10 +1,9 @@
 //! ACP client: drive a whole-turn agent backend over line-delimited JSON-RPC.
 //!
-//! This is the mirror of `appserver` (the server side): kessel spawns a backend
-//! that speaks the codex-app-server subset — `gallium-agent app-server`, `codex
-//! app-server`, or `../klein-cli` — and drives it a turn at a time, while serving
-//! its own local tools (the VM's `vm_*`, screen `capture`) back to that backend
-//! as the protocol's `dynamicTools`.
+//! kessel spawns a backend that speaks the codex-app-server subset — `gallium
+//! app-server` (the default) or `codex app-server` — and drives it a turn at a
+//! time, while serving its own local tools (the VM's `vm_*`, screen `capture`)
+//! back to that backend as the protocol's `dynamicTools`.
 //!
 //! Transport is shared with the server: [`crate::appserver::rpc`] is symmetric
 //! (it answers inbound requests, delivers inbound responses to our outbound

@@ -109,8 +109,8 @@ public sealed class AppConfig
             Environment.GetEnvironmentVariable("KESSEL_CONFIG"),
             userCfg,
             Path.ChangeExtension(userCfg, ".yaml"),    // accept .yaml too
-            Path.Combine(Directory.GetCurrentDirectory(), "configs", "default.yaml"),
-            FindInAncestors(AppContext.BaseDirectory, Path.Combine("configs", "default.yaml")),
+            Path.Combine(Directory.GetCurrentDirectory(), "configs", "gallium.yaml"),
+            FindInAncestors(AppContext.BaseDirectory, Path.Combine("configs", "gallium.yaml")),
         };
 
         foreach (var path in candidates)

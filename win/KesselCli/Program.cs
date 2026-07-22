@@ -106,7 +106,7 @@ if (cfg.Agent.SystemPromptPath is { } promptPath && resolvedConfigPath is not nu
 // ── Banner ──────────────────────────────────────────────────────────────────
 var (modelLine, endpointLine) = string.IsNullOrEmpty(cfg.Llm.ModelPath)
     ? ($"Model: {cfg.Llm.Model}", $"Endpoint: {cfg.Llm.BaseUrl}")
-    : ($"Model: {Path.GetFileName(cfg.Llm.ModelPath)}", "Endpoint: local (in-process llama.cpp)");
+    : ($"Model: {Path.GetFileName(cfg.Llm.ModelPath)}", "Endpoint: local (gallium backend)");
 
 Console.WriteLine($"""
 
@@ -317,7 +317,7 @@ static void PrintHelp()
     Usage: kessel-cli [OPTIONS]
 
     Options:
-        --config PATH      Path to configuration file (default: configs/default.yaml)
+        --config PATH      Path to configuration file (default: configs/gallium.yaml)
         --play FILE        Open the fantasy-console game window and play a ROM
                            (.lua or .asm); no model/API key needed
         --help, -h         Show this help message

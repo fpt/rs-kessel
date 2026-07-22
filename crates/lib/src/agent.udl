@@ -90,9 +90,6 @@ interface Agent {
     [Throws=AgentError]
     AgentResponse observe(string prompt, sequence<string> allowed_tools);
 
-    [Throws=AgentError]
-    void feed_watcher_event(string json);
-
     sequence<CaptureRequest> drain_capture_requests();
 
     void submit_capture_result(string id, string image_base64, string metadata_json);

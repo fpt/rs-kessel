@@ -1,7 +1,6 @@
 pub mod acp_client;
 pub mod appserver;
 pub mod capture;
-pub mod event_router;
 pub mod goal;
 mod llm;
 pub mod mcp;
@@ -478,16 +477,6 @@ impl Agent {
         Ok(self.make_response(reply, self.suggested_next_check()))
     }
 
-    /// Feed a watcher event — parses JSON and pushes to the situation stack.
-    pub fn feed_watcher_event(&self, json: String) -> Result<(), AgentError> {
-        let event: event_router::WatcherEvent = serde_json::from_str(&json)
-            .map_err(|e| AgentError::ParseError(format!("Invalid event JSON: {}", e)))?;
-        if let Some((line, source, session_id)) = format_event_for_situation(&event) {
-            self.situation.push(line, source, session_id);
-        }
-        Ok(())
-    }
-
     /// Drain all pending capture requests (Swift polls this).
     pub fn drain_capture_requests(&self) -> Vec<capture::CaptureRequest> {
         let mut requests = Vec::new();
@@ -593,50 +582,5 @@ impl Agent {
 
         tracing::info!("Goal evaluation: met={} reason={}", met, reason);
         Ok(GoalEvaluation { met, reason })
-    }
-}
-
-/// Extract the last path component for display.
-fn path_basename(path: &str) -> &str {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or(path)
-}
-
-/// Format a WatcherEvent as a one-line situation message.
-/// Returns `(line, source, session_id)` or `None` for events that shouldn't appear.
-///
-/// Lines are prefixed with `[Claude Code <project>]` so the LLM knows the source.
-fn format_event_for_situation(
-    event: &event_router::WatcherEvent,
-) -> Option<(String, String, String)> {
-    match event {
-        event_router::WatcherEvent::Hook(h) => {
-            let session_id = h.session_id.clone().unwrap_or_default();
-            let project = path_basename(&session_id);
-            let detail = if let Some(ref tool) = h.tool_name {
-                if let Some(ref path) = h.file_path {
-                    format!("{}: {}", tool, path_basename(path))
-                } else {
-                    tool.clone()
-                }
-            } else {
-                h.event.clone()
-            };
-            let line = format!("[Claude Code {}] {}", project, detail);
-            Some((line, "hook".to_string(), session_id))
-        }
-        event_router::WatcherEvent::Session(s) => {
-            if s.tool_uses.is_empty() {
-                return None;
-            }
-            let session_id = s.session_id.clone().unwrap_or_default();
-            let project = path_basename(&session_id);
-            let tools: Vec<&str> = s.tool_uses.iter().map(|t| t.name.as_str()).collect();
-            let line = format!("[Claude Code {}] {}: {}", project, s.event_type, tools.join(", "));
-            Some((line, "session".to_string(), session_id))
-        }
-        event_router::WatcherEvent::UserSpeech(_) => None, // goes to main conversation
     }
 }

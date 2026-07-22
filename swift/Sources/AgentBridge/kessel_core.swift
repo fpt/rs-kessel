@@ -572,8 +572,6 @@ public protocol AgentProtocol : AnyObject {
     
     func evaluateGoal() throws  -> GoalEvaluation
     
-    func feedWatcherEvent(json: String) throws 
-    
     func getConversationHistory()  -> String
     
     func goalStatus()  -> GoalStatus?
@@ -675,13 +673,6 @@ open func evaluateGoal()throws  -> GoalEvaluation {
     uniffi_kessel_core_fn_method_agent_evaluate_goal(self.uniffiClonePointer(),$0
     )
 })
-}
-    
-open func feedWatcherEvent(json: String)throws  {try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_feed_watcher_event(self.uniffiClonePointer(),
-        FfiConverterString.lower(json),$0
-    )
-}
 }
     
 open func getConversationHistory() -> String {
@@ -2026,9 +2017,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kessel_core_checksum_method_agent_evaluate_goal() != 23454) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_agent_feed_watcher_event() != 25035) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kessel_core_checksum_method_agent_get_conversation_history() != 51486) {

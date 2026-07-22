@@ -1,13 +1,12 @@
 import Foundation
 import Yams
 
-/// Configuration structure matching configs/default.yaml
+/// Configuration structure matching configs/gallium.yaml
 public struct Config: Codable {
     public let llm: LLMConfig
     public let agent: AgentConfig
     public let tts: TTSConfig?
     public let stt: STTConfig?
-    public let watcher: WatcherConfig?
     public let mcpServers: [McpServer]?
     public let ambient: AmbientConfig?
 
@@ -132,13 +131,6 @@ public struct Config: Codable {
         }
     }
 
-    public struct WatcherConfig: Codable {
-        public let enabled: Bool
-        public let debounceInterval: Double?    // seconds, default 3.0
-        public let socketPath: String?          // Unix socket path (null=auto)
-        public let sessionPath: String?         // JSONL path (null=auto-detect)
-    }
-
     /// Load configuration from YAML file
     public static func load(from path: String) throws -> Config {
         let url = URL(fileURLWithPath: path)
@@ -178,7 +170,6 @@ public struct Config: Codable {
             stt: STTConfig(
                 enabled: false
             ),
-            watcher: nil,
             mcpServers: nil,
             ambient: nil
         )

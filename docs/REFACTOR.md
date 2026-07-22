@@ -37,21 +37,19 @@ in `../rs-gallium`. Not yet committed.
   rs-gallium's candle-first identity while keeping bare builds free of the C++
   build.
 - **Left functional identity strings as "kessel"** (app-server `userAgent`
-  `kessel/0.1.0`, MCP client/server names, HF User-Agent) to avoid disturbing
-  klein's handshake before validation. Rename is a follow-up.
+  `kessel/0.1.0`, MCP client/server names, HF User-Agent). Rename is a follow-up.
 
 ### Remaining follow-ups (gallium side)
 
 - Runtime-validate LFM2.5 and Gemma-4 MoE inference through
   `gallium-agent`'s `create_provider` (code-complete, not yet run).
-- Rename residual "kessel" identity strings once klein compatibility is confirmed.
+- Rename residual "kessel" identity strings.
 - Remove rs-gallium's retired `swift/` frontend + its Makefile targets.
-- Repoint klein's `kessel_path` at the `gallium-agent` binary (klein config only).
 
 **kessel side — Phase 4 in progress** (uncommitted, on `docs/harness-direction`):
 
 - **Phase 4a done** — `acp_client.rs`: an ACP client that spawns a backend
-  (`gallium-agent app-server` / codex / klein) and drives it a turn at a time,
+  (`gallium app-server` or `codex app-server`) and drives it a turn at a time,
   reusing the symmetric `appserver::rpc` transport. It sends
   `initialize`/`thread/start`/`turn/start` and handles inbound `item/tool/call`
   + approval requests, capturing the final `agentMessage`. Verified end-to-end
@@ -105,10 +103,18 @@ in `../rs-gallium`. Not yet committed.
   default backend name (`gallium-agent` → `gallium`, matching rs-gallium's renamed
   binary).
 
-Phase 6 (repoint + docs) **not started**: `Makefile` (`install`/`build-win`/
-testsuite still build the deleted `crates/app` `kessel-cli`), `win/` build
-scripts, `testsuite/`, CLAUDE.md/README, and klein's `kessel_path` all still
-describe the old two-binary world.
+- **Phase 6 done (kessel side)** — docs + scripts brought in line with the
+  single-cdylib + external-`gallium`-backend world. `Makefile` rewritten (single
+  `kessel` install, `run`/`run-codex`, no `kessel-cli`); `build-win-local.bat`
+  reduced to a plain cdylib build and `build-win-cuda.bat` deleted (GPU inference
+  lives in the backend); the agent-capability `testsuite/` and its driver scripts
+  removed (they belong with the agent, in rs-gallium); the in-process agent test
+  scripts and dead local-model/whisper helpers deleted; `configs/` trimmed to
+  `gallium.yaml` (default) + `codex.yaml`; the Claude Code **watcher** removed
+  end-to-end (Rust `event_router`/`feed_watcher_event`, the Swift `Watcher`
+  package + wiring, hook scripts, the `claude-activity-report` skill, and
+  `watcher:` config); CLAUDE.md/README rewritten. kessel and any downstream ACP
+  driver are **independent** — no cross-repo coupling is documented or assumed.
 
 ---
 
@@ -119,16 +125,14 @@ describe the old two-binary world.
 Stop maintaining two parallel agent stacks and one drifting vendored inference
 engine. After the split:
 
-- **kessel** = the luax **VM** + platform/frontend (voice TTS/STT, Claude Code
-  watcher, `PlayWindow`, Swift/C# apps). It is a **backend-agnostic ACP client**
-  — it drives whatever app-server it's pointed at (`gallium`, `codex`, or
-  `../klein-cli`). It has no agent loop and no local inference of its own.
+- **kessel** = the luax **VM** + platform/frontend (voice TTS/STT, `PlayWindow`,
+  Swift/C# apps). It is a **backend-agnostic ACP client** — it drives whatever
+  app-server it's pointed at (`gallium` or `codex`). It has no agent loop and no
+  local inference of its own.
 - **gallium** = the agent: ReAct loop, tools, MCP, the llama.cpp **and** native
-  candle local backends, and the **app-server (ACP) that `kessel-cli` provides
-  today**. gallium's binary becomes that ACP server.
-- **`kessel-cli` is deleted.** Its `app-server` role moves to gallium.
-- **`../klein-cli` is not touched.** It only gets repointed at gallium's binary
-  (`kessel_path` in klein's `settings.json` — config, not code).
+  candle local backends, and the **app-server (ACP)** kessel spawns. gallium's
+  binary is that ACP server.
+- **`kessel-cli` is deleted.** Its `app-server` role moved to gallium.
 
 ## Target topology
 
@@ -142,8 +146,8 @@ gallium app-server   (agent: react, tools, mcp, llama.cpp + candle)
 kessel client tools:  vm_*, capture_screen/apply_ocr   (executed in the client)
 ```
 
-Backend is swappable: `gallium | codex | klein` all speak the same
-codex-app-server subset kessel already implements in `appserver/`.
+Backend is swappable: `gallium` and `codex` both speak the same
+codex-app-server subset kessel drives via `appserver/rpc`.
 
 ## Current state (why this is a refactor, not a rewrite)
 
@@ -214,7 +218,7 @@ Move `appserver/` into gallium-agent; add the `app-server` dispatch to gallium's
 `main.rs` (it already has a REPL main). gallium's binary now serves ACP.
 
 ### Phase 4 — Build the kessel ACP client
-Swift/C# spawns the gallium (or codex/klein) `app-server` and speaks JSON-RPC.
+Swift/C# spawns the gallium (or codex) `app-server` and speaks JSON-RPC.
 kessel registers `vm_*` + `capture` as `dynamicTools`; rewrite `vm/tools.rs`'s
 registration surface as client-tool executors (VM logic untouched). Port
 goals/situation/ambient/backchannel to client-side orchestration over ACP.
@@ -224,9 +228,9 @@ Remove `crates/app` (kessel-cli), `crates/gallium-core`, `crates/gallium-models`
 (vendored), and every moved `lib` module. `kessel-core` shrinks to VM + VmPlayer
 + ACP client + executors; its UDL drops the agent-y `Agent` methods.
 
-### Phase 6 — Repoint + docs
-Point klein's `kessel_path` at the gallium binary (klein-cli code untouched).
-Update CLAUDE.md/README/Makefile in both repos and the `win/` build scripts.
+### Phase 6 — Docs + scripts
+Update CLAUDE.md/README/Makefile and the `win/` build scripts for the
+single-cdylib + external-backend world.
 
 ## Open questions / risks
 
@@ -236,5 +240,4 @@ Update CLAUDE.md/README/Makefile in both repos and the `win/` build scripts.
   it over ACP instead of linking it — decide whether to keep it for standalone
   gallium use or drop it.
 - **candle rev pin** must stay identical across the moved crates.
-- **Naming**: gallium's ACP binary name — klein's `kessel_path` repoints to it.
 ```
