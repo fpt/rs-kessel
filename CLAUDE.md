@@ -41,7 +41,7 @@ the split (kessel = VM + platform + ACP client; the agent core lives in
 | `lib/src/appserver/mod.rs` | Just re-exports `rpc` now (the in-process server was removed with the agent core). |
 | `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`, `ToolDefinition`, `ToolCallInfo`. No provider layer. |
 | `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
-| `lib/src/tool.rs` | `ToolHandler`, `ToolResult`, `ToolRegistry`, `ToolAccess`, `ToolSession`. The trait surface the VM/capture/situation client tools implement. (The built-in file/bash tools it also defines are now unused in kessel — the backend owns those.) |
+| `lib/src/tool.rs` | The tool trait surface the VM/capture/situation client tools implement: `ToolHandler`, `ToolResult`, `ToolRegistry`, `ToolAccess`. (The built-in file/bash tools and their permission machinery were removed — the backend owns those now.) |
 | `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + a statically-typed Lua-ish front-end (`luax.rs`) + `vm_*` tools. The VM stays resident in kessel and is served to the backend as client tools; playable via `kessel --play`. See **[docs/VM.md](docs/VM.md)**. |
 | `lib/src/capture.rs` | Screen capture / find-window / OCR / list-windows tools (executed macOS-side via Swift; served to the backend as client tools). |
 | `lib/src/situation.rs` | `SituationMessages` ambient-context stack + `read_situation_messages` client tool. Fed by the frontend's periodic window-list poller (`push_situation_message`). |
