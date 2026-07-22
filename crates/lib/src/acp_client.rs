@@ -380,12 +380,9 @@ impl Drop for AcpClient {
 mod tests {
     use super::*;
     use std::io::Read;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use crossbeam::channel::{unbounded, Receiver, Sender};
-
-    use crate::appserver::server::{AppServer, ServerConfig};
-    use crate::llm::{ChatMessage, LlmProvider, LlmResponse, ToolCallInfo, ToolDefinition};
 
     // --- in-memory duplex byte plumbing (mirrors appserver::e2e_tests) --------
 
@@ -432,53 +429,43 @@ mod tests {
         BufReader::new(ChannelReader { rx, buf: Vec::new(), pos: 0 })
     }
 
-    // --- a scripted backend provider -----------------------------------------
+    // --- a hand-rolled backend that speaks the protocol directly --------------
 
-    /// A Clone-able turn script (`LlmResponse` itself is not Clone).
-    #[derive(Clone)]
-    enum Step {
-        CallTool { id: String, name: String, args: Value },
-        Say(String),
-    }
+    /// A minimal codex-app-server peer: it answers the client's
+    /// `initialize`/`thread/start`/`turn/start` and, on a turn, calls back the
+    /// client tool `ping` before emitting the final `agentMessage`. This replaces
+    /// the old in-process `AppServer` fixture (removed with the agent core) so the
+    /// client is exercised against the wire protocol, not our own server.
+    struct StubBackend;
 
-    struct ScriptedProvider {
-        steps: Vec<Step>,
-        calls: AtomicUsize,
-    }
-
-    impl LlmProvider for ScriptedProvider {
-        fn chat(&self, _messages: &[ChatMessage]) -> anyhow::Result<String> {
-            Ok("unused".to_string())
-        }
-        fn supports_tools(&self) -> bool {
-            true
-        }
-        fn chat_with_tools(
+    impl RequestHandler for StubBackend {
+        fn handle_request(
             &self,
-            _messages: &[ChatMessage],
-            _tools: &[ToolDefinition],
-        ) -> anyhow::Result<LlmResponse> {
-            let i = self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(match &self.steps[i] {
-                Step::CallTool { id, name, args } => LlmResponse::ToolCalls(
-                    vec![ToolCallInfo { id: id.clone(), name: name.clone(), arguments: args.clone() }],
-                    None,
-                ),
-                Step::Say(s) => LlmResponse::Text { content: s.clone(), reasoning: None, usage: None },
-            })
+            conn: &Arc<Connection>,
+            method: &str,
+            _params: Value,
+        ) -> HandlerResult {
+            match method {
+                "initialize" => Ok(json!({ "userAgent": "kessel-test/0.1.0" })),
+                "thread/start" => Ok(json!({ "threadId": "t1" })),
+                "turn/start" => {
+                    // Reentrantly call the client's `ping` tool mid-turn — the
+                    // reader must stay live to deliver the response.
+                    let _ = conn.request("item/tool/call", json!({ "tool": "ping", "arguments": {} }));
+                    // The final text arrives as an item/completed notification,
+                    // written before the turn/start response.
+                    conn.notify(
+                        "item/completed",
+                        json!({
+                            "turnId": "turn1",
+                            "item": { "type": "agentMessage", "text": "all done" },
+                        }),
+                    );
+                    Ok(json!({ "turnId": "turn1" }))
+                }
+                _ => Err(RpcFault::method_not_found(method)),
+            }
         }
-    }
-
-    fn scripted_backend(steps: Vec<Step>) -> AppServer {
-        AppServer::with_provider_factory(
-            ServerConfig { max_iterations: Some(5), ..Default::default() },
-            Box::new(move |_cfg, _model| {
-                Ok(Box::new(ScriptedProvider {
-                    steps: steps.clone(),
-                    calls: AtomicUsize::new(0),
-                }))
-            }),
-        )
     }
 
     struct PingTool {
@@ -509,14 +496,9 @@ mod tests {
         let (client_out, server_in) = unbounded::<Vec<u8>>();
         let (server_out, client_in) = unbounded::<Vec<u8>>();
 
-        // Backend: step 0 calls the client tool "ping"; step 1 returns final text.
-        let backend = scripted_backend(vec![
-            Step::CallTool { id: "c1".to_string(), name: "ping".to_string(), args: json!({}) },
-            Step::Say("all done".to_string()),
-        ]);
         let server_conn = Connection::new(Box::new(ByteChannelWriter { tx: server_out }));
         std::thread::spawn(move || {
-            serve(reader_over(server_in), server_conn, Arc::new(backend));
+            serve(reader_over(server_in), server_conn, Arc::new(StubBackend));
         });
 
         let called = Arc::new(AtomicBool::new(false));

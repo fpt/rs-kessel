@@ -1,31 +1,10 @@
-//! Exposes the kessel agent as a whole-turn backend over JSON-RPC on stdio.
+//! JSON-RPC 2.0 transport over stdio for the codex-app-server protocol subset.
 //!
-//! A driving client (klein's `internal/codex` runner) hands kessel an entire
-//! conversation turn and takes back the final text; kessel runs its own ReAct
-//! loop, tools, and MCP connections inside that turn. This is the same shape
-//! codex's app-server presents, and deliberately the same wire protocol — see
-//! `server.rs` for the subset implemented and why.
+//! Only the symmetric transport (`rpc`) remains here: kessel drives a backend
+//! agent as an ACP *client* (see [`crate::acp_client`]), reusing this same
+//! `Connection` + `serve` to send `initialize`/`thread/start`/`turn/start` and
+//! handle the backend's inbound `item/tool/call` and approval requests. The
+//! in-process server (the old `kessel-cli app-server`) was removed when the
+//! agent core moved to the standalone backend — see docs/REFACTOR.md.
 
 pub mod rpc;
-pub mod server;
-pub mod tools;
-
-#[cfg(test)]
-mod e2e_tests;
-
-use std::io::BufReader;
-use std::sync::Arc;
-
-pub use server::{AppServer, ServerConfig};
-
-/// Serve the agent on stdin/stdout until the client closes the connection.
-///
-/// Callers must ensure nothing else writes to stdout — logs belong on stderr,
-/// or they will corrupt the JSON-RPC stream.
-pub fn run_stdio(config: ServerConfig) {
-    let conn = rpc::Connection::new(Box::new(std::io::stdout()));
-    let handler = Arc::new(AppServer::new(config));
-    tracing::info!("kessel app-server listening on stdio");
-    rpc::serve(BufReader::new(std::io::stdin()), conn, handler);
-    tracing::info!("kessel app-server: client disconnected");
-}

@@ -2,27 +2,10 @@ pub mod acp_client;
 pub mod appserver;
 pub mod capture;
 pub mod event_router;
-pub mod github;
 pub mod goal;
-mod harmony;
-// Shared Gemma native tool-call parsing, used by both local backends.
-#[cfg(any(feature = "local", feature = "gallium"))]
-pub mod gemma;
 mod llm;
-#[cfg(feature = "gallium")]
-pub mod llm_gallium;
-#[cfg(feature = "local")]
-pub mod llm_local;
-#[cfg(feature = "gallium")]
-pub mod protocol;
 pub mod mcp;
-pub mod mcp_client;
-pub mod mcp_client_http;
-pub mod mcp_server;
-pub mod mcp_server_http;
 mod memory;
-pub mod model_downloader;
-pub mod react;
 pub mod situation;
 pub mod skill;
 mod state_updater;
@@ -40,8 +23,7 @@ use crossbeam::channel::{Receiver, Sender};
 use serde_json::{json, Value};
 
 pub use capture::CaptureRequest;
-pub use harmony::HarmonyTemplate;
-pub use llm::{create_provider, ChatMessage, ChatRole, TokenUsage};
+pub use llm::{ChatMessage, ChatRole, TokenUsage};
 pub use memory::ConversationMemory;
 pub use state_updater::{BackchannelDetector, RuleBasedBackchannelDetector};
 pub use vm::player::VmPlayer;
@@ -56,38 +38,6 @@ pub struct McpServerConfig {
     /// If set, connect over Streamable HTTP to this URL instead of spawning
     /// `command`. (stdio uses command/args; HTTP uses url.)
     pub url: Option<String>,
-}
-
-/// Connect each configured MCP server and register its tools into `registry`.
-/// A `url` selects the Streamable HTTP transport; otherwise `command`/`args` are
-/// spawned (stdio). A server that fails to connect is logged and skipped, so one
-/// bad entry does not take down the agent.
-///
-/// Used by the in-process app-server's `thread/start` (kept in this crate until
-/// the agent core is fully retired — see docs/REFACTOR.md).
-pub(crate) fn register_mcp_servers(registry: &mut tool::ToolRegistry, servers: &[McpServerConfig]) {
-    for server_cfg in servers {
-        let http_url = server_cfg.url.as_deref().filter(|u| !u.is_empty());
-        let result = match http_url {
-            Some(url) => mcp_client_http::McpHttpClient::connect(url).map(|c| c.tool_handlers()),
-            None => {
-                let args_ref: Vec<&str> = server_cfg.args.iter().map(|s| s.as_str()).collect();
-                mcp_client::McpClient::connect(&server_cfg.command, &args_ref)
-                    .map(|c| c.tool_handlers())
-            }
-        };
-        match result {
-            Ok(handlers) => {
-                for handler in handlers {
-                    registry.register(handler);
-                }
-            }
-            Err(e) => {
-                let target = http_url.unwrap_or(server_cfg.command.as_str());
-                tracing::warn!("Failed to connect MCP server '{}': {}", target, e);
-            }
-        }
-    }
 }
 
 /// Configuration for the agent
@@ -178,12 +128,13 @@ pub enum AgentError {
 // ============================================================================
 
 /// The backend agent command to spawn. `KESSEL_ACP_BACKEND` overrides it (may be
-/// `"prog arg1 arg2"`); default is `gallium-agent` on `PATH`. The `app-server`
-/// argument is appended by [`acp_client::AcpClient::spawn`].
+/// `"prog arg1 arg2"`); default is `gallium` on `PATH` (the rs-gallium
+/// app-server binary). The `app-server` argument is appended by
+/// [`acp_client::AcpClient::spawn`].
 fn backend_command() -> (String, Vec<String>) {
-    let spec = std::env::var("KESSEL_ACP_BACKEND").unwrap_or_else(|_| "gallium-agent".to_string());
+    let spec = std::env::var("KESSEL_ACP_BACKEND").unwrap_or_else(|_| "gallium".to_string());
     let mut parts = spec.split_whitespace();
-    let program = parts.next().unwrap_or("gallium-agent").to_string();
+    let program = parts.next().unwrap_or("gallium").to_string();
     let args: Vec<String> = parts.map(String::from).collect();
     (program, args)
 }

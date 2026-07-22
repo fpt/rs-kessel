@@ -83,8 +83,32 @@ in `../rs-gallium`. Not yet committed.
     counts (backend returns text only); `step_with_allowed_tools`/`observe`
     can't restrict the backend's own tool set (advisory only).
 
-Phases 5–6 (delete the vendored crates + `kessel-cli` + now-unused in-process
-agent modules from kessel-core, repoint klein) not started.
+- **Phase 5 done (kessel side)** — on branch
+  `refactor/phase5-remove-inprocess-agent`. Deleted the vendored engine
+  (`crates/gallium-core`, `crates/gallium-models`), the `crates/app` `kessel-cli`
+  binary, and every now-dead in-process agent module from `crates/lib`:
+  `react.rs`, `llm_local.rs`, `llm_gallium.rs`, `protocol.rs`, `harmony.rs`,
+  `gemma.rs`, `model_downloader.rs`, `github.rs`, all four `mcp_client*/mcp_server*`,
+  `appserver/server.rs` + `tools.rs` + `e2e_tests.rs`, and the empty
+  `state_capsule.rs`. `llm.rs` shrank to the shared data types (`ChatMessage`,
+  `ChatRole`, `TokenUsage`, `ImageContent`, `ToolDefinition`, `ToolCallInfo`) —
+  the `LlmProvider`/`OpenAiProvider`/`create_provider` layer is gone. What stayed:
+  `appserver/rpc.rs` (the symmetric transport `acp_client` reuses), `mcp.rs` (its
+  JSON-RPC constants), `tool.rs` (the `ToolHandler`/`ToolRegistry` surface the VM,
+  capture, and situation client tools build on), and the voice-orchestration
+  layer (`goal`, `situation`, `state_updater`, `event_router`, `capture`). The
+  lib `Cargo.toml` lost the `local`/`cuda`/`metal`/`vulkan`/`gallium` features and
+  the llama.cpp/candle/hf-hub deps; the workspace is a single member (`lib`). The
+  `acp_client` e2e test was rewritten to drive a hand-rolled JSON-RPC backend stub
+  (the old fixture used the now-deleted in-process `AppServer`). `cargo
+  build`/`--release` green; 206 lib + 21 game tests pass. Also fixed the stale
+  default backend name (`gallium-agent` → `gallium`, matching rs-gallium's renamed
+  binary).
+
+Phase 6 (repoint + docs) **not started**: `Makefile` (`install`/`build-win`/
+testsuite still build the deleted `crates/app` `kessel-cli`), `win/` build
+scripts, `testsuite/`, CLAUDE.md/README, and klein's `kessel_path` all still
+describe the old two-binary world.
 
 ---
 
