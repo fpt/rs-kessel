@@ -84,6 +84,15 @@ enum LineEditor {
         return line
     }
 
+    /// Put the terminal back into cooked mode. libedit switches it to raw mode
+    /// for the duration of `readline()`, so any exit taken while a read is in
+    /// flight — notably the Ctrl+C handler — must undo that or it leaves the
+    /// user's shell without echo.
+    static func restoreTerminal() {
+        guard configured, isInteractive else { return }
+        rl_deprep_terminal()
+    }
+
     /// Persist history. Called before every exit path, including `_exit(0)`,
     /// which bypasses atexit handlers.
     static func saveHistory() {

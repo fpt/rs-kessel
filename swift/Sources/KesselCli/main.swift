@@ -465,11 +465,35 @@ Type your messages below. Commands:
 Editing: Left/Right move the cursor, Up/Down walk history (persisted to
   ~/.cache/kessel/repl_history), TAB completes /commands, Ctrl+A/E jump to line
   start/end, Esc+B/F jump by word, Ctrl+W/K/U delete word/to-end/whole line,
-  Ctrl+D exits.
+  Ctrl+C or Ctrl+D exits.
 
 ===========================================
 
 """)
+
+    // Ctrl+C. While libedit owns the prompt it blocks SIGINT on its threads, so
+    // the signal just goes pending: neither the default disposition nor a plain
+    // sigaction handler ever runs, which left the REPL unkillable. A Dispatch
+    // signal source is kqueue-backed and fires regardless of the thread signal
+    // mask, so it still sees it (this is also why voice mode uses one).
+    // Cancelled on the way out so voice mode can install its own.
+    signal(SIGINT, SIG_IGN)
+    let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    sigintSource.setEventHandler {
+        // libedit left the tty in raw mode; restore it before the hard exit or
+        // the user's shell comes back without echo.
+        LineEditor.restoreTerminal()
+        LineEditor.saveHistory()
+        session.tts.stop()
+        print("\n^C")
+        fflush(stdout)
+        _exit(130)
+    }
+    sigintSource.resume()
+    defer {
+        sigintSource.cancel()
+        signal(SIGINT, SIG_DFL)
+    }
 
     if config.ambient?.enabled == true {
         ambientLoop.start(
