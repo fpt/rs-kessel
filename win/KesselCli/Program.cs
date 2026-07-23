@@ -70,7 +70,9 @@ var agentConfig = new AgentConfig(
 Agent agent;
 try
 {
-    agent = KesselCoreMethods.AgentNew(agentConfig);
+    // No approval gate wired on Windows yet: passing null runs the backend
+    // autonomously (no mutation prompts). See ReplApprover on the macOS side.
+    agent = KesselCoreMethods.AgentNew(agentConfig, null);
 }
 catch (Exception ex)
 {

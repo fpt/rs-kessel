@@ -819,6 +819,184 @@ public func FfiConverterTypeAgent_lower(_ value: Agent) -> UnsafeMutableRawPoint
 
 
 
+public protocol MutationApprover : AnyObject {
+    
+    func approve(action: String, target: String)  -> ApprovalDecision
+    
+}
+
+open class MutationApproverImpl:
+    MutationApprover {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_kessel_core_fn_clone_mutationapprover(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_kessel_core_fn_free_mutationapprover(pointer, $0) }
+    }
+
+    
+
+    
+open func approve(action: String, target: String) -> ApprovalDecision {
+    return try!  FfiConverterTypeApprovalDecision.lift(try! rustCall() {
+    uniffi_kessel_core_fn_method_mutationapprover_approve(self.uniffiClonePointer(),
+        FfiConverterString.lower(action),
+        FfiConverterString.lower(target),$0
+    )
+})
+}
+    
+
+}
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+private let IDX_CALLBACK_FREE: Int32 = 0
+// Callback return codes
+private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
+private let UNIFFI_CALLBACK_ERROR: Int32 = 1
+private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceMutationApprover {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceMutationApprover = UniffiVTableCallbackInterfaceMutationApprover(
+        approve: { (
+            uniffiHandle: UInt64,
+            action: RustBuffer,
+            target: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> ApprovalDecision in
+                guard let uniffiObj = try? FfiConverterTypeMutationApprover.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.approve(
+                     action: try FfiConverterString.lift(action),
+                     target: try FfiConverterString.lift(target)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeApprovalDecision.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterTypeMutationApprover.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface MutationApprover: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitMutationApprover() {
+    uniffi_kessel_core_fn_init_callback_vtable_mutationapprover(&UniffiCallbackInterfaceMutationApprover.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMutationApprover: FfiConverter {
+    fileprivate static var handleMap = UniffiHandleMap<MutationApprover>()
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = MutationApprover
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> MutationApprover {
+        return MutationApproverImpl(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: MutationApprover) -> UnsafeMutableRawPointer {
+        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
+            fatalError("Cast to UnsafeMutableRawPointer failed")
+        }
+        return ptr
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MutationApprover {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: MutationApprover, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMutationApprover_lift(_ pointer: UnsafeMutableRawPointer) throws -> MutationApprover {
+    return try FfiConverterTypeMutationApprover.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMutationApprover_lower(_ value: MutationApprover) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeMutationApprover.lower(value)
+}
+
+
+
+
 public protocol VmPlayerProtocol : AnyObject {
     
     func controlsJson()  -> String
@@ -1715,6 +1893,77 @@ extension AgentError: Foundation.LocalizedError {
     }
 }
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ApprovalDecision {
+    
+    case allowOnce
+    case allowSession
+    case deny
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeApprovalDecision: FfiConverterRustBuffer {
+    typealias SwiftType = ApprovalDecision
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ApprovalDecision {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .allowOnce
+        
+        case 2: return .allowSession
+        
+        case 3: return .deny
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ApprovalDecision, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .allowOnce:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .allowSession:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .deny:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeApprovalDecision_lift(_ buf: RustBuffer) throws -> ApprovalDecision {
+    return try FfiConverterTypeApprovalDecision.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeApprovalDecision_lower(_ value: ApprovalDecision) -> RustBuffer {
+    return FfiConverterTypeApprovalDecision.lower(value)
+}
+
+
+
+extension ApprovalDecision: Equatable, Hashable {}
+
+
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -1862,6 +2111,30 @@ fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMutationApprover: FfiConverterRustBuffer {
+    typealias SwiftType = MutationApprover?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMutationApprover.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMutationApprover.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeGoalStatus: FfiConverterRustBuffer {
     typealias SwiftType = GoalStatus?
 
@@ -1981,10 +2254,11 @@ fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuff
         return seq
     }
 }
-public func agentNew(config: AgentConfig)throws  -> Agent {
+public func agentNew(config: AgentConfig, approver: MutationApprover?)throws  -> Agent {
     return try  FfiConverterTypeAgent.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
     uniffi_kessel_core_fn_func_agent_new(
-        FfiConverterTypeAgentConfig.lower(config),$0
+        FfiConverterTypeAgentConfig.lower(config),
+        FfiConverterOptionTypeMutationApprover.lower(approver),$0
     )
 })
 }
@@ -2004,7 +2278,7 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kessel_core_checksum_func_agent_new() != 49581) {
+    if (uniffi_kessel_core_checksum_func_agent_new() != 38240) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kessel_core_checksum_method_agent_add_skill() != 48534) {
@@ -2052,6 +2326,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 47839) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kessel_core_checksum_method_mutationapprover_approve() != 20989) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kessel_core_checksum_method_vmplayer_controls_json() != 8354) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2080,6 +2357,7 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitMutationApprover()
     return InitializationResult.ok
 }()
 

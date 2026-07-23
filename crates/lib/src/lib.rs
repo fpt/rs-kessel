@@ -231,11 +231,58 @@ pub struct Agent {
     /// (opened lazily on the first turn so a system prompt / skills set beforehand
     /// are carried in as developer instructions).
     thread_started: Mutex<bool>,
+    /// `approvalPolicy` for the **main conversation thread**. `"untrusted"` when a
+    /// [`MutationApprover`] was supplied (the backend then raises approval
+    /// requests, which the approver answers); `"never"` when none was (the
+    /// backend runs mutations autonomously). Throwaway observe/goal threads always
+    /// use `"never"` — they must not block on a prompt.
+    mutation_policy: String,
+}
+
+/// How the frontend answers a mutation-approval request. The Rust mirror of the
+/// UDL `ApprovalDecision` enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    AllowOnce,
+    AllowSession,
+    Deny,
+}
+
+/// Frontend-implemented approval gate (delivered over UniFFI as a foreign trait).
+/// `action` is a short verb like `"run command"` or `"file change"`; `target` is
+/// the command or a human-readable description of the change. Called on a
+/// backend-servicing thread and blocks the turn until it returns.
+pub trait MutationApprover: Send + Sync {
+    fn approve(&self, action: String, target: String) -> ApprovalDecision;
+}
+
+/// `approvalPolicy` sent for the main conversation thread when a frontend
+/// supplies an approver. `"untrusted"` makes the backend run trivially-safe
+/// reads (ls/cat/…) silently but escalate every mutation — the file write or
+/// shell command — to the approver. See the codex `--ask-for-approval` and
+/// gallium `RemoteApprovalSink` semantics.
+const MUTATION_APPROVAL_POLICY: &str = "untrusted";
+
+/// Adapts a foreign [`MutationApprover`] (implemented in the frontend, delivered
+/// over UniFFI) to the internal [`acp_client::Approver`] the ACP client calls.
+struct ApproverAdapter(Arc<dyn MutationApprover>);
+
+impl acp_client::Approver for ApproverAdapter {
+    fn approve(&self, action: &str, target: &str) -> acp_client::ApprovalReply {
+        match self.0.approve(action.to_string(), target.to_string()) {
+            ApprovalDecision::AllowOnce => acp_client::ApprovalReply::Accept,
+            ApprovalDecision::AllowSession => acp_client::ApprovalReply::AcceptForSession,
+            ApprovalDecision::Deny => acp_client::ApprovalReply::Decline,
+        }
+    }
 }
 
 /// Top-level constructor. Spawns the backend agent process and negotiates the
 /// connection; the conversation thread itself is opened lazily on the first turn.
-pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
+pub fn agent_new(
+    config: AgentConfig,
+    approver: Option<Arc<dyn MutationApprover>>,
+) -> Result<Arc<Agent>, AgentError> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -283,16 +330,19 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         next_check: next_check.clone(),
     }));
 
+    // An approver means the frontend wants a gate: tell the backend to escalate
+    // mutations (policy "untrusted"), and route those requests to the frontend.
+    // No approver means run autonomously — the backend is told "never", so it
+    // never raises approval requests (DeclineApprover is then never consulted).
+    let (approver, mutation_policy): (Arc<dyn acp_client::Approver>, String) = match approver {
+        Some(a) => (Arc::new(ApproverAdapter(a)), MUTATION_APPROVAL_POLICY.to_string()),
+        None => (Arc::new(acp_client::DeclineApprover), "never".to_string()),
+    };
+
     // Spawn and connect the backend.
     let (program, args) = backend_command();
     let envs = backend_envs(&config);
-    let client = acp_client::AcpClient::spawn(
-        &program,
-        &args,
-        &envs,
-        tools,
-        Arc::new(acp_client::DeclineApprover),
-    )?;
+    let client = acp_client::AcpClient::spawn(&program, &args, &envs, tools, approver)?;
     let user_agent = client
         .initialize("kessel")
         .map_err(|e| AgentError::ConfigError(format!("backend handshake failed: {e}")))?;
@@ -314,6 +364,7 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         next_check,
         goal: Mutex::new(None),
         thread_started: Mutex::new(false),
+        mutation_policy,
     }))
 }
 
@@ -361,7 +412,7 @@ impl Agent {
                 self.config.working_dir.as_deref(),
                 None,
                 instr.as_deref(),
-                Some("never"),
+                Some(&self.mutation_policy),
                 self.mcp_config(),
             )?;
             *started = true;

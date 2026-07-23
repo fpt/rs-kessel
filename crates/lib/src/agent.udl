@@ -1,6 +1,24 @@
 namespace kessel_core {
     [Throws=AgentError]
-    Agent agent_new(AgentConfig config);
+    Agent agent_new(AgentConfig config, MutationApprover? approver);
+};
+
+// How the frontend answers a mutation (file write / shell command) the backend
+// wants to run in its own process. Returned by [MutationApprover.approve].
+enum ApprovalDecision {
+    "AllowOnce",
+    "AllowSession",
+    "Deny",
+};
+
+// Implemented by the frontend. Called synchronously (on a backend-servicing
+// thread) whenever the backend asks permission for a mutation; blocks the turn
+// until it returns. When no approver is supplied to [agent_new], the backend is
+// told to run autonomously (no approval requests are raised) — so a frontend
+// that wants an approval gate MUST pass one.
+[Trait, WithForeign]
+interface MutationApprover {
+    ApprovalDecision approve(string action, string target);
 };
 
 [Error]
