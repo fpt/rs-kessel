@@ -1,7 +1,7 @@
--- sprite.lua — move a hand-drawn sprite with the arrow keys. Shows off the
+-- sprite — move a hand-drawn sprite with the arrow keys. Shows off the
 -- `sprite { … }` declaration and id-indexed `spr(id, x, y, flags)`.
 --
---   kessel --play games/sprite.lua
+--   kessel --play games/sprite/game.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

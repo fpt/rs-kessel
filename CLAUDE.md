@@ -234,6 +234,7 @@ Key points:
 kessel/
 ├── configs/                    # gallium.yaml (local), codex.yaml (cloud), system-prompt.md
 ├── skills/                     # project-local skills
+├── games/<name>/game.lua       # shipped sample games, each a project directory
 ├── crates/lib/src/             # kessel_core (cdylib): ACP client, VM, client tools, orchestration
 ├── swift/Sources/              # KesselCli, AgentKit, Audio, TTS, ScreenCapture, Util, AgentBridge(FFI)
 ├── win/KesselCli/              # C# frontend

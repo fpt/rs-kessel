@@ -1,4 +1,5 @@
-//! The shipped sample games (`games/*.lua`) are the "adapt this" references the
+//! The shipped sample games (`games/<name>/game.lua`) are the "adapt this"
+//! references the
 //! model is pointed at, and the human-playable `kessel --play` demos. Guard them
 //! so a luax/assembler/VM change can't silently break the examples: each must
 //! (1) run the full `.lua` → luax compile → assemble → ROM pipeline with no
@@ -75,7 +76,7 @@ fn sokoban_solves_all_stages() {
     const DOWN: u8 = 0x08;
 
     let mut c = VmConsole::new();
-    c.write_source("s.lua", include_str!("../../../games/sokoban.lua"))
+    c.write_source("s.lua", include_str!("../../../games/sokoban/game.lua"))
         .unwrap();
     c.assemble("s.lua").unwrap();
     c.load_rom("s.lua").unwrap();
@@ -123,7 +124,7 @@ fn sokoban_solves_all_stages() {
 fn platform_has_clear_background_and_smooth_jump() {
     const A: u8 = 0x10;
 
-    let peaceful = include_str!("../../../games/platform.lua")
+    let peaceful = include_str!("../../../games/platform/game.lua")
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
@@ -183,7 +184,7 @@ fn platform_camera_follows_player_across_stage() {
         bounds
     }
 
-    let peaceful = include_str!("../../../games/platform.lua")
+    let peaceful = include_str!("../../../games/platform/game.lua")
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
@@ -229,7 +230,7 @@ fn platform_wall_jump_launches_away_from_wall() {
     const LEFT: u8 = 0x01;
     const RIGHT: u8 = 0x02;
 
-    let wall_jump = include_str!("../../../games/platform.lua")
+    let wall_jump = include_str!("../../../games/platform/game.lua")
         .replace(
             "p.x = 16  p.y = 96  p.y4 = 96 * 4",
             "p.x = 56  p.y = 72  p.y4 = 72 * 4",
@@ -274,7 +275,7 @@ fn platform_wall_jump_launches_away_from_wall() {
 #[test]
 fn platform_coins_patrols_stomps_and_knockback_work() {
     const RIGHT: u8 = 0x02;
-    const PLATFORM: &str = include_str!("../../../games/platform.lua");
+    const PLATFORM: &str = include_str!("../../../games/platform/game.lua");
 
     // The enemy on the short raised platform walks to its edge, turns, and returns.
     let mut c = VmConsole::new();
@@ -434,7 +435,7 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
 #[test]
 fn shooter_centres_bullets_and_player_can_die() {
     const A: u8 = 0x10;
-    const SHOOTER: &str = include_str!("../../../games/shooter.lua");
+    const SHOOTER: &str = include_str!("../../../games/shooter/game.lua");
 
     let mut c = VmConsole::new();
     c.write_source("s.lua", SHOOTER).unwrap();
@@ -481,7 +482,7 @@ fn shooter_centres_bullets_and_player_can_die() {
 #[test]
 fn rogue_sword_hearts_and_invulnerability_work() {
     const A: u8 = 0x10;
-    const ROGUE: &str = include_str!("../../../games/rogue.lua");
+    const ROGUE: &str = include_str!("../../../games/rogue/game.lua");
 
     // Put the first orc directly to the hero's right, which is the initial facing.
     let adjacent = ROGUE.replace(
@@ -592,7 +593,7 @@ fn rogue_chests_and_stairs_advance_stages() {
         }
     }
 
-    let peaceful = include_str!("../../../games/rogue.lua")
+    let peaceful = include_str!("../../../games/rogue/game.lua")
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0");
@@ -645,7 +646,7 @@ fn rogue_chests_and_stairs_advance_stages() {
 fn game_2048_merges_wins_loses_and_restarts() {
     const LEFT: u8 = 0x01;
     const A: u8 = 0x10;
-    const GAME: &str = include_str!("../../../games/2048.lua");
+    const GAME: &str = include_str!("../../../games/2048/game.lua");
     const INITIAL_SPAWNS: &str = "  spawn_tile()\n  spawn_tile()";
 
     let merge_board = GAME.replace(
@@ -748,7 +749,7 @@ macro_rules! games_ok {
         $(
             #[test]
             fn $test() {
-                assert_game_ok($file, include_str!(concat!("../../../games/", $file, ".lua")));
+                assert_game_ok($file, include_str!(concat!("../../../games/", $file, "/game.lua")));
             }
         )+
     };

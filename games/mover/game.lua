@@ -1,7 +1,7 @@
--- mover.lua — move a 2x2 block with the arrow keys (Z/X/Return/Space are A/B/
+-- mover — move a 2x2 block with the arrow keys (Z/X/Return/Space are A/B/
 -- Start/Select). Reports itself as entity tag 1 for observation.
 --
---   kessel --play games/mover.lua
+--   kessel --play games/mover/game.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

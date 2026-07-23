@@ -285,21 +285,26 @@ mod tests {
 
     #[test]
     fn shipped_sample_games_load() {
-        // The games/ assets shipped for `kessel --play` must stay valid.
+        // The games/ projects shipped for `kessel --play` must stay valid. Each
+        // is a directory holding one `game.lua`, the project layout the agent
+        // works in (see crate::project).
         for (src, name) in [
-            (include_str!("../../../../games/2048.lua"), "2048.lua"),
-            (include_str!("../../../../games/bounce.lua"), "bounce.lua"),
-            (include_str!("../../../../games/mover.lua"), "mover.lua"),
-            (include_str!("../../../../games/sprite.lua"), "sprite.lua"),
+            (include_str!("../../../../games/2048/game.lua"), "2048"),
+            (include_str!("../../../../games/bounce/game.lua"), "bounce"),
+            (include_str!("../../../../games/mover/game.lua"), "mover"),
+            (include_str!("../../../../games/sprite/game.lua"), "sprite"),
             (
-                include_str!("../../../../games/platform.lua"),
-                "platform.lua",
+                include_str!("../../../../games/platform/game.lua"),
+                "platform",
             ),
-            (include_str!("../../../../games/sokoban.lua"), "sokoban.lua"),
-            (include_str!("../../../../games/outrun.lua"), "outrun.lua"),
+            (
+                include_str!("../../../../games/sokoban/game.lua"),
+                "sokoban",
+            ),
+            (include_str!("../../../../games/outrun/game.lua"), "outrun"),
         ] {
             let p = VmPlayer::new();
-            let err = p.load(src.to_string(), name.to_string());
+            let err = p.load(src.to_string(), "game.lua".to_string());
             assert!(err.is_empty(), "{name} failed to load: {err}");
             p.tick(0);
             p.tick(BTN_RIGHT);

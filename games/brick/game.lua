@@ -1,7 +1,7 @@
--- brick.lua — a Breakout / brick-breaker. Arrows move the paddle; bounce the
+-- brick — a Breakout / brick-breaker. Arrows move the paddle; bounce the
 -- ball to clear every brick. Miss it and the ball respawns from the centre.
 --
---   kessel --play games/brick.lua
+--   kessel --play games/brick/game.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

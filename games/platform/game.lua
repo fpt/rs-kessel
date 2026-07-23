@@ -1,8 +1,8 @@
--- platform.lua — a scrolling tile platformer with coins, patrolling enemies,
+-- platform — a scrolling tile platformer with coins, patrolling enemies,
 -- stomp attacks, knockback, wall-jumps, and smooth movement.
 -- Arrows move, A (Z key) jumps or wall-jumps.
 --
---   kessel --play games/platform.lua
+--   kessel --play games/platform/game.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

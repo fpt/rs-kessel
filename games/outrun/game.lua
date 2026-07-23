@@ -1,10 +1,10 @@
--- outrun.lua — a pseudo-3D road racer in the Outrun/Pole-Position mould. The
+-- outrun — a pseudo-3D road racer in the Outrun/Pole-Position mould. The
 -- road is drawn one horizontal scanline at a time (hline): from the near bottom
 -- row up to the horizon, the centre bends by an accumulating curve (a parabola,
 -- so far rows bend most) and the width shrinks with distance. Roadside trees are
 -- distance-scaled with spr_scaled, and a bobbing sun shows sin().
 --
---   kessel --play games/outrun.lua
+--   kessel --play games/outrun/game.lua
 --
 -- Arrows steer / accelerate, A boosts, Down brakes. Drift too far off the
 -- tarmac and you scrub speed. There is no crash — it is an endless cruise.
