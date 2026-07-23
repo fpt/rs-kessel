@@ -1,4 +1,5 @@
-//! The shipped sample games (`games/*.lua`) are the "adapt this" references the
+//! The shipped sample games (`games/<name>/game.lua`) are the "adapt this"
+//! references the
 //! model is pointed at, and the human-playable `kessel --play` demos. Guard them
 //! so a luax/assembler/VM change can't silently break the examples: each must
 //! (1) run the full `.lua` → luax compile → assemble → ROM pipeline with no
@@ -47,7 +48,7 @@ fn assert_game_ok(name: &str, src: &str) {
 
     // --- run (300 frames, cycling inputs to exercise move/fire/rotate/restart) ---
     let mut c = VmConsole::new();
-    c.write_source("g.lua", src);
+    c.write_source("g.lua", src).unwrap();
     c.assemble("g.lua")
         .unwrap_or_else(|e| panic!("{name}.lua assemble via VmConsole: {e}"));
     c.load_rom("g.lua")
@@ -75,7 +76,8 @@ fn sokoban_solves_all_stages() {
     const DOWN: u8 = 0x08;
 
     let mut c = VmConsole::new();
-    c.write_source("s.lua", include_str!("../../../games/sokoban.lua"));
+    c.write_source("s.lua", include_str!("../../../games/sokoban/game.lua"))
+        .unwrap();
     c.assemble("s.lua").unwrap();
     c.load_rom("s.lua").unwrap();
 
@@ -122,13 +124,13 @@ fn sokoban_solves_all_stages() {
 fn platform_has_clear_background_and_smooth_jump() {
     const A: u8 = 0x10;
 
-    let peaceful = include_str!("../../../games/platform.lua")
+    let peaceful = include_str!("../../../games/platform/game.lua")
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
         .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", &peaceful);
+    c.write_source("p.lua", &peaceful).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
 
@@ -182,13 +184,13 @@ fn platform_camera_follows_player_across_stage() {
         bounds
     }
 
-    let peaceful = include_str!("../../../games/platform.lua")
+    let peaceful = include_str!("../../../games/platform/game.lua")
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
         .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", &peaceful);
+    c.write_source("p.lua", &peaceful).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
 
@@ -228,7 +230,7 @@ fn platform_wall_jump_launches_away_from_wall() {
     const LEFT: u8 = 0x01;
     const RIGHT: u8 = 0x02;
 
-    let wall_jump = include_str!("../../../games/platform.lua")
+    let wall_jump = include_str!("../../../games/platform/game.lua")
         .replace(
             "p.x = 16  p.y = 96  p.y4 = 96 * 4",
             "p.x = 56  p.y = 72  p.y4 = 72 * 4",
@@ -238,7 +240,7 @@ fn platform_wall_jump_launches_away_from_wall() {
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
         .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", &wall_jump);
+    c.write_source("p.lua", &wall_jump).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
 
@@ -273,11 +275,11 @@ fn platform_wall_jump_launches_away_from_wall() {
 #[test]
 fn platform_coins_patrols_stomps_and_knockback_work() {
     const RIGHT: u8 = 0x02;
-    const PLATFORM: &str = include_str!("../../../games/platform.lua");
+    const PLATFORM: &str = include_str!("../../../games/platform/game.lua");
 
     // The enemy on the short raised platform walks to its edge, turns, and returns.
     let mut c = VmConsole::new();
-    c.write_source("p.lua", PLATFORM);
+    c.write_source("p.lua", PLATFORM).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
     let first = c.run_frame(0);
@@ -340,7 +342,7 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
         .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", &peaceful);
+    c.write_source("p.lua", &peaceful).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
     for _ in 0..20 {
@@ -364,7 +366,7 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
         .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", &stomp);
+    c.write_source("p.lua", &stomp).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
     let mut stomped = false;
@@ -387,7 +389,7 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
         .replace("enemies[3].alive = 1", "enemies[3].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("p.lua", &side_hit);
+    c.write_source("p.lua", &side_hit).unwrap();
     c.assemble("p.lua").unwrap();
     c.load_rom("p.lua").unwrap();
     for _ in 0..20 {
@@ -433,10 +435,10 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
 #[test]
 fn shooter_centres_bullets_and_player_can_die() {
     const A: u8 = 0x10;
-    const SHOOTER: &str = include_str!("../../../games/shooter.lua");
+    const SHOOTER: &str = include_str!("../../../games/shooter/game.lua");
 
     let mut c = VmConsole::new();
-    c.write_source("s.lua", SHOOTER);
+    c.write_source("s.lua", SHOOTER).unwrap();
     c.assemble("s.lua").unwrap();
     c.load_rom("s.lua").unwrap();
     c.run_frame(0);
@@ -462,7 +464,7 @@ fn shooter_centres_bullets_and_player_can_die() {
     // Make spawned enemies track the initial ship x so collision is deterministic.
     let targeted = SHOOTER.replace("foes[i].x = rnd(120)", "foes[i].x = px");
     let mut c = VmConsole::new();
-    c.write_source("s.lua", &targeted);
+    c.write_source("s.lua", &targeted).unwrap();
     c.assemble("s.lua").unwrap();
     c.load_rom("s.lua").unwrap();
 
@@ -480,7 +482,7 @@ fn shooter_centres_bullets_and_player_can_die() {
 #[test]
 fn rogue_sword_hearts_and_invulnerability_work() {
     const A: u8 = 0x10;
-    const ROGUE: &str = include_str!("../../../games/rogue.lua");
+    const ROGUE: &str = include_str!("../../../games/rogue/game.lua");
 
     // Put the first orc directly to the hero's right, which is the initial facing.
     let adjacent = ROGUE.replace(
@@ -488,7 +490,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         "enemies[0].x = 3   enemies[0].y = 2",
     );
     let mut c = VmConsole::new();
-    c.write_source("r.lua", &adjacent);
+    c.write_source("r.lua", &adjacent).unwrap();
     c.assemble("r.lua").unwrap();
     c.load_rom("r.lua").unwrap();
 
@@ -521,7 +523,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("r.lua", &contact);
+    c.write_source("r.lua", &contact).unwrap();
     c.assemble("r.lua").unwrap();
     c.load_rom("r.lua").unwrap();
 
@@ -591,12 +593,12 @@ fn rogue_chests_and_stairs_advance_stages() {
         }
     }
 
-    let peaceful = include_str!("../../../games/rogue.lua")
+    let peaceful = include_str!("../../../games/rogue/game.lua")
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0");
     let mut c = VmConsole::new();
-    c.write_source("r.lua", &peaceful);
+    c.write_source("r.lua", &peaceful).unwrap();
     c.assemble("r.lua").unwrap();
     c.load_rom("r.lua").unwrap();
 
@@ -644,7 +646,7 @@ fn rogue_chests_and_stairs_advance_stages() {
 fn game_2048_merges_wins_loses_and_restarts() {
     const LEFT: u8 = 0x01;
     const A: u8 = 0x10;
-    const GAME: &str = include_str!("../../../games/2048.lua");
+    const GAME: &str = include_str!("../../../games/2048/game.lua");
     const INITIAL_SPAWNS: &str = "  spawn_tile()\n  spawn_tile()";
 
     let merge_board = GAME.replace(
@@ -652,7 +654,7 @@ fn game_2048_merges_wins_loses_and_restarts() {
         "  cells[0] = 2  cells[1] = 2  cells[2] = 2  cells[3] = 2",
     );
     let mut c = VmConsole::new();
-    c.write_source("2048.lua", &merge_board);
+    c.write_source("2048.lua", &merge_board).unwrap();
     c.assemble("2048.lua").unwrap();
     c.load_rom("2048.lua").unwrap();
 
@@ -722,7 +724,7 @@ fn game_2048_merges_wins_loses_and_restarts() {
 
     let win_board = GAME.replace(INITIAL_SPAWNS, "  cells[0] = 1024  cells[1] = 1024");
     let mut c = VmConsole::new();
-    c.write_source("2048.lua", &win_board);
+    c.write_source("2048.lua", &win_board).unwrap();
     c.assemble("2048.lua").unwrap();
     c.load_rom("2048.lua").unwrap();
     let won = c.run_frame(LEFT);
@@ -734,7 +736,7 @@ fn game_2048_merges_wins_loses_and_restarts() {
         "  cells[0] = 2  cells[1] = 4  cells[2] = 2  cells[3] = 4\n  cells[4] = 4  cells[5] = 2  cells[6] = 4  cells[7] = 2\n  cells[8] = 2  cells[9] = 4  cells[10] = 2  cells[11] = 4\n  cells[12] = 4  cells[13] = 2  cells[14] = 4  cells[15] = 2",
     );
     let mut c = VmConsole::new();
-    c.write_source("2048.lua", &stuck_board);
+    c.write_source("2048.lua", &stuck_board).unwrap();
     c.assemble("2048.lua").unwrap();
     c.load_rom("2048.lua").unwrap();
     let lost = c.run_frame(LEFT);
@@ -747,7 +749,7 @@ macro_rules! games_ok {
         $(
             #[test]
             fn $test() {
-                assert_game_ok($file, include_str!(concat!("../../../games/", $file, ".lua")));
+                assert_game_ok($file, include_str!(concat!("../../../games/", $file, "/game.lua")));
             }
         )+
     };

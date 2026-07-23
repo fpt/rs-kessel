@@ -244,7 +244,7 @@ end
   - `touching_left|right|floor|ceiling(x,y,w,h,flag)→bool` — is a flagged tile
     directly against that edge? (Grounded checks, wall-slides, ceiling bonks.)
   Jump *feel* (coyote time, jump buffering, wall-slides, and wall-jumps) stays in
-  luax — see `games/platform.lua`.
+  luax — see `games/platform/game.lua`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
   `id`; flags bit0/1 = flip x/y), `sprn(id,x,y,w,h,flags)` (draw a `w×h` block of
   contiguous sheet tiles — id at col/row = `id + row*w + col` — for 16×16+
@@ -256,7 +256,7 @@ end
   - `hline(x1,x2,y,c)` — fill a horizontal span at row `y`. The endpoints are
     signed, so a span whose left edge runs off-screen clips cleanly. Drawing one
     span per scanline gives a perspective road/floor cheaply (see
-    `games/outrun.lua`).
+    `games/outrun/game.lua`).
   - `spr_scaled(id,x,y,scale,flags)` — nearest-neighbour scaled sheet tile;
     `scale` is 8.8 fixed (`256` = 1.0, `512` = 2×, `128` = ½×). For
     distance-scaled cars, trees and signs. Prefer angle-specific sprites over
@@ -288,7 +288,7 @@ end
   folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,
   luax has no runtime strings. `number(n, x, y, color)` draws an integer in
   decimal. For scores, titles, and `GAME OVER` — reset `camera(0,0)` first if the
-  world is scrolled. See the HUD in `games/shooter.lua`.
+  world is scrolled. See the HUD in `games/shooter/game.lua`.
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
 - **Controls metadata:** an optional top-level `controls { … }` block records the
   game's input layout **as ROM metadata** — a host UI (on-screen buttons, help
@@ -351,7 +351,7 @@ function update()
 end
 ```
 
-**Full worked example:** `games/platform.lua` is a ~70-line tile platformer —
+**Full worked example:** `games/platform/game.lua` is a ~70-line tile platformer —
 sprites, a `tilemap` level, gravity, `solid()` collision, and a jump — the kind
 of complete example to adapt.
 
@@ -361,18 +361,28 @@ The standalone `kessel` app can render a ROM in a native window, so the games th
 model authors are **human-playable**:
 
 ```bash
-kessel --play games/2048.lua      # 2048 — arrows slide tiles, A starts a new game
-kessel --play games/bounce.lua    # a self-animating demo
-kessel --play games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
-kessel --play games/snake.lua     # grid snake — arrows steer, eat food, A restarts
-kessel --play games/brick.lua     # Breakout — arrows move the paddle
-kessel --play games/shooter.lua   # vertical shooter — arrows move, A fires
-kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
-kessel --play games/rogue.lua     # top-down action — arrows move, A swings a sword
-kessel --play games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
-kessel --play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
-kessel --play games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
+kessel --play games/2048/game.lua      # 2048 — arrows slide tiles, A starts a new game
+kessel --play games/bounce/game.lua    # a self-animating demo
+kessel --play games/mover/game.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
+kessel --play games/snake/game.lua     # grid snake — arrows steer, eat food, A restarts
+kessel --play games/brick/game.lua     # Breakout — arrows move the paddle
+kessel --play games/shooter/game.lua   # vertical shooter — arrows move, A fires
+kessel --play games/tetris/game.lua    # Tetris — L/R move, A rotates, Down soft-drops
+kessel --play games/rogue/game.lua     # top-down action — arrows move, A swings a sword
+kessel --play games/platform/game.lua  # tile platformer — arrows move, A jumps/wall-jumps
+kessel --play games/sokoban/game.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
+kessel --play games/outrun/game.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
 ```
+
+Each sample is a **project directory** — `games/<name>/game.lua` — the same
+layout the agent develops in, so one can be opened as a project and iterated on:
+
+```bash
+KESSEL_PROJECT=games/snake swift run kessel-cli --config ../configs/gallium.yaml
+```
+
+Opening a project scaffolds the rest of the layout (`design.md`, `tasks.json`,
+`assets/`, `tests/`, …) in that directory on first open.
 
 The `games/` set doubles as worked luax examples spanning the builtins:
 `2048` (array transforms + edge-triggered grid input), `snake` (record arrays +

@@ -1,8 +1,8 @@
--- shooter.lua — a vertical space shooter. Arrows move, A (Z key) fires. Bullets
+-- shooter — a vertical space shooter. Arrows move, A (Z key) fires. Bullets
 -- destroy the descending foes; each kill scores a point. Colliding with a foe
 -- ends the run; press A to restart.
 --
---   kessel --play games/shooter.lua
+--   kessel --play games/shooter/game.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

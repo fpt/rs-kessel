@@ -27,7 +27,13 @@ type Shared = Arc<Mutex<VmConsole>>;
 /// `acp_client::ClientTool`s and served to a remote backend over ACP (kessel as
 /// an ACP client hosting the resident VM).
 pub fn vm_tool_handlers() -> Vec<Box<dyn ToolHandler>> {
-    let console: Shared = Arc::new(Mutex::new(VmConsole::new()));
+    vm_tool_handlers_on(Arc::new(Mutex::new(VmConsole::new())))
+}
+
+/// Build every `vm_*` tool over an existing console. Used when something else
+/// also holds it — notably [`crate::project::ProjectStore`], which points the
+/// same console at the open project so `vm_assemble` compiles the file on disk.
+pub fn vm_tool_handlers_on(console: Shared) -> Vec<Box<dyn ToolHandler>> {
     vec![
         Box::new(WriteSource(console.clone())),
         Box::new(Assemble(console.clone())),
@@ -78,7 +84,7 @@ impl ToolHandler for WriteSource {
         // DON'T port: sprites are `sprite NAME { rows }` declarations (not table
         // literals), entry points are `update`/`draw` (NOT `_update`/`_draw`),
         // and `cls` requires a colour argument.
-        r#"Write source for the fantasy-console VM to a named file in the VM workspace. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
+        r#"Write source for the fantasy-console VM to a named file. With a project open the file is written into the project directory ON DISK — the same file your own file-editing tools, a human editor, and `kessel --play` see — so for a small change to an existing game, edit that file directly instead and just call vm_assemble. Use this for a first draft or a full rewrite. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
 
 luax essentials (a '.lua' file):
 - Entry points (vector-driven, no main loop): `function init()` runs once; `function update()` then `function draw()` run each frame. Names are bare — NOT `_update`/`_draw`.
@@ -125,8 +131,17 @@ Canonical example:
         let path = str_arg(&args, "path")?;
         let source = str_arg(&args, "source")?;
         let bytes = source.len();
-        self.0.lock().write_source(&path, &source);
-        Ok(ToolResult::text(format!("wrote {bytes} bytes to '{path}'")))
+        let mut console = self.0.lock();
+        if let Err(e) = console.write_source(&path, &source) {
+            return Ok(ToolResult::text(e));
+        }
+        let where_ = match console.root() {
+            Some(root) => format!("{}", root.join(&path).display()),
+            None => path.clone(),
+        };
+        Ok(ToolResult::text(format!(
+            "wrote {bytes} bytes to '{where_}'"
+        )))
     }
 }
 
@@ -138,9 +153,11 @@ impl ToolHandler for Assemble {
         "vm_assemble"
     }
     fn description(&self) -> &str {
-        "Assemble a previously written source file into a ROM. A '.lua' file is \
-         compiled from the Lua-ish dialect to assembly first. Returns diagnostics \
-         with line numbers on error, or the byte size and labels on success."
+        "Assemble a source file into a ROM, reading it fresh each time — from the \
+         project directory when a project is open, so edits made with any editing \
+         tool are picked up. A '.lua' file is compiled from the Lua-ish dialect to \
+         assembly first. Returns diagnostics with line numbers on error, or the \
+         byte size and labels on success."
     }
     fn parameters_schema(&self) -> Value {
         json!({

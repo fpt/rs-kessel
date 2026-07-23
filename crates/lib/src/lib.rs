@@ -5,6 +5,10 @@ pub mod goal;
 mod llm;
 pub mod mcp;
 mod memory;
+/// Persistent, on-disk game projects: the workspace the agent develops in
+/// (source, design notes, tasks, playtest journal). Its `project_*` tools are
+/// served to the backend alongside the VM's.
+pub mod project;
 pub mod situation;
 pub mod skill;
 mod state_updater;
@@ -165,6 +169,14 @@ fn backend_envs(config: &AgentConfig) -> Vec<(String, String)> {
     envs
 }
 
+/// The project to open at startup, from `KESSEL_PROJECT` (a directory path,
+/// created if missing). `None` when unset — the agent starts with no project and
+/// the model opens one with `project_open` / `project_new`.
+fn startup_project() -> Option<std::path::PathBuf> {
+    let raw = std::env::var("KESSEL_PROJECT").ok()?;
+    (!raw.trim().is_empty()).then(|| project::expand_path(&raw))
+}
+
 /// The ambient loop's self-pacing tool, served client-side so the cadence hint
 /// the backend model chooses lands back here (the in-process version shared an
 /// `AtomicU64` with the tool; over ACP the client tool writes the same cell).
@@ -219,6 +231,9 @@ pub struct Agent {
     backchannel_detector: Box<dyn BackchannelDetector>,
     system_prompt: Arc<Mutex<Option<String>>>,
     skill_registry: Arc<skill::SkillRegistry>,
+    /// The open game project, if any. Also the backend thread's working
+    /// directory, so its file tools edit the game where the VM builds it.
+    projects: Arc<project::ProjectStore>,
     situation: Arc<situation::SituationMessages>,
     capture_request_rx: Receiver<capture::CaptureRequest>,
     capture_result_tx: Sender<capture::CaptureResult>,
@@ -248,11 +263,25 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
     let capture_bridge = capture::CaptureBridge::new();
     let next_check = Arc::new(AtomicU64::new(0));
 
-    // Client tools served back to the backend: the resident VM, screen capture,
-    // the situation reader, and the ambient pacing hint. The backend keeps its
-    // own file/bash/skill tools — those run there, in the working dir we pass.
+    // Client tools served back to the backend: the resident VM, the project
+    // workspace, screen capture, the situation reader, and the ambient pacing
+    // hint. The backend keeps its own file/bash/skill tools — those run there,
+    // and are how it edits the game source in the project directory.
     let mut tools: Vec<Arc<dyn acp_client::ClientTool>> = Vec::new();
-    for handler in vm::tools::vm_tool_handlers() {
+    let console = Arc::new(Mutex::new(vm::VmConsole::new()));
+    for handler in vm::tools::vm_tool_handlers_on(console.clone()) {
+        tools.push(Arc::new(acp_client::HandlerClientTool(handler)));
+    }
+    // The project store owns the same console, so opening a project points the
+    // VM at its directory: `vm_assemble` then builds the file on disk.
+    let projects = Arc::new(project::ProjectStore::new(console));
+    if let Some(root) = startup_project() {
+        match projects.open(&root, None) {
+            Ok(p) => tracing::info!("opened project '{}' at {}", p.name(), p.root().display()),
+            Err(e) => tracing::warn!("KESSEL_PROJECT '{}': {e}", root.display()),
+        }
+    }
+    for handler in project::tools::project_tool_handlers(projects.clone()) {
         tools.push(Arc::new(acp_client::HandlerClientTool(handler)));
     }
     let capture_handlers: Vec<Box<dyn tool::ToolHandler>> = vec![
@@ -305,6 +334,7 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         backchannel_detector: Box::new(RuleBasedBackchannelDetector::new()),
         system_prompt: Arc::new(Mutex::new(None)),
         skill_registry,
+        projects,
         situation,
         capture_request_rx: capture_bridge.request_rx,
         capture_result_tx: capture_bridge.capture_result_tx,
@@ -335,6 +365,18 @@ impl Agent {
         }
     }
 
+    /// The backend thread's working directory: the open project's root when
+    /// there is one, so the backend's own file tools edit the game where the VM
+    /// builds it; else the configured working dir. A project opened *after* the
+    /// thread starts does not move it — the `project_*` tools report absolute
+    /// paths for exactly that case, and `reset()` re-opens the thread.
+    fn thread_cwd(&self) -> Option<String> {
+        self.projects
+            .current()
+            .map(|p| p.root().display().to_string())
+            .or_else(|| self.config.working_dir.clone())
+    }
+
     /// Build the codex-style `config` table forwarding our configured MCP servers
     /// to the backend (it connects them). `None` when none are configured.
     fn mcp_config(&self) -> Option<Value> {
@@ -358,7 +400,7 @@ impl Agent {
         if !*started {
             let instr = self.developer_instructions();
             self.client.start_thread(
-                self.config.working_dir.as_deref(),
+                self.thread_cwd().as_deref(),
                 None,
                 instr.as_deref(),
                 Some("never"),
@@ -469,7 +511,7 @@ impl Agent {
         self.next_check.store(0, Ordering::SeqCst);
         let instr = self.developer_instructions();
         let thread = self.client.open_thread(
-            self.config.working_dir.as_deref(),
+            self.thread_cwd().as_deref(),
             None,
             instr.as_deref(),
             Some("never"),

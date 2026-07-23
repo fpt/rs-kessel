@@ -1,9 +1,9 @@
--- rogue.lua — a tiny top-down action game. Arrows move the hero tile-by-tile
+-- rogue — a tiny top-down action game. Arrows move the hero tile-by-tile
 -- around a walled dungeon; A swings a sword in the facing direction. Orcs
 -- shuffle toward you and damage one of five hearts on contact. At 0 HP press A
 -- to restart.
 --
---   kessel --play games/rogue.lua
+--   kessel --play games/rogue/game.lua
 --
 -- Sprite order sets the tile ids the tilemap draws: floor=0, wall=1 (hero=2 and
 -- orc=3 are drawn as free sprites, not tiles).

@@ -1,8 +1,8 @@
--- tetris.lua — a compact but real Tetris on a 10x15 well. Left/Right move,
+-- tetris — a compact but real Tetris on a 10x15 well. Left/Right move,
 -- A/B (Z/X keys) rotate clockwise/counterclockwise, Down soft-drops. Full rows
 -- clear. Top out and press A to restart.
 --
---   kessel --play games/tetris.lua
+--   kessel --play games/tetris/game.lua
 --
 -- Pieces are 4x4 bitmasks (bit b => cell row b/4, col b%4) rotated at runtime
 -- around a stable, piece-specific origin.
