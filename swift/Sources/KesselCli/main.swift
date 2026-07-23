@@ -145,10 +145,16 @@ LineEditor.configure(
     historyPath: NSString(string: "~/.cache/kessel/repl_history").expandingTildeInPath
 )
 
+// Mutation-approval gate for the backend. One-shot (`--prompt`) is
+// non-interactive so it auto-allows; the interactive REPL starts in prompt mode
+// and voice mode flips it to deny (see runContinuousVoiceMode). Without this,
+// the backend would edit files with no confirmation.
+let approver = ReplApprover(mode: oneShotPrompt == nil ? .prompt : .allow)
+
 // Initialize AgentSession (agent + TTS + skills)
 let session: AgentSession
 do {
-    session = try await AgentSession(config: config, configPath: configPath)
+    session = try await AgentSession(config: config, configPath: configPath, approver: approver)
 } catch {
     logger.error("Failed to initialize agent: \(error)")
     exit(1)
@@ -730,6 +736,10 @@ func durationUnitToSeconds(_ value: Double, _ unit: String) -> TimeInterval? {
 // MARK: - Continuous Voice Mode
 
 func runContinuousVoiceMode() async {
+    // Voice can't safely confirm a file write by speech, and the libedit
+    // char-reader below owns stdin, so refuse mutations rather than prompt.
+    approver.mode = .deny
+
     let combineWindowMs = 500
     let micMuteDurationSecs: Double = 3.0
     var bufferedVoice: String? = nil

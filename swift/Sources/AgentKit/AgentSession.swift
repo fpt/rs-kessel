@@ -20,8 +20,10 @@ public class AgentSession: @unchecked Sendable {
 
     // MARK: - Init
 
-    /// Initialize agent, TTS, and load skills.
-    public init(config: Config, configPath: String) async throws {
+    /// Initialize agent, TTS, and load skills. `approver` gates the backend's
+    /// mutation requests (file writes / shell commands); pass `nil` to let the
+    /// backend run autonomously with no approval gate.
+    public init(config: Config, configPath: String, approver: MutationApprover? = nil) async throws {
         self.config = config
         self.configPath = configPath
         self.language = config.agent.language ?? "en"
@@ -70,7 +72,7 @@ public class AgentSession: @unchecked Sendable {
             mcpServers: mcpServers
         )
 
-        self.agent = try agentNew(config: agentConfig)
+        self.agent = try agentNew(config: agentConfig, approver: approver)
         logger.info("Agent initialized")
 
         // TTS

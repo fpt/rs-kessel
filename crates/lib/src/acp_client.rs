@@ -94,6 +94,20 @@ impl Approver for DeclineApprover {
     }
 }
 
+/// Pull a human-readable target out of an approval-request payload, trying each
+/// field name in order (the two backends name it differently), then falling back
+/// to a compact JSON of the whole params so the approver is never shown a blank.
+fn approval_target(params: &Value, keys: &[&str]) -> String {
+    for key in keys {
+        if let Some(s) = params.get(*key).and_then(Value::as_str) {
+            if !s.is_empty() {
+                return s.to_string();
+            }
+        }
+    }
+    params.to_string()
+}
+
 /// Inbound state the reader thread and the calling thread share.
 struct Shared {
     tools: HashMap<String, Arc<dyn ClientTool>>,
@@ -135,13 +149,17 @@ impl RequestHandler for ClientHandler {
                 }))
             }
             "item/commandExecution/requestApproval" => {
-                let target = params.get("command").and_then(Value::as_str).unwrap_or("");
-                let reply = self.shared.approver.approve("run command", target);
+                let target = approval_target(&params, &["command", "reason"]);
+                let reply = self.shared.approver.approve("run command", &target);
                 Ok(json!({ "decision": reply.wire() }))
             }
             "item/fileChange/requestApproval" => {
-                let target = params.get("reason").and_then(Value::as_str).unwrap_or("");
-                let reply = self.shared.approver.approve("file change", target);
+                // gallium sends `reason`; codex describes the edit differently
+                // (path/changes/description), so fall through those before giving
+                // up to a compact JSON dump — the approver must always see *what*.
+                let target =
+                    approval_target(&params, &["reason", "path", "description", "changes"]);
+                let reply = self.shared.approver.approve("file change", &target);
                 Ok(json!({ "decision": reply.wire() }))
             }
             _ => Err(RpcFault::method_not_found(method)),
@@ -553,6 +571,130 @@ mod tests {
             .expect("turn completed within 10s (deadlock otherwise)");
         assert_eq!(reply, "all done");
         assert!(tool_called, "backend never called the client tool");
+    }
+
+    /// A backend that, mid-turn, asks the client to approve a file change and
+    /// records the `decision` string it gets back — so a test can assert the
+    /// Approver's reply reached the wire.
+    struct ApprovalBackend {
+        seen_decision: Arc<Mutex<Option<String>>>,
+    }
+
+    impl RequestHandler for ApprovalBackend {
+        fn handle_request(
+            &self,
+            conn: &Arc<Connection>,
+            method: &str,
+            _params: Value,
+        ) -> HandlerResult {
+            match method {
+                "initialize" => Ok(json!({ "userAgent": "kessel-test/0.1.0" })),
+                "thread/start" => Ok(json!({ "threadId": "t1" })),
+                "turn/start" => {
+                    let resp = conn
+                        .request(
+                            "item/fileChange/requestApproval",
+                            json!({ "reason": "write file 'game.lua'" }),
+                        )
+                        .expect("approval round-trips");
+                    *self.seen_decision.lock() =
+                        resp.get("decision").and_then(Value::as_str).map(str::to_string);
+                    conn.notify(
+                        "item/completed",
+                        json!({
+                            "turnId": "turn1",
+                            "item": { "type": "agentMessage", "text": "ok" },
+                        }),
+                    );
+                    Ok(json!({ "turnId": "turn1" }))
+                }
+                _ => Err(RpcFault::method_not_found(method)),
+            }
+        }
+    }
+
+    /// Records what the backend asked us to approve, and answers `AllowSession`.
+    struct RecordingApprover {
+        asked: Arc<Mutex<Option<(String, String)>>>,
+    }
+
+    impl Approver for RecordingApprover {
+        fn approve(&self, action: &str, target: &str) -> ApprovalReply {
+            *self.asked.lock() = Some((action.to_string(), target.to_string()));
+            ApprovalReply::AcceptForSession
+        }
+    }
+
+    /// A backend approval request reaches the [`Approver`], and its reply is sent
+    /// back to the backend as the right wire `decision`.
+    #[test]
+    fn routes_a_mutation_approval_to_the_approver() {
+        let (client_out, server_in) = unbounded::<Vec<u8>>();
+        let (server_out, client_in) = unbounded::<Vec<u8>>();
+
+        let seen_decision = Arc::new(Mutex::new(None));
+        let server_conn = Connection::new(Box::new(ByteChannelWriter { tx: server_out }));
+        {
+            let seen_decision = Arc::clone(&seen_decision);
+            std::thread::spawn(move || {
+                serve(
+                    reader_over(server_in),
+                    server_conn,
+                    Arc::new(ApprovalBackend { seen_decision }),
+                );
+            });
+        }
+
+        let asked = Arc::new(Mutex::new(None));
+        let client = AcpClient::new_over(
+            reader_over(client_in),
+            Box::new(ByteChannelWriter { tx: client_out }),
+            vec![],
+            Arc::new(RecordingApprover {
+                asked: Arc::clone(&asked),
+            }),
+        );
+
+        let (done_tx, done_rx) = unbounded::<()>();
+        std::thread::spawn(move || {
+            client.initialize("kessel-test").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("untrusted"), None)
+                .expect("thread/start");
+            client.run_turn("improve the game").expect("run_turn");
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("turn completed within 10s (deadlock otherwise)");
+
+        let asked = asked.lock().clone();
+        assert_eq!(
+            asked,
+            Some(("file change".to_string(), "write file 'game.lua'".to_string())),
+            "approver saw the action + target"
+        );
+        assert_eq!(
+            seen_decision.lock().as_deref(),
+            Some("accept_for_session"),
+            "AllowSession must reach the backend as accept_for_session"
+        );
+    }
+
+    #[test]
+    fn approval_target_prefers_named_fields_then_falls_back_to_json() {
+        let p = json!({ "reason": "edit main.lua" });
+        assert_eq!(approval_target(&p, &["reason", "path"]), "edit main.lua");
+
+        // First key empty/absent → try the next.
+        let p = json!({ "reason": "", "path": "/tmp/x" });
+        assert_eq!(approval_target(&p, &["reason", "path"]), "/tmp/x");
+
+        // No known field → the approver still sees *something* (the raw params).
+        let p = json!({ "weird": 1 });
+        let out = approval_target(&p, &["reason", "path"]);
+        assert!(out.contains("weird"), "fell back to JSON: {out}");
     }
 
     /// The VM's real `vm_*` tools serve verbatim through the adapter — no rewrite.

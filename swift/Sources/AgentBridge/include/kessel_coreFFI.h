@@ -251,6 +251,21 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStr
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_MUTATION_APPROVER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_MUTATION_APPROVER_METHOD0
+typedef void (*UniffiCallbackInterfaceMutationApproverMethod0)(uint64_t, RustBuffer, RustBuffer, RustBuffer* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_MUTATION_APPROVER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_MUTATION_APPROVER
+typedef struct UniffiVTableCallbackInterfaceMutationApprover {
+    UniffiCallbackInterfaceMutationApproverMethod0 _Nonnull approve;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceMutationApprover;
+
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_AGENT
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_AGENT
 void*_Nonnull uniffi_kessel_core_fn_clone_agent(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -336,6 +351,26 @@ RustBuffer uniffi_kessel_core_fn_method_agent_step_with_allowed_tools(void*_Nonn
 void uniffi_kessel_core_fn_method_agent_submit_capture_result(void*_Nonnull ptr, RustBuffer id, RustBuffer image_base64, RustBuffer metadata_json, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_MUTATIONAPPROVER
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_MUTATIONAPPROVER
+void*_Nonnull uniffi_kessel_core_fn_clone_mutationapprover(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FREE_MUTATIONAPPROVER
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FREE_MUTATIONAPPROVER
+void uniffi_kessel_core_fn_free_mutationapprover(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_INIT_CALLBACK_VTABLE_MUTATIONAPPROVER
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_INIT_CALLBACK_VTABLE_MUTATIONAPPROVER
+void uniffi_kessel_core_fn_init_callback_vtable_mutationapprover(UniffiVTableCallbackInterfaceMutationApprover* _Nonnull vtable
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_MUTATIONAPPROVER_APPROVE
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_METHOD_MUTATIONAPPROVER_APPROVE
+RustBuffer uniffi_kessel_core_fn_method_mutationapprover_approve(void*_Nonnull ptr, RustBuffer action, RustBuffer target, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_VMPLAYER
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_CLONE_VMPLAYER
 void*_Nonnull uniffi_kessel_core_fn_clone_vmplayer(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -394,7 +429,7 @@ void uniffi_kessel_core_fn_method_vmplayer_tick(void*_Nonnull ptr, uint8_t butto
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FUNC_AGENT_NEW
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_FN_FUNC_AGENT_NEW
-void*_Nonnull uniffi_kessel_core_fn_func_agent_new(RustBuffer config, RustCallStatus *_Nonnull out_status
+void*_Nonnull uniffi_kessel_core_fn_func_agent_new(RustBuffer config, RustBuffer approver, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_KESSEL_CORE_RUSTBUFFER_ALLOC
@@ -770,6 +805,12 @@ uint16_t uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
 #define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
 uint16_t uniffi_kessel_core_checksum_method_agent_submit_capture_result(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_MUTATIONAPPROVER_APPROVE
+#define UNIFFI_FFIDEF_UNIFFI_KESSEL_CORE_CHECKSUM_METHOD_MUTATIONAPPROVER_APPROVE
+uint16_t uniffi_kessel_core_checksum_method_mutationapprover_approve(void
     
 );
 #endif
