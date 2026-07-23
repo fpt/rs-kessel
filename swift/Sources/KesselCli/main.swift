@@ -45,13 +45,15 @@ final class VoiceQueue: @unchecked Sendable {
     }
 }
 
-/// Read a line of stdin WITHOUT blocking the MainActor. `readLine()` is a
-/// blocking syscall; calling it directly from the @MainActor text loop pins the
-/// main thread while waiting for input, which starves the @MainActor ambient
-/// loop and capture poller. Running it on a detached thread lets the `await`
-/// free the MainActor so those background tasks keep ticking.
-func readLineAsync() async -> String? {
-    await Task.detached { readLine() }.value
+/// Read a line of stdin WITHOUT blocking the MainActor. Reading is a blocking
+/// syscall; doing it directly from the @MainActor text loop pins the main thread
+/// while waiting for input, which starves the @MainActor ambient loop and
+/// capture poller. Running it on a detached thread lets the `await` free the
+/// MainActor so those background tasks keep ticking. `LineEditor` supplies the
+/// editing/history/completion behaviour (and falls back to raw `readLine()` when
+/// stdin isn't a terminal).
+func readLineAsync(prompt: String) async -> String? {
+    await Task.detached { LineEditor.read(prompt: prompt) }.value
 }
 
 // Run async main. This file is named `main.swift`, so Swift treats it as
@@ -136,6 +138,12 @@ do {
     config = Config.default()
     logger.info("Using default configuration")
 }
+
+// Line editing + persistent REPL history for both the text and voice prompts.
+// Done before the agent starts so the history file exists even if init fails.
+LineEditor.configure(
+    historyPath: NSString(string: "~/.cache/kessel/repl_history").expandingTildeInPath
+)
 
 // Initialize AgentSession (agent + TTS + skills)
 let session: AgentSession
@@ -364,6 +372,7 @@ if let prompt = oneShotPrompt {
 }
 
 // Cleanup
+LineEditor.saveHistory()
 session.stop()
 windowListPoller.cancel()
 capturePoller.cancel()
@@ -453,9 +462,38 @@ Type your messages below. Commands:
               (e.g. /goal all tests pass); /goal = status; /goal clear = stop
   /listen   - Switch to continuous voice mode (speak instead of type)
 
+Editing: Left/Right move the cursor, Up/Down walk history (persisted to
+  ~/.cache/kessel/repl_history), TAB completes /commands, Ctrl+A/E jump to line
+  start/end, Esc+B/F jump by word, Ctrl+W/K/U delete word/to-end/whole line,
+  Ctrl+C or Ctrl+D exits.
+
 ===========================================
 
 """)
+
+    // Ctrl+C. While libedit owns the prompt it blocks SIGINT on its threads, so
+    // the signal just goes pending: neither the default disposition nor a plain
+    // sigaction handler ever runs, which left the REPL unkillable. A Dispatch
+    // signal source is kqueue-backed and fires regardless of the thread signal
+    // mask, so it still sees it (this is also why voice mode uses one).
+    // Cancelled on the way out so voice mode can install its own.
+    signal(SIGINT, SIG_IGN)
+    let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    sigintSource.setEventHandler {
+        // libedit left the tty in raw mode; restore it before the hard exit or
+        // the user's shell comes back without echo.
+        LineEditor.restoreTerminal()
+        LineEditor.saveHistory()
+        session.tts.stop()
+        print("\n^C")
+        fflush(stdout)
+        _exit(130)
+    }
+    sigintSource.resume()
+    defer {
+        sigintSource.cancel()
+        signal(SIGINT, SIG_DFL)
+    }
 
     if config.ambient?.enabled == true {
         ambientLoop.start(
@@ -468,11 +506,9 @@ Type your messages below. Commands:
     let maxTurns = config.agent.maxTurns
 
     while turnCount < maxTurns {
-        print("You: ", terminator: "")
-        fflush(stdout)
-
-        guard let line = await readLineAsync() else {
+        guard let line = await readLineAsync(prompt: "You: ") else {
             logger.info("EOF reached, exiting")
+            print()
             break
         }
 
@@ -541,6 +577,7 @@ func handleCommand(_ command: String) {
     switch command {
     case "/quit", "/exit":
         session.tts.stop()
+        LineEditor.saveHistory()
         print("Goodbye!")
         fflush(stdout)
         _exit(0)
