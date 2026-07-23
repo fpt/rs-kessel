@@ -2707,7 +2707,7 @@ mod tests {
         let c = compile(src);
         assert!(c.ok(), "luax diagnostics: {:?}", c.diagnostics);
         let mut console = VmConsole::new();
-        console.write_source("game.lua", src);
+        console.write_source("game.lua", src).unwrap();
         assert!(console.assemble("game.lua").unwrap().ok());
         console.load_rom("game.lua").unwrap();
         console

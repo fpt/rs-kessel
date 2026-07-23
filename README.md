@@ -23,6 +23,7 @@ codex-app-server JSON-RPC subset. Select it with `KESSEL_ACP_BACKEND` (default
 
 - **Backend-agnostic ACP client**: spawns and drives whatever app-server it's pointed at; no local inference or agent loop of its own
 - **Fantasy-console VM**: a tiny stack VM + a statically-typed Lua-ish front-end (`luax`); served to the backend as `vm_*` client tools so the model can write → assemble → run → observe → debug games. Playable standalone via `kessel --play` ([details](docs/VM.md))
+- **Game projects**: a project directory keeps the game source, design notes, tasks, and playtest journal on disk between sessions; the VM builds the source in that directory, so the agent edits an ordinary file and then runs it ([details](#game-projects))
 - **Screen awareness**: window capture / OCR client tools + an ambient situation feed
 - **MCP**: `mcpServers` are forwarded to the backend, which connects them ([details](#mcp))
 - **Voice I/O**: continuous conversation, half-duplex (mic muted during playback to prevent echo)
@@ -111,6 +112,37 @@ stt: { enabled: true, locale: "en-US" }
 
 The `llm:` block is **forwarded to the backend** — kessel does not interpret it.
 Backend selection is via `KESSEL_ACP_BACKEND` (env), not the config.
+
+## Game projects
+
+A project is a directory holding one game and the state that has to outlive a
+session:
+
+```text
+<project>/
+  game.lua           the working source (an ordinary file)
+  design.md          concept, controls, current spec, known issues
+  tasks.json         open / closed tasks
+  playtest.jsonl     journal of development events (user feedback, later playtests)
+  assets/ tests/ revisions/ snapshots/
+```
+
+Open one at startup, or let the agent open it:
+
+```bash
+KESSEL_PROJECT=~/games/dodger swift run kessel-cli --config ../configs/gallium.yaml
+```
+
+The VM builds the source **from that directory, re-read on every
+`vm_assemble`** — so the agent edits `game.lua` with its ordinary file tools (or
+you edit it in your editor, or play it with `kessel --play`) and they are all the
+same file. The `project_*` tools cover the rest: `project_open`/`project_new`,
+`project_status`, the design document, tasks, and `project_record_feedback` for
+recording how the game *feels* ("too hard", "better") as structured events rather
+than turning every impression straight into a code edit.
+
+With no project open, kessel behaves as before: the VM keeps sources in memory
+for the session.
 
 ## MCP
 

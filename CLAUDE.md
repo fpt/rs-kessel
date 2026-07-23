@@ -43,6 +43,7 @@ the split (kessel = VM + platform + ACP client; the agent core lives in
 | `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
 | `lib/src/tool.rs` | The tool trait surface the VM/capture/situation client tools implement: `ToolHandler`, `ToolResult`, `ToolRegistry`, `ToolAccess`. (The built-in file/bash tools and their permission machinery were removed — the backend owns those now.) |
 | `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + a statically-typed Lua-ish front-end (`luax.rs`) + `vm_*` tools. The VM stays resident in kessel and is served to the backend as client tools; playable via `kessel --play`. See **[docs/VM.md](docs/VM.md)**. |
+| `lib/src/project/` | Persistent, on-disk game projects (`game.lua`, `design.md`, `tasks.json`, `playtest.jsonl`, `assets/ tests/ revisions/ snapshots/`) + the `project_*` client tools. `ProjectStore` also points the resident `VmConsole` at the open project, so **the filesystem is the source of truth for game source**. |
 | `lib/src/capture.rs` | Screen capture / find-window / OCR / list-windows tools (executed macOS-side via Swift; served to the backend as client tools). |
 | `lib/src/situation.rs` | `SituationMessages` ambient-context stack + `read_situation_messages` client tool. Fed by the frontend's periodic window-list poller (`push_situation_message`). |
 | `lib/src/goal.rs` | Session goal state + evaluation (runs on a throwaway backend thread). |
@@ -67,7 +68,8 @@ the split (kessel = VM + platform + ACP client; the agent core lives in
 ### Key Patterns
 
 - **Kessel runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `KESSEL_ACP_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step`/`observe`/`evaluate_goal` each run a backend turn; `observe`/`evaluate_goal` use throwaway threads so they don't pollute history.
-- **Client tools** (`acp_client::ClientTool`): the VM's `vm_*`, screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident kessel state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
+- **Client tools** (`acp_client::ClientTool`): the VM's `vm_*`, the workspace's `project_*`, screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident kessel state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
+- **The project is the workspace, and it lives on disk.** `agent_new` builds one `VmConsole` and hands it to both the `vm_*` tools and the `ProjectStore`; opening a project (`project_open`/`project_new`, or `KESSEL_PROJECT` at startup) calls `VmConsole::set_root`, after which `vm_assemble` reads the source **from the project directory every time**. That is what makes the real workflow work: the backend edits `game.lua` with its own file tools, then asks the VM to build it. With no project open the console keeps sources in memory (how `VmPlayer` and the tests use it). The open project is also the backend thread's cwd (`Agent::thread_cwd`).
 - `ChatMessage` has `#[serde(skip)]` fields for tool state; use helper methods (`ChatMessage::user()`, `ChatMessage::assistant()`, etc.) not struct literals.
 - The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
 - **Approvals**: there is no TTY, so mutation approvals raised by the backend are answered by an `Approver` (default `DeclineApprover`). Kessel has no sandbox.
@@ -106,6 +108,40 @@ stt:  { enabled: true, locale: "en-US", censor: false }
 The `llm:` block is **forwarded to the backend as environment** — kessel does not
 interpret it beyond that. Backend selection is via `KESSEL_ACP_BACKEND` (env), not
 the config.
+
+## Project workspace (`lib/src/project/`)
+
+A **project** is a directory holding one game and everything durable about it,
+so the agent doesn't rediscover the game from scratch each session:
+
+```text
+<root>/
+  kessel-project.json    name + creation time
+  game.lua               the working source — an ordinary file, edited by the
+                         backend's own write/edit tools
+  design.md              concept, controls, current spec, known issues
+  tasks.json             open / closed tasks
+  playtest.jsonl         append-only journal of development events
+  assets/ tests/ revisions/ snapshots/
+```
+
+Opened explicitly: `KESSEL_PROJECT=<dir>` at startup (created if missing), or
+`project_open` / `project_new` mid-session. `KESSEL_PROJECTS_DIR` (default
+`~/kessel/projects`) is where `project_new` puts a project given only a name.
+With none open, `project_*` say so and the VM keeps its in-memory workspace.
+
+| tool | purpose |
+|------|---------|
+| `project_new` / `project_open` | create or open a project and make it current (an existing directory is *adopted*, not overwritten) |
+| `project_status` | root, source state, task counts, file list, recent events |
+| `project_read_design` / `project_write_design` | `design.md` |
+| `project_tasks` | `list` / `add` / `close` / `reopen` |
+| `project_record_feedback` | a user judgement (`target`, `sentiment`, note, frame, revision) → `playtest.jsonl` |
+| `project_journal` | read recent events back |
+
+Paths from the model are confined to the project root (`resolve_in_root`).
+Deferred to the build-loop work: `revisions/`, `snapshots/`, and scenario files
+under `tests/` are created but not yet written to.
 
 ## Skills
 
