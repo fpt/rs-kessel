@@ -65,10 +65,14 @@ impl SkillRegistry {
         }
         let mut entries: Vec<&Skill> = skills.values().collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut out =
-            String::from("Available skills — apply the relevant one's instructions when it fits the request:\n");
+        let mut out = String::from(
+            "Available skills — apply the relevant one's instructions when it fits the request:\n",
+        );
         for s in entries {
-            out.push_str(&format!("\n## {} — {}\n{}\n", s.name, s.description, s.prompt));
+            out.push_str(&format!(
+                "\n## {} — {}\n{}\n",
+                s.name, s.description, s.prompt
+            ));
         }
         Some(out)
     }
@@ -92,7 +96,10 @@ mod tests {
 
         assert!(registry.list().contains("test-skill"));
         assert!(registry.list().contains("A test skill"));
-        assert_eq!(registry.get("test-skill"), Some("Do the test thing.".to_string()));
+        assert_eq!(
+            registry.get("test-skill"),
+            Some("Do the test thing.".to_string())
+        );
         assert_eq!(registry.get("nonexistent"), None);
     }
 

@@ -523,7 +523,10 @@ mod tests {
         assert!(b.ok());
         vm.load_rom(&b.rom);
         assert_eq!(vm.devices.frame_vector, 0, "stale frame vector leaked");
-        assert!(vm.devices.framebuffer.iter().all(|&p| p == 0), "stale framebuffer leaked");
+        assert!(
+            vm.devices.framebuffer.iter().all(|&p| p == 0),
+            "stale framebuffer leaked"
+        );
         // Running a frame does nothing (no vector) — old frame code must not run.
         assert_eq!(vm.run_frame(0, cap()), RunOutcome::Completed);
         assert!(vm.devices.framebuffer.iter().all(|&p| p == 0));
@@ -541,7 +544,11 @@ mod tests {
         vm.load_rom(&a.rom);
         for _ in 0..5 {
             assert_eq!(vm.run_frame(0, 1000), RunOutcome::CapExceeded);
-            assert_eq!(vm.return_stack_depth(), 0, "return stack leaked across frames");
+            assert_eq!(
+                vm.return_stack_depth(),
+                0,
+                "return stack leaked across frames"
+            );
         }
     }
 

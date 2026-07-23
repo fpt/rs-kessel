@@ -172,7 +172,10 @@ impl ToolHandler for Assemble {
                 }
             )))
         } else {
-            let mut msg = format!("assemble failed with {} error(s):\n", built.diagnostics.len());
+            let mut msg = format!(
+                "assemble failed with {} error(s):\n",
+                built.diagnostics.len()
+            );
             for d in &built.diagnostics {
                 msg.push_str(&format!("  line {}: {}\n", d.line, d.message));
             }
@@ -274,12 +277,18 @@ impl ToolHandler for RunFrame {
         let names: Vec<String> = args
             .get("buttons")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let bits = buttons_from_names(&names);
         let mut c = self.0.lock();
         if !c.rom_loaded {
-            return Ok(ToolResult::text("no ROM loaded — call vm_load_rom first".into()));
+            return Ok(ToolResult::text(
+                "no ROM loaded — call vm_load_rom first".into(),
+            ));
         }
         let obs = c.run_frame(bits);
         Ok(ToolResult::text(obs.to_json().to_string()))
@@ -320,7 +329,11 @@ impl ToolHandler for InspectMemory {
             let mut ascii = String::new();
             for &b in &c.vm.mem[a..row_end] {
                 hex.push_str(&format!("{b:02x} "));
-                ascii.push(if (0x20..0x7f).contains(&b) { b as char } else { '.' });
+                ascii.push(if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                });
             }
             out.push_str(&format!("{a:04x}: {hex:<48} {ascii}\n"));
             a = row_end;

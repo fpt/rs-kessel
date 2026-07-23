@@ -378,9 +378,18 @@ impl Devices {
             },
             // Sound device: record a trigger (no audio synthesized yet).
             0x9 => match reg {
-                0x0 => self.sound.push(SoundEvent { kind: SoundKind::Sfx, id: val }),
-                0x1 => self.sound.push(SoundEvent { kind: SoundKind::Music, id: val }),
-                0x2 => self.sound.push(SoundEvent { kind: SoundKind::MusicStop, id: 0 }),
+                0x0 => self.sound.push(SoundEvent {
+                    kind: SoundKind::Sfx,
+                    id: val,
+                }),
+                0x1 => self.sound.push(SoundEvent {
+                    kind: SoundKind::Music,
+                    id: val,
+                }),
+                0x2 => self.sound.push(SoundEvent {
+                    kind: SoundKind::MusicStop,
+                    id: 0,
+                }),
                 _ => {}
             },
             // Composite-sprite device: draw a w×h block of sheet tiles at the
@@ -509,7 +518,11 @@ impl Devices {
                 let src_row = if flip_y { 7 - row } else { row };
                 let byte_addr = addr.wrapping_add(src_row * 4 + src_col / 2) as usize;
                 let byte = mem.get(byte_addr).copied().unwrap_or(0);
-                let ci = if src_col % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+                let ci = if src_col % 2 == 0 {
+                    byte >> 4
+                } else {
+                    byte & 0x0f
+                };
                 if ci != 0 {
                     self.put_pixel(self.sx.wrapping_add(col), self.sy.wrapping_add(row), ci);
                 }
@@ -561,7 +574,11 @@ impl Devices {
                 let src_col = if flip_x { 7 - src_col0 } else { src_col0 };
                 let byte_addr = addr.wrapping_add(src_row * 4 + src_col / 2) as usize;
                 let byte = mem.get(byte_addr).copied().unwrap_or(0);
-                let ci = if src_col % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+                let ci = if src_col % 2 == 0 {
+                    byte >> 4
+                } else {
+                    byte & 0x0f
+                };
                 if ci != 0 {
                     self.put_pixel(self.sx.wrapping_add(dx), self.sy.wrapping_add(dy), ci);
                 }
@@ -642,7 +659,7 @@ mod tests {
         d.write(0x17, 10, &mem); // cam_x = 10
         d.write(0x18, 5, &mem); // cam_y = 5
         d.write(0x13, 6, &mem); // colour 6
-        // World (12,7) -> screen (2,2).
+                                // World (12,7) -> screen (2,2).
         d.write(0x11, 12, &mem);
         d.write(0x12, 7, &mem);
         d.write(0x14, 0, &mem); // pixel
@@ -665,7 +682,7 @@ mod tests {
         d.write(0x11, 0, &mem);
         d.write(0x12, 0, &mem);
         d.write(0x15, 0, &mem); // sprite
-        // Mirrored: col 7 <- src 0 (=1), col 4 <- src 3 (=4).
+                                // Mirrored: col 7 <- src 0 (=1), col 4 <- src 3 (=4).
         assert_eq!(d.framebuffer[7], 1);
         assert_eq!(d.framebuffer[6], 2);
         assert_eq!(d.framebuffer[5], 3);
@@ -694,7 +711,7 @@ mod tests {
         let sheet = 100usize;
         mem[sheet + 32] = 0x50;
         d.write(0x1b, sheet as u16, &mem); // tileset base
-        // 2x2 map at 0, width 2: cells [0,1 / 1,0].
+                                           // 2x2 map at 0, width 2: cells [0,1 / 1,0].
         mem[0] = 0;
         mem[1] = 1;
         mem[2] = 1;
@@ -722,7 +739,14 @@ mod tests {
         d.write(0x50, 34, &mem); // ent x
         d.write(0x51, 110, &mem); // ent y
         d.write(0x52, 1, &mem); // commit tag 1
-        assert_eq!(d.entities, vec![Entity { tag: 1, x: 34, y: 110 }]);
+        assert_eq!(
+            d.entities,
+            vec![Entity {
+                tag: 1,
+                x: 34,
+                y: 110
+            }]
+        );
     }
 
     #[test]
@@ -783,7 +807,7 @@ mod tests {
         assert_eq!(trig_fp(0, true) as i16, 256); // cos 0
         assert_eq!(trig_fp(64, true) as i16, 0); // cos 90
         assert_eq!(trig_fp(128, true) as i16, -256); // cos 180
-        // Mid-angle magnitude is bounded and non-trivial.
+                                                     // Mid-angle magnitude is bounded and non-trivial.
         assert_eq!(trig_fp(32, false) as i16, 181); // sin 45 ~ 0.707*256
     }
 

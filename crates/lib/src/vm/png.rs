@@ -7,7 +7,11 @@
 
 /// Encode raw RGBA (`width*height*4` bytes) as a PNG byte stream.
 pub fn encode_rgba(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
-    assert_eq!(rgba.len(), (width * height * 4) as usize, "rgba size mismatch");
+    assert_eq!(
+        rgba.len(),
+        (width * height * 4) as usize,
+        "rgba size mismatch"
+    );
 
     // Build the raw (filtered) image data: each scanline prefixed with filter 0.
     let stride = (width * 4) as usize;
@@ -97,8 +101,7 @@ fn crc32(data: &[u8]) -> u32 {
 
 /// Standard base64 (with padding).
 pub fn base64_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -152,7 +155,10 @@ mod tests {
         let h = 2;
         let rgba = vec![255u8; (w * h * 4) as usize];
         let png = encode_rgba(w, h, &rgba);
-        assert_eq!(&png[0..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        assert_eq!(
+            &png[0..8],
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        );
         // Contains IHDR, IDAT, IEND chunk names.
         let s = png.windows(4).any(|w| w == b"IHDR");
         assert!(s);

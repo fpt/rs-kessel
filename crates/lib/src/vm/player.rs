@@ -171,7 +171,11 @@ mod tests {
         let fb = p.framebuffer_rgba().unwrap();
         let old = (60 * SCREEN_DIM + 32) * 4;
         let new = (60 * SCREEN_DIM + 34) * 4;
-        assert_ne!(&fb[new..new + 3], &fb[old..old + 3], "pixel should have moved");
+        assert_ne!(
+            &fb[new..new + 3],
+            &fb[old..old + 3],
+            "pixel should have moved"
+        );
     }
 
     #[test]
@@ -196,13 +200,21 @@ mod tests {
         p.tick(0);
         let fb_paused = p.framebuffer_rgba().unwrap();
         p.tick(0);
-        assert_eq!(fb_paused, p.framebuffer_rgba().unwrap(), "frozen while paused");
+        assert_eq!(
+            fb_paused,
+            p.framebuffer_rgba().unwrap(),
+            "frozen while paused"
+        );
 
         // Press START again: resume.
         p.tick(super::super::device::BTN_START);
         assert!(!p.is_paused());
         p.tick(0); // advances again
-        assert_ne!(fb_paused, p.framebuffer_rgba().unwrap(), "resumed after pause");
+        assert_ne!(
+            fb_paused,
+            p.framebuffer_rgba().unwrap(),
+            "resumed after pause"
+        );
     }
 
     #[test]
@@ -218,7 +230,10 @@ mod tests {
     #[test]
     fn load_reports_diagnostics() {
         let p = VmPlayer::new();
-        let err = p.load("function draw() x = 1 end".to_string(), "bad.lua".to_string());
+        let err = p.load(
+            "function draw() x = 1 end".to_string(),
+            "bad.lua".to_string(),
+        );
         assert!(err.contains("unknown variable"), "got: {err}");
         assert!(!p.has_rom());
     }
@@ -226,13 +241,21 @@ mod tests {
     #[test]
     fn failed_reload_deactivates_previous_rom() {
         let p = VmPlayer::new();
-        assert!(p.load(MOVER.to_string(), "mover.lua".to_string()).is_empty());
+        assert!(p
+            .load(MOVER.to_string(), "mover.lua".to_string())
+            .is_empty());
         p.tick(0);
         assert!(p.has_rom());
         // A subsequent bad load must not leave the old ROM active/rendering.
-        let err = p.load("function draw() nope() end".to_string(), "bad.lua".to_string());
+        let err = p.load(
+            "function draw() nope() end".to_string(),
+            "bad.lua".to_string(),
+        );
         assert!(!err.is_empty());
-        assert!(!p.has_rom(), "stale ROM stayed active after a failed reload");
+        assert!(
+            !p.has_rom(),
+            "stale ROM stayed active after a failed reload"
+        );
         assert!(p.framebuffer_rgba().is_none());
     }
 
@@ -241,7 +264,10 @@ mod tests {
         // Reset vector that immediately HALTs never installs a frame vector.
         let p = VmPlayer::new();
         let err = p.load("HALT".to_string(), "halt.asm".to_string());
-        assert!(err.contains("reset halted") || err.contains("faulted"), "got: {err}");
+        assert!(
+            err.contains("reset halted") || err.contains("faulted"),
+            "got: {err}"
+        );
         assert!(!p.has_rom());
     }
 
@@ -262,7 +288,10 @@ mod tests {
             (include_str!("../../../../games/bounce.lua"), "bounce.lua"),
             (include_str!("../../../../games/mover.lua"), "mover.lua"),
             (include_str!("../../../../games/sprite.lua"), "sprite.lua"),
-            (include_str!("../../../../games/platform.lua"), "platform.lua"),
+            (
+                include_str!("../../../../games/platform.lua"),
+                "platform.lua",
+            ),
             (include_str!("../../../../games/sokoban.lua"), "sokoban.lua"),
             (include_str!("../../../../games/outrun.lua"), "outrun.lua"),
         ] {

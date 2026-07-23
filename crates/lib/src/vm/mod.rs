@@ -416,7 +416,12 @@ mod tests {
         let built = c.assemble("game.asm").expect("assemble call");
         assert!(built.ok(), "assemble errors: {:?}", built.diagnostics);
         let outcome = c.load_rom("game.asm").expect("load");
-        assert_eq!(outcome, RunOutcome::Completed, "reset fault: {:?}", c.vm.fault);
+        assert_eq!(
+            outcome,
+            RunOutcome::Completed,
+            "reset fault: {:?}",
+            c.vm.fault
+        );
 
         // Frame 1: no buttons -> player stays at 32, entity reported at x=32.
         let o1 = c.run_frame(0);

@@ -100,7 +100,8 @@ pub fn assemble(src: &str) -> Assembled {
                     while i < tokens.len() {
                         if let Some(v) = parse_number(&tokens[i].0) {
                             if v > 0xff {
-                                diagnostics.push(err(tokens[i].1, format!("byte out of range: {v}")));
+                                diagnostics
+                                    .push(err(tokens[i].1, format!("byte out of range: {v}")));
                             }
                             bytes.push(v as u8);
                             i += 1;
@@ -195,21 +196,24 @@ pub fn assemble(src: &str) -> Assembled {
                     for (r, (row, rl)) in rows.iter().take(8).enumerate() {
                         let chars: Vec<char> = row.chars().collect();
                         if chars.len() > 8 {
-                            diagnostics.push(err(*rl, ".sprite row is longer than 8 pixels".into()));
+                            diagnostics
+                                .push(err(*rl, ".sprite row is longer than 8 pixels".into()));
                         }
                         for (c, ch) in chars.iter().take(8).enumerate() {
                             let nib = match ch {
                                 '.' => 0u8,
-                                _ => match ch.to_digit(16) {
-                                    Some(v) => v as u8,
-                                    None => {
-                                        diagnostics.push(err(
+                                _ => {
+                                    match ch.to_digit(16) {
+                                        Some(v) => v as u8,
+                                        None => {
+                                            diagnostics.push(err(
                                             *rl,
                                             format!(".sprite: bad pixel char '{ch}' (use . or 0-9a-f)"),
                                         ));
-                                        0
+                                            0
+                                        }
                                     }
-                                },
+                                }
                             };
                             let bi = r * 4 + c / 2;
                             if c % 2 == 0 {
@@ -355,7 +359,11 @@ fn parse_number(s: &str) -> Option<u16> {
         return u16::from_str_radix(hex, 16).ok();
     }
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
-        return s.parse::<u32>().ok().filter(|&v| v <= 0xffff).map(|v| v as u16);
+        return s
+            .parse::<u32>()
+            .ok()
+            .filter(|&v| v <= 0xffff)
+            .map(|v| v as u16);
     }
     None
 }
@@ -425,7 +433,17 @@ mod tests {
         let a = assemble("2 3 ADD RET");
         assert!(a.ok(), "{:?}", a.diagnostics);
         // LIT8 2, LIT8 3, ADD, RET
-        assert_eq!(a.rom, vec![Op::Lit8 as u8, 2, Op::Lit8 as u8, 3, Op::Add as u8, Op::Ret as u8]);
+        assert_eq!(
+            a.rom,
+            vec![
+                Op::Lit8 as u8,
+                2,
+                Op::Lit8 as u8,
+                3,
+                Op::Add as u8,
+                Op::Ret as u8
+            ]
+        );
     }
 
     #[test]
@@ -441,7 +459,14 @@ mod tests {
         assert!(a.ok(), "{:?}", a.diagnostics);
         assert_eq!(
             a.rom,
-            vec![Op::Lit8 as u8, 0xff, Op::Lit16 as u8, 0x12, 0x34, Op::Ret as u8]
+            vec![
+                Op::Lit8 as u8,
+                0xff,
+                Op::Lit16 as u8,
+                0x12,
+                0x34,
+                Op::Ret as u8
+            ]
         );
     }
 
@@ -463,7 +488,17 @@ mod tests {
     fn comments_are_stripped() {
         let a = assemble("( push two ) 2 ; line comment\n 3 ADD RET");
         assert!(a.ok(), "{:?}", a.diagnostics);
-        assert_eq!(a.rom, vec![Op::Lit8 as u8, 2, Op::Lit8 as u8, 3, Op::Add as u8, Op::Ret as u8]);
+        assert_eq!(
+            a.rom,
+            vec![
+                Op::Lit8 as u8,
+                2,
+                Op::Lit8 as u8,
+                3,
+                Op::Add as u8,
+                Op::Ret as u8
+            ]
+        );
     }
 
     #[test]
@@ -492,7 +527,11 @@ mod tests {
     fn word_out_of_range_is_diagnosed() {
         let a = assemble(".word 65536");
         assert!(!a.ok());
-        assert!(a.diagnostics[0].message.contains("out of range"), "{:?}", a.diagnostics);
+        assert!(
+            a.diagnostics[0].message.contains("out of range"),
+            "{:?}",
+            a.diagnostics
+        );
     }
 
     #[test]
@@ -506,14 +545,22 @@ mod tests {
             "{:?}",
             a.diagnostics
         );
-        assert!(a.rom.len() < 1024, "oversized .res was materialized: {} bytes", a.rom.len());
+        assert!(
+            a.rom.len() < 1024,
+            "oversized .res was materialized: {} bytes",
+            a.rom.len()
+        );
     }
 
     #[test]
     fn res_length_out_of_range_is_diagnosed() {
         let a = assemble(".res 70000");
         assert!(!a.ok());
-        assert!(a.diagnostics[0].message.contains("out of range"), "{:?}", a.diagnostics);
+        assert!(
+            a.diagnostics[0].message.contains("out of range"),
+            "{:?}",
+            a.diagnostics
+        );
     }
 
     #[test]

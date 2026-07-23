@@ -40,7 +40,10 @@ fn assert_game_ok(name: &str, src: &str) {
         "{name}.lua failed to assemble:\n{}",
         asm_errs.join("\n")
     );
-    assert!(!built.rom.is_empty(), "{name}.lua assembled to an empty ROM");
+    assert!(
+        !built.rom.is_empty(),
+        "{name}.lua assembled to an empty ROM"
+    );
 
     // --- run (300 frames, cycling inputs to exercise move/fire/rotate/restart) ---
     let mut c = VmConsole::new();
@@ -199,15 +202,24 @@ fn platform_camera_follows_player_across_stage() {
     }
     assert!(player.x > 128, "player never entered the second screen");
     let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba()).expect("hero is visible");
-    assert!((50..=70).contains(&min_x), "camera did not centre hero: x={min_x}");
-    assert!(max_x < 80, "hero rendered too far right while camera followed");
+    assert!(
+        (50..=70).contains(&min_x),
+        "camera did not centre hero: x={min_x}"
+    );
+    assert!(
+        max_x < 80,
+        "hero rendered too far right while camera followed"
+    );
 
     for _ in 0..100 {
         player = c.run_frame(RIGHT).entities[0];
     }
     assert_eq!(player.x, 240, "right boundary did not stop the player");
     let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba()).expect("hero is visible");
-    assert!(min_x >= 112 && max_x < 128, "hero disappeared at stage edge");
+    assert!(
+        min_x >= 112 && max_x < 128,
+        "hero disappeared at stage edge"
+    );
 }
 
 #[test]
@@ -270,9 +282,28 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
     c.load_rom("p.lua").unwrap();
     let first = c.run_frame(0);
     let solid_tiles = [
-        (4, 11), (5, 11), (6, 11), (10, 9), (11, 9), (16, 11), (17, 11),
-        (18, 11), (22, 8), (23, 8), (24, 8), (28, 10), (29, 10), (6, 8),
-        (6, 9), (6, 10), (18, 8), (18, 9), (18, 10), (24, 5), (24, 6), (24, 7),
+        (4, 11),
+        (5, 11),
+        (6, 11),
+        (10, 9),
+        (11, 9),
+        (16, 11),
+        (17, 11),
+        (18, 11),
+        (22, 8),
+        (23, 8),
+        (24, 8),
+        (28, 10),
+        (29, 10),
+        (6, 8),
+        (6, 9),
+        (6, 10),
+        (18, 8),
+        (18, 9),
+        (18, 10),
+        (24, 5),
+        (24, 6),
+        (24, 7),
     ];
     for coin in first.entities.iter().filter(|e| e.tag == 3) {
         assert!(
@@ -282,14 +313,26 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
             coin.y
         );
     }
-    let raised = first.entities.iter().find(|e| e.tag == 2 && e.y == 80).unwrap();
+    let raised = first
+        .entities
+        .iter()
+        .find(|e| e.tag == 2 && e.y == 80)
+        .unwrap();
     assert_eq!(raised.x, 136, "enemy moved before its patrol tick");
     let mut raised_x = raised.x;
     for _ in 0..31 {
         let obs = c.run_frame(0);
-        raised_x = obs.entities.iter().find(|e| e.tag == 2 && e.y == 80).unwrap().x;
+        raised_x = obs
+            .entities
+            .iter()
+            .find(|e| e.tag == 2 && e.y == 80)
+            .unwrap()
+            .x;
     }
-    assert!(raised_x < 144, "raised enemy did not reverse at the platform edge");
+    assert!(
+        raised_x < 144,
+        "raised enemy did not reverse at the platform edge"
+    );
 
     let peaceful = PLATFORM
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
@@ -307,7 +350,10 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
     let state = collected.entities.iter().find(|e| e.tag == 30).unwrap();
     assert_eq!(state.x, 1, "coin overlap did not increment the counter");
     assert!(
-        !collected.entities.iter().any(|e| e.tag == 3 && (e.x, e.y) == (24, 104)),
+        !collected
+            .entities
+            .iter()
+            .any(|e| e.tag == 3 && (e.x, e.y) == (24, 104)),
         "collected coin remained visible"
     );
 
@@ -327,7 +373,9 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         let obs = c.run_frame(0);
         player_y = obs.entities[0].y;
         stomped = !obs.entities.iter().any(|e| e.tag == 2 && e.x == 16);
-        if stomped { break; }
+        if stomped {
+            break;
+        }
     }
     assert!(stomped, "falling onto an enemy did not defeat it");
     assert!(player_y <= 96, "stomp did not bounce the player upward");
@@ -358,9 +406,15 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         }
     }
     assert!(hit, "horizontal enemy contact was not detected");
-    assert!(hit_player_x <= 22, "side hit did not knock the player backward");
+    assert!(
+        hit_player_x <= 22,
+        "side hit did not knock the player backward"
+    );
     let after = c.run_frame(0);
-    assert!(after.entities[0].x < hit_player_x, "knockback did not continue after impact");
+    assert!(
+        after.entities[0].x < hit_player_x,
+        "knockback did not continue after impact"
+    );
     assert!(
         after.entities.iter().any(|e| e.tag == 2 && e.x == 32),
         "enemy was defeated during horizontal knockback"
@@ -370,7 +424,10 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         let obs = c.run_frame(0);
         enemy_survived = obs.entities.iter().any(|e| e.tag == 2 && e.x == 32);
     }
-    assert!(enemy_survived, "enemy was stomped while the player was invulnerable");
+    assert!(
+        enemy_survived,
+        "enemy was stomped while the player was invulnerable"
+    );
 }
 
 #[test]
@@ -394,7 +451,10 @@ fn shooter_centres_bullets_and_player_can_die() {
     }
     assert!(!yellow_x.is_empty(), "fired bullet was not rendered");
     assert_eq!(
-        (*yellow_x.iter().min().unwrap(), *yellow_x.iter().max().unwrap()),
+        (
+            *yellow_x.iter().min().unwrap(),
+            *yellow_x.iter().max().unwrap()
+        ),
         (63, 64),
         "bullet was not aligned to the ship centreline"
     );
@@ -434,12 +494,18 @@ fn rogue_sword_hearts_and_invulnerability_work() {
 
     let before = c.run_frame(0);
     assert!(
-        before.entities.iter().any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
+        before
+            .entities
+            .iter()
+            .any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
         "adjacent test orc was not present"
     );
     let after = c.run_frame(A);
     assert!(
-        !after.entities.iter().any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
+        !after
+            .entities
+            .iter()
+            .any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
         "sword did not defeat the adjacent orc"
     );
     let rgba = c.framebuffer_rgba();
@@ -462,7 +528,10 @@ fn rogue_sword_hearts_and_invulnerability_work() {
     c.run_frame(0);
     let rgba = c.framebuffer_rgba();
     let fifth_heart = (3 * 128 + 38) * 4;
-    assert_eq!(&rgba[fifth_heart..fifth_heart + 4], &[0xff, 0x00, 0x4d, 0xff]);
+    assert_eq!(
+        &rgba[fifth_heart..fifth_heart + 4],
+        &[0xff, 0x00, 0x4d, 0xff]
+    );
 
     let mut obs = c.run_frame(0);
     let mut player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
@@ -472,7 +541,10 @@ fn rogue_sword_hearts_and_invulnerability_work() {
     }
     assert_eq!(player.tag, 4, "contact did not remove exactly one heart");
     let rgba = c.framebuffer_rgba();
-    assert_eq!(&rgba[fifth_heart..fifth_heart + 4], &[0xc2, 0xc3, 0xc7, 0xff]);
+    assert_eq!(
+        &rgba[fifth_heart..fifth_heart + 4],
+        &[0xc2, 0xc3, 0xc7, 0xff]
+    );
 
     let hero_pixel = (16 * 128 + 18) * 4;
     assert_eq!(
@@ -561,7 +633,10 @@ fn rogue_chests_and_stairs_advance_stages() {
             "stage {} staircase did not advance",
             index + 1
         );
-        assert!(obs.entities.iter().any(|e| e.tag == 20), "next chest was not present");
+        assert!(
+            obs.entities.iter().any(|e| e.tag == 20),
+            "next chest was not present"
+        );
     }
 }
 
@@ -586,9 +661,19 @@ fn game_2048_merges_wins_loses_and_restarts() {
     let state = first.entities.iter().find(|e| e.tag == 30).unwrap();
     assert_eq!((state.x, state.y), (8, 0), "first swipe scored incorrectly");
     let animation = first.entities.iter().find(|e| e.tag == 31).unwrap();
-    assert_eq!((animation.x, animation.y), (1, 4), "left nudge did not start");
-    assert!(first.entities.iter().any(|e| e.tag == 4 && (e.x, e.y) == (32, 29)));
-    assert!(first.entities.iter().any(|e| e.tag == 4 && (e.x, e.y) == (48, 29)));
+    assert_eq!(
+        (animation.x, animation.y),
+        (1, 4),
+        "left nudge did not start"
+    );
+    assert!(first
+        .entities
+        .iter()
+        .any(|e| e.tag == 4 && (e.x, e.y) == (32, 29)));
+    assert!(first
+        .entities
+        .iter()
+        .any(|e| e.tag == 4 && (e.x, e.y) == (48, 29)));
     let rgba = c.framebuffer_rgba();
     let nudged_edge = (29 * 128 + 30) * 4;
     assert_eq!(
@@ -612,22 +697,30 @@ fn game_2048_merges_wins_loses_and_restarts() {
     let second = c.run_frame(LEFT);
     let state = second.entities.iter().find(|e| e.tag == 30).unwrap();
     assert_eq!(state.x, 16, "second swipe did not merge the two fours");
-    assert!(second.entities.iter().any(|e| e.tag == 8 && (e.x, e.y) == (32, 29)));
+    assert!(second
+        .entities
+        .iter()
+        .any(|e| e.tag == 8 && (e.x, e.y) == (32, 29)));
 
     c.run_frame(0);
     let restarted = c.run_frame(A);
     let state = restarted.entities.iter().find(|e| e.tag == 30).unwrap();
-    assert_eq!((state.x, state.y), (0, 0), "restart did not reset score and state");
     assert_eq!(
-        restarted.entities.iter().filter(|e| e.tag == 2 || e.tag == 4).count(),
+        (state.x, state.y),
+        (0, 0),
+        "restart did not reset score and state"
+    );
+    assert_eq!(
+        restarted
+            .entities
+            .iter()
+            .filter(|e| e.tag == 2 || e.tag == 4)
+            .count(),
         4,
         "restart did not restore the deterministic initial board"
     );
 
-    let win_board = GAME.replace(
-        INITIAL_SPAWNS,
-        "  cells[0] = 1024  cells[1] = 1024",
-    );
+    let win_board = GAME.replace(INITIAL_SPAWNS, "  cells[0] = 1024  cells[1] = 1024");
     let mut c = VmConsole::new();
     c.write_source("2048.lua", &win_board);
     c.assemble("2048.lua").unwrap();

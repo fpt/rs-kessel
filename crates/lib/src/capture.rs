@@ -177,9 +177,7 @@ impl ToolHandler for CaptureScreenTool {
         let result = self
             .result_rx
             .recv_timeout(std::time::Duration::from_secs(10))
-            .map_err(|e| {
-                AgentError::InternalError(format!("Capture timeout or error: {}", e))
-            })?;
+            .map_err(|e| AgentError::InternalError(format!("Capture timeout or error: {}", e)))?;
 
         // Update cache on successful capture
         if !result.metadata_json.starts_with("Error") {
@@ -247,10 +245,14 @@ impl ToolHandler for FindWindowTool {
         let keywords = args
             .get("keywords")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AgentError::ParseError("'keywords' parameter is required".to_string()))?;
+            .ok_or_else(|| {
+                AgentError::ParseError("'keywords' parameter is required".to_string())
+            })?;
 
         if keywords.trim().is_empty() {
-            return Err(AgentError::ParseError("'keywords' must not be empty".to_string()));
+            return Err(AgentError::ParseError(
+                "'keywords' must not be empty".to_string(),
+            ));
         }
 
         let id = format!("find_{}", self.next_id.fetch_add(1, Ordering::SeqCst));
@@ -429,9 +431,7 @@ impl ToolHandler for ApplyOcrTool {
         let result = self
             .result_rx
             .recv_timeout(std::time::Duration::from_secs(10))
-            .map_err(|e| {
-                AgentError::InternalError(format!("apply_ocr timeout or error: {}", e))
-            })?;
+            .map_err(|e| AgentError::InternalError(format!("apply_ocr timeout or error: {}", e)))?;
 
         Ok(ToolResult::text(result.metadata_json))
     }
@@ -467,7 +467,8 @@ mod tests {
     #[test]
     fn test_capture_by_window_id() {
         let bridge = CaptureBridge::new();
-        let tool = CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
+        let tool =
+            CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
 
         let rx = bridge.request_rx.clone();
         let tx = bridge.capture_result_tx.clone();
@@ -478,7 +479,8 @@ mod tests {
                 id: req.id,
                 image_base64: "iVBORw0KGgo=".to_string(),
                 metadata_json: "Window: Terminal, Size: 800x600".to_string(),
-            }).unwrap();
+            })
+            .unwrap();
         });
 
         let result = tool.call(serde_json::json!({"window_id": 12345})).unwrap();
@@ -489,7 +491,8 @@ mod tests {
     #[test]
     fn test_capture_missing_window_id() {
         let bridge = CaptureBridge::new();
-        let tool = CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
+        let tool =
+            CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
 
         let err = tool.call(serde_json::json!({})).unwrap_err();
         assert!(err.to_string().contains("window_id"));
@@ -498,7 +501,8 @@ mod tests {
     #[test]
     fn test_capture_error_result() {
         let bridge = CaptureBridge::new();
-        let tool = CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
+        let tool =
+            CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
 
         mock_swift_side(
             bridge.request_rx.clone(),
@@ -515,7 +519,8 @@ mod tests {
     #[test]
     fn test_capture_with_detect() {
         let bridge = CaptureBridge::new();
-        let tool = CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
+        let tool =
+            CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
 
         let rx = bridge.request_rx.clone();
         let tx = bridge.capture_result_tx.clone();
@@ -527,10 +532,13 @@ mod tests {
                 id: req.id,
                 image_base64: String::new(),
                 metadata_json: "Object Detection (2 objects):\n  rectangles (2):".to_string(),
-            }).unwrap();
+            })
+            .unwrap();
         });
 
-        let result = tool.call(serde_json::json!({"window_id": 100, "detect": true})).unwrap();
+        let result = tool
+            .call(serde_json::json!({"window_id": 100, "detect": true}))
+            .unwrap();
         assert!(result.text.contains("Object Detection"));
         assert!(result.images.is_empty());
     }
@@ -538,7 +546,8 @@ mod tests {
     #[test]
     fn test_dynamic_state_with_cache() {
         let bridge = CaptureBridge::new();
-        let tool = CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
+        let tool =
+            CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
 
         assert!(tool.dynamic_state().is_none());
 
@@ -576,11 +585,16 @@ mod tests {
             tx.send(CaptureResult {
                 id: req.id,
                 image_base64: String::new(),
-                metadata_json: "Found 1 window(s):\n  id: 12345 | \"Google\" | app: Chrome | 1920x1080".to_string(),
-            }).unwrap();
+                metadata_json:
+                    "Found 1 window(s):\n  id: 12345 | \"Google\" | app: Chrome | 1920x1080"
+                        .to_string(),
+            })
+            .unwrap();
         });
 
-        let result = tool.call(serde_json::json!({"keywords": "chrome"})).unwrap();
+        let result = tool
+            .call(serde_json::json!({"keywords": "chrome"}))
+            .unwrap();
         assert!(result.text.contains("Found 1"));
         assert!(result.text.contains("12345"));
     }
@@ -599,7 +613,9 @@ mod tests {
         let bridge = CaptureBridge::new();
         let tool = FindWindowTool::new(bridge.request_tx.clone(), bridge.find_result_rx.clone());
 
-        let err = tool.call(serde_json::json!({"keywords": "  "})).unwrap_err();
+        let err = tool
+            .call(serde_json::json!({"keywords": "  "}))
+            .unwrap_err();
         assert!(err.to_string().contains("must not be empty"));
     }
 
@@ -621,8 +637,10 @@ mod tests {
             tx.send(CaptureResult {
                 id: req.id,
                 image_base64: String::new(),
-                metadata_json: "Open windows (2):\n  id: 1 | \"VS Code\" | app: Code | 1440x900".to_string(),
-            }).unwrap();
+                metadata_json: "Open windows (2):\n  id: 1 | \"VS Code\" | app: Code | 1440x900"
+                    .to_string(),
+            })
+            .unwrap();
         });
 
         let result = tool.call(serde_json::json!({})).unwrap();
@@ -648,7 +666,8 @@ mod tests {
                 id: req.id,
                 image_base64: String::new(),
                 metadata_json: "OCR Results (2 entries):\n  [0.1,0.05] \"Hello\" (98%)".to_string(),
-            }).unwrap();
+            })
+            .unwrap();
         });
 
         let result = tool.call(serde_json::json!({})).unwrap();
@@ -673,12 +692,15 @@ mod tests {
                 id: req.id,
                 image_base64: String::new(),
                 metadata_json: "OCR: cropped text".to_string(),
-            }).unwrap();
+            })
+            .unwrap();
         });
 
-        let result = tool.call(serde_json::json!({
-            "crop_x": 0.1, "crop_y": 0.2, "crop_w": 0.5, "crop_h": 0.3
-        })).unwrap();
+        let result = tool
+            .call(serde_json::json!({
+                "crop_x": 0.1, "crop_y": 0.2, "crop_w": 0.5, "crop_h": 0.3
+            }))
+            .unwrap();
         assert!(result.text.contains("OCR"));
     }
 }

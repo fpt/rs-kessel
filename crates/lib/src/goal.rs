@@ -100,8 +100,10 @@ pub fn parse_evaluation(raw: &str) -> (bool, String) {
 
     // Fallback: scan the leading word for an explicit decision.
     let lower = trimmed.to_lowercase();
-    let says_yes = leads_with(&lower, "yes") || leads_with(&lower, "met") || leads_with(&lower, "true");
-    let says_no = leads_with(&lower, "no") || leads_with(&lower, "not") || leads_with(&lower, "false");
+    let says_yes =
+        leads_with(&lower, "yes") || leads_with(&lower, "met") || leads_with(&lower, "true");
+    let says_no =
+        leads_with(&lower, "no") || leads_with(&lower, "not") || leads_with(&lower, "false");
     let met = says_yes && !says_no;
     let reason = if trimmed.is_empty() {
         default_reason(met)
@@ -122,7 +124,13 @@ fn default_reason(met: bool) -> String {
 /// True if `s` begins with `word` as a whole word (next char is non-alphanumeric).
 fn leads_with(s: &str, word: &str) -> bool {
     s.strip_prefix(word)
-        .map(|rest| !rest.chars().next().map(|c| c.is_alphanumeric()).unwrap_or(false))
+        .map(|rest| {
+            !rest
+                .chars()
+                .next()
+                .map(|c| c.is_alphanumeric())
+                .unwrap_or(false)
+        })
         .unwrap_or(false)
 }
 
@@ -192,15 +200,18 @@ mod tests {
 
     #[test]
     fn parses_json_not_met_with_surrounding_text() {
-        let (met, reason) =
-            parse_evaluation("Here is my decision:\n{\"met\": false, \"reason\": \"lint failed\"}\nThanks");
+        let (met, reason) = parse_evaluation(
+            "Here is my decision:\n{\"met\": false, \"reason\": \"lint failed\"}\nThanks",
+        );
         assert!(!met);
         assert_eq!(reason, "lint failed");
     }
 
     #[test]
     fn strips_think_block_then_parses() {
-        let (met, _) = parse_evaluation("<think>let me check the tests...</think>{\"met\": true, \"reason\": \"ok\"}");
+        let (met, _) = parse_evaluation(
+            "<think>let me check the tests...</think>{\"met\": true, \"reason\": \"ok\"}",
+        );
         assert!(met);
     }
 

@@ -109,11 +109,19 @@ struct ClientHandler {
 }
 
 impl RequestHandler for ClientHandler {
-    fn handle_request(&self, _conn: &Arc<Connection>, method: &str, params: Value) -> HandlerResult {
+    fn handle_request(
+        &self,
+        _conn: &Arc<Connection>,
+        method: &str,
+        params: Value,
+    ) -> HandlerResult {
         match method {
             "item/tool/call" => {
                 let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
                 let (success, text) = match self.shared.tools.get(tool) {
                     Some(t) => match t.call(args) {
                         Ok(text) => (true, text),
@@ -145,10 +153,8 @@ impl RequestHandler for ClientHandler {
             return;
         }
         let item = params.get("item");
-        let is_message = item
-            .and_then(|i| i.get("type"))
-            .and_then(Value::as_str)
-            == Some("agentMessage");
+        let is_message =
+            item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("agentMessage");
         if !is_message {
             return;
         }
@@ -156,7 +162,10 @@ impl RequestHandler for ClientHandler {
             params.get("turnId").and_then(Value::as_str),
             item.and_then(|i| i.get("text")).and_then(Value::as_str),
         ) {
-            self.shared.replies.lock().insert(turn.to_string(), text.to_string());
+            self.shared
+                .replies
+                .lock()
+                .insert(turn.to_string(), text.to_string());
         }
     }
 }
@@ -216,14 +225,19 @@ impl AcpClient {
         tools: Vec<Arc<dyn ClientTool>>,
         approver: Arc<dyn Approver>,
     ) -> Arc<Self> {
-        let tool_map = tools.into_iter().map(|t| (t.name().to_string(), t)).collect();
+        let tool_map = tools
+            .into_iter()
+            .map(|t| (t.name().to_string(), t))
+            .collect();
         let shared = Arc::new(Shared {
             tools: tool_map,
             approver,
             replies: Mutex::new(HashMap::new()),
         });
         let conn = Connection::new(writer);
-        let handler = Arc::new(ClientHandler { shared: Arc::clone(&shared) });
+        let handler = Arc::new(ClientHandler {
+            shared: Arc::clone(&shared),
+        });
 
         let reader_conn = Arc::clone(&conn);
         let reader_handle = std::thread::spawn(move || serve(reader, reader_conn, handler));
@@ -317,7 +331,8 @@ impl AcpClient {
         approval_policy: Option<&str>,
         config: Option<Value>,
     ) -> Result<String, AgentError> {
-        let thread_id = self.open_thread(cwd, model, developer_instructions, approval_policy, config)?;
+        let thread_id =
+            self.open_thread(cwd, model, developer_instructions, approval_policy, config)?;
         *self.thread_id.lock() = Some(thread_id.clone());
         Ok(thread_id)
     }
@@ -338,7 +353,12 @@ impl AcpClient {
         // which the server writes before the `turn/start` response — so by the
         // time `request` returns, the reader has already captured it.
         let turn_id = resp.get("turnId").and_then(Value::as_str).unwrap_or("");
-        Ok(self.shared.replies.lock().remove(turn_id).unwrap_or_default())
+        Ok(self
+            .shared
+            .replies
+            .lock()
+            .remove(turn_id)
+            .unwrap_or_default())
     }
 
     /// Run one turn on the client's main conversation thread.
@@ -425,7 +445,11 @@ mod tests {
     }
 
     fn reader_over(rx: Receiver<Vec<u8>>) -> BufReader<ChannelReader> {
-        BufReader::new(ChannelReader { rx, buf: Vec::new(), pos: 0 })
+        BufReader::new(ChannelReader {
+            rx,
+            buf: Vec::new(),
+            pos: 0,
+        })
     }
 
     // --- a hand-rolled backend that speaks the protocol directly --------------
@@ -450,7 +474,8 @@ mod tests {
                 "turn/start" => {
                     // Reentrantly call the client's `ping` tool mid-turn — the
                     // reader must stay live to deliver the response.
-                    let _ = conn.request("item/tool/call", json!({ "tool": "ping", "arguments": {} }));
+                    let _ =
+                        conn.request("item/tool/call", json!({ "tool": "ping", "arguments": {} }));
                     // The final text arrives as an item/completed notification,
                     // written before the turn/start response.
                     conn.notify(
@@ -504,7 +529,9 @@ mod tests {
         let client = AcpClient::new_over(
             reader_over(client_in),
             Box::new(ByteChannelWriter { tx: client_out }),
-            vec![Arc::new(PingTool { called: Arc::clone(&called) })],
+            vec![Arc::new(PingTool {
+                called: Arc::clone(&called),
+            })],
             Arc::new(DeclineApprover),
         );
 
@@ -514,7 +541,9 @@ mod tests {
         std::thread::spawn(move || {
             let ua = client.initialize("kessel-test").expect("initialize");
             assert!(ua.contains("kessel"), "userAgent: {ua}");
-            client.start_thread(None, None, None, Some("never"), None).expect("thread/start");
+            client
+                .start_thread(None, None, None, Some("never"), None)
+                .expect("thread/start");
             let reply = client.run_turn("hi").expect("run_turn");
             let _ = done_tx.send((reply, called.load(Ordering::SeqCst)));
         });

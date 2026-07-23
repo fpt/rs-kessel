@@ -260,7 +260,10 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                 }
                 let s: String = b[start + 2..i].iter().collect();
                 match i64::from_str_radix(&s, 16) {
-                    Ok(v) => out.push(Token { tok: Tok::Num(v), line }),
+                    Ok(v) => out.push(Token {
+                        tok: Tok::Num(v),
+                        line,
+                    }),
                     Err(_) => diagnostics.push(err(line, format!("bad hex literal '0x{s}'"))),
                 }
             } else {
@@ -269,7 +272,10 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                 }
                 let s: String = b[start..i].iter().collect();
                 match s.parse::<i64>() {
-                    Ok(v) => out.push(Token { tok: Tok::Num(v), line }),
+                    Ok(v) => out.push(Token {
+                        tok: Tok::Num(v),
+                        line,
+                    }),
                     Err(_) => diagnostics.push(err(line, format!("bad number '{s}'"))),
                 }
             }
@@ -281,7 +287,10 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
             .find(|s| b[i..].iter().collect::<String>().starts_with(**s))
         {
             i += sym.len();
-            out.push(Token { tok: Tok::Sym(sym), line });
+            out.push(Token {
+                tok: Tok::Sym(sym),
+                line,
+            });
             // Raw-capture a `sprite NAME { <rows> }` body: pixel rows like
             // `..2222..` aren't lexable as normal tokens, so once we see the
             // opening `{` of a sprite block, scan whitespace-separated rows
@@ -299,7 +308,10 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                         i += 1;
                     } else if cc == '}' {
                         i += 1;
-                        out.push(Token { tok: Tok::Sym("}"), line });
+                        out.push(Token {
+                            tok: Tok::Sym("}"),
+                            line,
+                        });
                         break;
                     } else if cc == '-' && i + 1 < b.len() && b[i + 1] == '-' {
                         // Comments are valid inside a sprite body too: `--[[ ]]`
@@ -335,7 +347,10 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
         diagnostics.push(err(line, format!("unexpected character '{c}'")));
         i += 1;
     }
-    out.push(Token { tok: Tok::Eof, line });
+    out.push(Token {
+        tok: Tok::Eof,
+        line,
+    });
     out
 }
 
@@ -350,8 +365,8 @@ enum Ty {
     Word,
     Int, // 16-bit signed (two's complement); comparisons are signed
     Bool,
-    Record(String, u16),      // name, byte size
-    Array(Box<Ty>, u16),      // element, length
+    Record(String, u16), // name, byte size
+    Array(Box<Ty>, u16), // element, length
 }
 
 impl Ty {
@@ -476,10 +491,7 @@ enum Decl {
         line: usize,
     },
     /// Control-layout metadata for the host UI. Emits no code.
-    Controls {
-        controls: Controls,
-        line: usize,
-    },
+    Controls { controls: Controls, line: usize },
 }
 
 // ======================================================================
@@ -710,13 +722,14 @@ impl Parser {
             }
         };
         let name = raw.to_ascii_uppercase();
-        const BUTTONS: [&str; 8] = [
-            "LEFT", "RIGHT", "UP", "DOWN", "A", "B", "START", "SELECT",
-        ];
+        const BUTTONS: [&str; 8] = ["LEFT", "RIGHT", "UP", "DOWN", "A", "B", "START", "SELECT"];
         if !BUTTONS.contains(&name.as_str()) {
             d.push(err(
                 line,
-                format!("unknown button '{raw}' (expected one of {})", BUTTONS.join(", ")),
+                format!(
+                    "unknown button '{raw}' (expected one of {})",
+                    BUTTONS.join(", ")
+                ),
             ));
             return "START".to_string();
         }
@@ -791,7 +804,12 @@ impl Parser {
         } else {
             None
         };
-        Decl::Global { name, ty, init, line }
+        Decl::Global {
+            name,
+            ty,
+            init,
+            line,
+        }
     }
 
     fn parse_function(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
@@ -817,7 +835,12 @@ impl Parser {
         self.expect_sym(")", d);
         let body = self.parse_block(d, &["end"]);
         self.expect_kw("end", d);
-        Decl::Function { name, params, body, line }
+        Decl::Function {
+            name,
+            params,
+            body,
+            line,
+        }
     }
 
     /// Parse statements until one of `terminators` (a keyword) or EOF. Does not
@@ -861,7 +884,12 @@ impl Parser {
             } else {
                 None
             };
-            return Stmt::Local { name, ty, init, line };
+            return Stmt::Local {
+                name,
+                ty,
+                init,
+                line,
+            };
         }
         if self.eat_kw("if") {
             return self.parse_if(d);
@@ -887,7 +915,14 @@ impl Parser {
             self.expect_kw("do", d);
             let body = self.parse_block(d, &["end"]);
             self.expect_kw("end", d);
-            return Stmt::For { var, from, to, step, body, line };
+            return Stmt::For {
+                var,
+                from,
+                to,
+                step,
+                body,
+                line,
+            };
         }
         if self.eat_kw("break") {
             return Stmt::Break(line);
@@ -896,14 +931,22 @@ impl Parser {
             // A return value is present unless the next token ends the block.
             let has_value = !matches!(self.peek(), Tok::Eof)
                 && !matches!(self.peek(), Tok::Ident(k) if ["end", "else", "elseif"].contains(&k.as_str()));
-            let value = if has_value { Some(self.parse_expr(d)) } else { None };
+            let value = if has_value {
+                Some(self.parse_expr(d))
+            } else {
+                None
+            };
             return Stmt::Return(value, line);
         }
         // Assignment or call: a prefix expression, optionally followed by `=`.
         let e = self.parse_prefix(d);
         if self.eat_sym("=") {
             let value = self.parse_expr(d);
-            return Stmt::Assign { place: e, value, line };
+            return Stmt::Assign {
+                place: e,
+                value,
+                line,
+            };
         }
         Stmt::ExprStmt(e)
     }
@@ -1310,7 +1353,13 @@ impl Compiler {
                 }
                 if self
                     .records
-                    .insert(name.clone(), RecordLayout { fields: laid, size: offset })
+                    .insert(
+                        name.clone(),
+                        RecordLayout {
+                            fields: laid,
+                            size: offset,
+                        },
+                    )
                     .is_some()
                 {
                     d.push(err(*line, format!("duplicate record '{name}'")));
@@ -1362,13 +1411,17 @@ impl Compiler {
                     continue;
                 }
                 let label = format!("lx_map_{name}");
-                self.data.push(format!("@{label} .res {}", wv as u32 * hv as u32));
+                self.data
+                    .push(format!("@{label} .res {}", wv as u32 * hv as u32));
                 self.tilemap = Some((label, wv, hv));
             }
         }
         // Pass 2: function signatures.
         for decl in decls {
-            if let Decl::Function { name, params, line, .. } = decl {
+            if let Decl::Function {
+                name, params, line, ..
+            } = decl
+            {
                 let resolved: Vec<(String, Ty)> = params
                     .iter()
                     .map(|(pn, pt)| (pn.clone(), self.resolve_type(pt, d)))
@@ -1376,7 +1429,13 @@ impl Compiler {
                 let has_ret = fn_has_return(decl);
                 if self
                     .funcs
-                    .insert(name.clone(), FuncSig { params: resolved, has_ret })
+                    .insert(
+                        name.clone(),
+                        FuncSig {
+                            params: resolved,
+                            has_ret,
+                        },
+                    )
                     .is_some()
                 {
                     d.push(err(*line, format!("duplicate function '{name}'")));
@@ -1385,7 +1444,13 @@ impl Compiler {
         }
         // Pass 3: globals (names + const values, for sizing/const-folding).
         for decl in decls {
-            if let Decl::Global { name, ty, init, line } = decl {
+            if let Decl::Global {
+                name,
+                ty,
+                init,
+                line,
+            } = decl
+            {
                 let gty = match ty {
                     Some(te) => self.resolve_type(te, d),
                     None => Ty::Word,
@@ -1393,7 +1458,11 @@ impl Compiler {
                 let const_value = init.as_ref().and_then(|e| self.eval_const(e, &mut vec![]));
                 self.globals.insert(
                     name.clone(),
-                    GlobalInfo { label: format!("lx_g_{name}"), ty: gty, const_value },
+                    GlobalInfo {
+                        label: format!("lx_g_{name}"),
+                        ty: gty,
+                        const_value,
+                    },
                 );
                 let _ = line;
             }
@@ -1408,7 +1477,13 @@ impl Compiler {
         // Pass 5: compile function bodies.
         let mut body = String::new();
         for decl in decls {
-            if let Decl::Function { name, params, body: fbody, line } = decl {
+            if let Decl::Function {
+                name,
+                params,
+                body: fbody,
+                line,
+            } = decl
+            {
                 body.push_str(&self.compile_function(name, params, fbody, *line, d));
             }
         }
@@ -1453,11 +1528,17 @@ impl Compiler {
                     self.data.push(format!("@{label} .word {v}"));
                 }
                 if info.const_value.is_none() {
-                    d.push(err(0, format!("global '{name}' initializer must be constant (set it in init())")));
+                    d.push(err(
+                        0,
+                        format!("global '{name}' initializer must be constant (set it in init())"),
+                    ));
                 }
             }
             (t, Some(_)) => {
-                d.push(err(0, format!("cannot initialize aggregate global '{name}' (set fields in init())")));
+                d.push(err(
+                    0,
+                    format!("cannot initialize aggregate global '{name}' (set fields in init())"),
+                ));
                 self.data.push(format!("@{label} .res {}", t.size()));
             }
             (t, None) => self.data.push(format!("@{label} .res {}", t.size())),
@@ -1491,7 +1572,11 @@ impl Compiler {
             self.data.push(format!("@{label} .res {slot_size}"));
             self.locals.insert(
                 pname.clone(),
-                VarInfo { label: label.clone(), ty: pty.clone(), by_ref },
+                VarInfo {
+                    label: label.clone(),
+                    ty: pty.clone(),
+                    by_ref,
+                },
             );
             // Prologue stores each arg (built in declared order; reversed below).
             let op = if by_ref { "STORE16" } else { store_op(&pty) };
@@ -1524,7 +1609,12 @@ impl Compiler {
 
     fn gen_stmt(&mut self, s: &Stmt, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
         match s {
-            Stmt::Local { name, ty, init, line } => {
+            Stmt::Local {
+                name,
+                ty,
+                init,
+                line,
+            } => {
                 let vty = match ty {
                     Some(te) => self.resolve_type(te, d),
                     None => Ty::Word,
@@ -1532,14 +1622,21 @@ impl Compiler {
                 let label = self.alloc_slot(name, vty.size());
                 self.locals.insert(
                     name.clone(),
-                    VarInfo { label: label.clone(), ty: vty.clone(), by_ref: false },
+                    VarInfo {
+                        label: label.clone(),
+                        ty: vty.clone(),
+                        by_ref: false,
+                    },
                 );
                 if let Some(e) = init {
                     if vty.is_scalar() {
                         self.gen_expr(e, out, d);
                         out.push(format!("{label} {}", store_op(&vty)));
                     } else {
-                        d.push(err(*line, "cannot initialize an aggregate local (assign fields instead)"));
+                        d.push(err(
+                            *line,
+                            "cannot initialize an aggregate local (assign fields instead)",
+                        ));
                     }
                 }
             }
@@ -1579,17 +1676,26 @@ impl Compiler {
                 self.loop_ends.pop();
                 out.push(format!("{top} JMP @{end}"));
             }
-            Stmt::For { var, from, to, step, body, line } => {
+            Stmt::For {
+                var,
+                from,
+                to,
+                step,
+                body,
+                line,
+            } => {
                 // Ascending only: step must be a positive integer literal (default 1).
                 let step_val = match step {
                     None => 1i64,
-                    Some(e) => match self.eval_const(e, &mut vec![]) {
-                        Some(v) if v > 0 => v,
-                        _ => {
-                            d.push(err(*line, "for step must be a positive integer literal (use while otherwise)"));
-                            1
+                    Some(e) => {
+                        match self.eval_const(e, &mut vec![]) {
+                            Some(v) if v > 0 => v,
+                            _ => {
+                                d.push(err(*line, "for step must be a positive integer literal (use while otherwise)"));
+                                1
+                            }
                         }
-                    },
+                    }
                 };
                 // The counter is scoped to the loop: snapshot the binding map so
                 // it (and anything the body declares) falls out of scope after the
@@ -1608,10 +1714,14 @@ impl Compiler {
                 out.push(format!("{label} STORE16")); // i = from
                 self.gen_expr(to, out, d);
                 out.push(format!("{limit} STORE16")); // limit = to (once)
-                // Now bring the counter into scope for the body and increment.
+                                                      // Now bring the counter into scope for the body and increment.
                 self.locals.insert(
                     var.clone(),
-                    VarInfo { label: label.clone(), ty: Ty::Word, by_ref: false },
+                    VarInfo {
+                        label: label.clone(),
+                        ty: Ty::Word,
+                        by_ref: false,
+                    },
                 );
                 let top = self.new_label();
                 let end = self.new_label();
@@ -1647,7 +1757,12 @@ impl Compiler {
 
     /// Emit code pushing the *address* of a place, returning its type. `None`
     /// on error (diagnostic already pushed).
-    fn gen_place_addr(&mut self, e: &Expr, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) -> Option<Ty> {
+    fn gen_place_addr(
+        &mut self,
+        e: &Expr,
+        out: &mut Vec<String>,
+        d: &mut Vec<Diagnostic>,
+    ) -> Option<Ty> {
         match e {
             Expr::Var(name, line) => {
                 let info = self.resolve_var(name).or_else(|| {
@@ -1669,7 +1784,10 @@ impl Compiler {
                 };
                 let layout = self.records.get(rname)?;
                 let Some((_, fty, off)) = layout.fields.iter().find(|(n, _, _)| n == field) else {
-                    d.push(err(*line, format!("record '{rname}' has no field '{field}'")));
+                    d.push(err(
+                        *line,
+                        format!("record '{rname}' has no field '{field}'"),
+                    ));
                     return None;
                 };
                 let (fty, off) = (fty.clone(), *off);
@@ -1709,7 +1827,10 @@ impl Compiler {
                 true
             }
             Expr::Str(_, line) => {
-                d.push(err(*line, "string literals are only allowed as text()'s first argument"));
+                d.push(err(
+                    *line,
+                    "string literals are only allowed as text()'s first argument",
+                ));
                 out.push("0".to_string());
                 true
             }
@@ -1770,7 +1891,14 @@ impl Compiler {
         }
     }
 
-    fn gen_binary(&mut self, op: &str, l: &Expr, r: &Expr, out: &mut Vec<String>, d: &mut Vec<Diagnostic>) {
+    fn gen_binary(
+        &mut self,
+        op: &str,
+        l: &Expr,
+        r: &Expr,
+        out: &mut Vec<String>,
+        d: &mut Vec<Diagnostic>,
+    ) {
         if op == "and" || op == "or" {
             self.gen_expr(l, out, d);
             out.push("#00 NE".to_string());
@@ -1845,8 +1973,8 @@ impl Compiler {
             },
             Expr::Unary(op, inner, _) => match *op {
                 "not" => Ty::Bool,
-                "-" => Ty::Int,             // a negated value is signed
-                _ => self.type_of(inner),   // `~` keeps the operand's type
+                "-" => Ty::Int,           // a negated value is signed
+                _ => self.type_of(inner), // `~` keeps the operand's type
             },
             Expr::Binary(op, l, r, _) => {
                 if matches!(*op, "==" | "~=" | "<" | "<=" | ">" | ">=" | "and" | "or") {
@@ -1865,7 +1993,14 @@ impl Compiler {
         }
     }
 
-    fn gen_call(&mut self, name: &str, args: &[Expr], out: &mut Vec<String>, d: &mut Vec<Diagnostic>, line: usize) -> bool {
+    fn gen_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        out: &mut Vec<String>,
+        d: &mut Vec<Diagnostic>,
+        line: usize,
+    ) -> bool {
         // `len(arr)` is a compile-time constant = the array's declared length.
         if name == "len" {
             if let [arg] = args {
@@ -1928,7 +2063,10 @@ impl Compiler {
             // On an arity mismatch, report it and emit nothing — a partial call
             // would leave the data stack unbalanced.
             if args.len() != argc {
-                d.push(err(line, format!("{name}() takes {argc} argument(s), got {}", args.len())));
+                d.push(err(
+                    line,
+                    format!("{name}() takes {argc} argument(s), got {}", args.len()),
+                ));
                 return yields;
             }
             for a in args {
@@ -1940,7 +2078,10 @@ impl Compiler {
         if let Some(sig) = self.funcs.get(name) {
             let (argc, yields) = (sig.params.len(), sig.has_ret);
             if args.len() != argc {
-                d.push(err(line, format!("{name}() takes {argc} argument(s), got {}", args.len())));
+                d.push(err(
+                    line,
+                    format!("{name}() takes {argc} argument(s), got {}", args.len()),
+                ));
                 return yields;
             }
             for a in args {
@@ -1968,8 +2109,17 @@ impl Compiler {
         // they only need the declaration to exist.
         if matches!(
             name,
-            "mget" | "mset" | "map" | "solid" | "map_rect_overlap" | "collide_x" | "collide_y"
-            | "touching_left" | "touching_right" | "touching_floor" | "touching_ceiling"
+            "mget"
+                | "mset"
+                | "map"
+                | "solid"
+                | "map_rect_overlap"
+                | "collide_x"
+                | "collide_y"
+                | "touching_left"
+                | "touching_right"
+                | "touching_floor"
+                | "touching_ceiling"
         ) {
             let (map, w) = match &self.tilemap {
                 Some((l, w, _)) => (l.clone(), *w),
@@ -2033,25 +2183,25 @@ impl Compiler {
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
             // ( x1 x2 y color ) fill a horizontal span at row y — pseudo-3D road.
             "hline" => "#13 DEO #12 DEO SWAP #11 DEO #1d DEO",
-            "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO",      // ( id x y flags ) blit by id
+            "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO", // ( id x y flags ) blit by id
             // ( id x y scale flags ) nearest-neighbour scaled tile (256 = 1.0).
             "spr_scaled" => "#19 DEO #b0 DEO #12 DEO #11 DEO #b1 DEO",
             // ( id x y w h flags ) draw a w×h block of contiguous sheet tiles.
             "sprn" => "#19 DEO #a2 DEO #a1 DEO #12 DEO #11 DEO #a0 DEO #00 #a3 DEO",
-            "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO",     // ( addr x y flags ) raw blit
-            "camera" => "#18 DEO #17 DEO",                   // ( x y )
+            "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO", // ( addr x y flags ) raw blit
+            "camera" => "#18 DEO #17 DEO",               // ( x y )
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
             "btn" => "#20 DEI AND #00 NE",
             "btnp" => "#21 DEI AND #00 NE", // just-pressed this frame
             "btnr" => "#22 DEI AND #00 NE", // just-released this frame
             "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
-            "sin" => "#c0 DEO #c0 DEI",      // ( angle ) -> signed 8.8 fixed sin
-            "cos" => "#c0 DEO #c1 DEI",      // ( angle ) -> signed 8.8 fixed cos
+            "sin" => "#c0 DEO #c0 DEI",     // ( angle ) -> signed 8.8 fixed sin
+            "cos" => "#c0 DEO #c1 DEI",     // ( angle ) -> signed 8.8 fixed cos
             "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
             "music" => "#91 DEO",           // ( id ) start a music track
             "music_stop" => "#00 #92 DEO",  // stop music
-            "rnd" => "#30 DEI SWAP MOD", // ( n ) -> rand % n
+            "rnd" => "#30 DEI SWAP MOD",    // ( n ) -> rand % n
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
             "entity" => {
@@ -2544,7 +2694,12 @@ mod tests {
         let c = compile(src);
         assert!(c.ok(), "luax diagnostics: {:?}", c.diagnostics);
         let built = assemble(&c.asm);
-        assert!(built.ok(), "generated asm errors: {:?}\nASM:\n{}", built.diagnostics, c.asm);
+        assert!(
+            built.ok(),
+            "generated asm errors: {:?}\nASM:\n{}",
+            built.diagnostics,
+            c.asm
+        );
         c.asm
     }
 
@@ -2701,7 +2856,11 @@ mod tests {
         // reuse the free list buys back on top of correct scoping.
         let reuse = compile("function draw() for i = 0, 3 do end  for j = 0, 3 do end end");
         assert!(reuse.ok(), "{:?}", reuse.diagnostics);
-        assert_eq!(local_slot_count(&reuse.asm), 2, "disjoint loops should reuse the same 2 cells");
+        assert_eq!(
+            local_slot_count(&reuse.asm),
+            2,
+            "disjoint loops should reuse the same 2 cells"
+        );
     }
 
     #[test]
@@ -2713,7 +2872,11 @@ mod tests {
             "function draw() local i = 1  if i == 1 then local i = 2  entity(i,0,2) end  entity(i,0,1) end",
         );
         assert!(shadow.ok(), "{:?}", shadow.diagnostics);
-        assert_eq!(local_slot_count(&shadow.asm), 2, "live shadow needs a distinct cell");
+        assert_eq!(
+            local_slot_count(&shadow.asm),
+            2,
+            "live shadow needs a distinct cell"
+        );
     }
 
     #[test]
@@ -2983,10 +3146,10 @@ mod tests {
         compile_ok(src);
         let mut c = load(src);
         c.run_frame(0);
-        assert_eq!(c.vm.devices.framebuffer[0], 1);            // (0,0) id a
-        assert_eq!(c.vm.devices.framebuffer[8], 2);            // (8,0) id b
-        assert_eq!(c.vm.devices.framebuffer[8 * 128], 3);      // (0,8) id c
-        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4);  // (8,8) id d
+        assert_eq!(c.vm.devices.framebuffer[0], 1); // (0,0) id a
+        assert_eq!(c.vm.devices.framebuffer[8], 2); // (8,0) id b
+        assert_eq!(c.vm.devices.framebuffer[8 * 128], 3); // (0,8) id c
+        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4); // (8,8) id d
     }
 
     #[test]
@@ -3134,7 +3297,13 @@ mod tests {
     fn tilemap_dimensions_out_of_range() {
         let c = compile("tilemap level(65536, 1)\nfunction draw() end");
         assert!(!c.ok());
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("out of range")), "{:?}", c.diagnostics);
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("out of range")),
+            "{:?}",
+            c.diagnostics
+        );
     }
 
     #[test]
@@ -3184,10 +3353,10 @@ mod tests {
             function draw() entity(n, 0, 1) end
         "#;
         let mut c = load(src);
-        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1);   // press -> +1
-        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1);   // still held -> no change
-        assert_eq!(c.run_frame(0).entities[0].x, 1);        // released
-        assert_eq!(c.run_frame(BTN_A).entities[0].x, 2);   // new press -> +1
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1); // press -> +1
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 1); // still held -> no change
+        assert_eq!(c.run_frame(0).entities[0].x, 1); // released
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 2); // new press -> +1
     }
 
     #[test]
@@ -3198,10 +3367,10 @@ mod tests {
             function draw() entity(n, 0, 1) end
         "#;
         let mut c = load(src);
-        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0);   // press: no release yet
-        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0);   // held
-        assert_eq!(c.run_frame(0).entities[0].x, 1);        // release -> +1
-        assert_eq!(c.run_frame(0).entities[0].x, 1);        // stays released
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0); // press: no release yet
+        assert_eq!(c.run_frame(BTN_A).entities[0].x, 0); // held
+        assert_eq!(c.run_frame(0).entities[0].x, 1); // release -> +1
+        assert_eq!(c.run_frame(0).entities[0].x, 1); // stays released
     }
 
     #[test]
@@ -3238,7 +3407,11 @@ mod tests {
     fn len_rejects_non_array() {
         let c = compile("local x: word function draw() entity(len(x), 0, 1) end");
         assert!(!c.ok());
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("len()")), "{:?}", c.diagnostics);
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("len()")),
+            "{:?}",
+            c.diagnostics
+        );
     }
 
     #[test]
@@ -3388,7 +3561,11 @@ mod tests {
     fn collision_helpers_need_tilemap() {
         let c = compile("function draw() if collide_x(0,0,8,8,1,SOLID) > 0 then end end");
         assert!(!c.ok());
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("tilemap")), "{:?}", c.diagnostics);
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("tilemap")),
+            "{:?}",
+            c.diagnostics
+        );
     }
 
     #[test]
@@ -3398,9 +3575,9 @@ mod tests {
         compile_ok(src);
         let mut c = load(src);
         c.run_frame(0);
-        assert_eq!(c.vm.devices.framebuffer[0], 7);   // (0,0)
-        assert_eq!(c.vm.devices.framebuffer[1], 7);   // (1,0)
-        assert_eq!(c.vm.devices.framebuffer[2], 7);   // (2,0)
+        assert_eq!(c.vm.devices.framebuffer[0], 7); // (0,0)
+        assert_eq!(c.vm.devices.framebuffer[1], 7); // (1,0)
+        assert_eq!(c.vm.devices.framebuffer[2], 7); // (2,0)
         assert_eq!(c.vm.devices.framebuffer[128], 7); // (0,1)
         assert_eq!(c.vm.devices.framebuffer[129], 0); // (1,1) gap
     }
@@ -3450,7 +3627,13 @@ mod tests {
     fn unterminated_string_is_a_diagnostic() {
         let c = compile("function draw() text(\"oops, 0, 0, 7) end");
         assert!(!c.ok());
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("unterminated")), "{:?}", c.diagnostics);
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unterminated")),
+            "{:?}",
+            c.diagnostics
+        );
     }
 
     #[test]
@@ -3506,7 +3689,11 @@ mod tests {
     fn clear_rejects_scalar() {
         let c = compile("local x: word function draw() clear(x) end");
         assert!(!c.ok());
-        assert!(c.diagnostics.iter().any(|d| d.message.contains("clear()")), "{:?}", c.diagnostics);
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("clear()")),
+            "{:?}",
+            c.diagnostics
+        );
     }
 
     #[test]

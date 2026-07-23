@@ -141,7 +141,11 @@ mod tests {
             serde_json::json!({ "type": "object", "properties": { "text": { "type": "string" } } })
         }
         fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError> {
-            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let text = args
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(ToolResult::text(text))
         }
         fn dynamic_state(&self) -> Option<String> {
@@ -153,14 +157,19 @@ mod tests {
     fn registry_registers_lists_and_calls() {
         let mut reg = ToolRegistry::new();
         assert!(reg.is_empty());
-        reg.register(Box::new(EchoTool { n: "echo".into(), state: None }));
+        reg.register(Box::new(EchoTool {
+            n: "echo".into(),
+            state: None,
+        }));
 
         let defs = reg.get_definitions();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "echo");
         assert!(!reg.is_empty());
 
-        let out = reg.call("echo", serde_json::json!({ "text": "hi" })).unwrap();
+        let out = reg
+            .call("echo", serde_json::json!({ "text": "hi" }))
+            .unwrap();
         assert_eq!(out.text, "hi");
     }
 
@@ -172,9 +181,15 @@ mod tests {
 
     #[test]
     fn full_description_appends_dynamic_state() {
-        let plain = EchoTool { n: "a".into(), state: None };
+        let plain = EchoTool {
+            n: "a".into(),
+            state: None,
+        };
         assert_eq!(full_description(&plain), "echoes its input");
-        let stateful = EchoTool { n: "b".into(), state: Some("2 items".into()) };
+        let stateful = EchoTool {
+            n: "b".into(),
+            state: Some("2 items".into()),
+        };
         assert_eq!(full_description(&stateful), "echoes its input [2 items]");
     }
 
@@ -189,9 +204,14 @@ mod tests {
     #[test]
     fn registry_call_truncates_result() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(EchoTool { n: "echo".into(), state: None }));
+        reg.register(Box::new(EchoTool {
+            n: "echo".into(),
+            state: None,
+        }));
         let big = "y".repeat(MAX_OUTPUT_CHARS + 100);
-        let out = reg.call("echo", serde_json::json!({ "text": big })).unwrap();
+        let out = reg
+            .call("echo", serde_json::json!({ "text": big }))
+            .unwrap();
         assert!(out.text.contains("truncated"));
     }
 }

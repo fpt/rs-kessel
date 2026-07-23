@@ -279,7 +279,9 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
     tools.push(Arc::new(acp_client::HandlerClientTool(Box::new(
         situation::ReadSituationMessagesTool::new(situation.clone()),
     ))));
-    tools.push(Arc::new(SuggestNextCheckClientTool { next_check: next_check.clone() }));
+    tools.push(Arc::new(SuggestNextCheckClientTool {
+        next_check: next_check.clone(),
+    }));
 
     // Spawn and connect the backend.
     let (program, args) = backend_command();
@@ -489,7 +491,11 @@ impl Agent {
     /// Submit a capture result from Swift back to the waiting client tool.
     /// Routes to the correct channel based on request ID prefix.
     pub fn submit_capture_result(&self, id: String, image_base64: String, metadata_json: String) {
-        let result = capture::CaptureResult { id: id.clone(), image_base64, metadata_json };
+        let result = capture::CaptureResult {
+            id: id.clone(),
+            image_base64,
+            metadata_json,
+        };
         if id.starts_with("find_") {
             let _ = self.find_result_tx.send(result);
         } else if id.starts_with("ocr_") {
@@ -563,9 +569,9 @@ impl Agent {
             .unwrap_or_default();
 
         // Goal eval is tool-less and read-only; no MCP servers needed.
-        let thread = self
-            .client
-            .open_thread(None, None, instructions.as_deref(), Some("never"), None)?;
+        let thread =
+            self.client
+                .open_thread(None, None, instructions.as_deref(), Some("never"), None)?;
         let raw = self.client.run_turn_on(&thread, &prompt)?;
         let (met, reason) = goal::parse_evaluation(&raw);
 

@@ -152,10 +152,39 @@ impl Op {
         let up = s.to_ascii_uppercase();
         // Linear scan over the fixed opcode table — small and only hit at assemble time.
         const ALL: &[Op] = &[
-            Op::Nop, Op::Halt, Op::Lit8, Op::Lit16, Op::Dup, Op::Drop, Op::Swap, Op::Over,
-            Op::Rot, Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod, Op::And, Op::Or, Op::Xor,
-            Op::Shl, Op::Shr, Op::Eq, Op::Ne, Op::Lt, Op::Gt, Op::Load8, Op::Load16,
-            Op::Store8, Op::Store16, Op::Jmp, Op::Jz, Op::Jnz, Op::Call, Op::Ret, Op::Dei,
+            Op::Nop,
+            Op::Halt,
+            Op::Lit8,
+            Op::Lit16,
+            Op::Dup,
+            Op::Drop,
+            Op::Swap,
+            Op::Over,
+            Op::Rot,
+            Op::Add,
+            Op::Sub,
+            Op::Mul,
+            Op::Div,
+            Op::Mod,
+            Op::And,
+            Op::Or,
+            Op::Xor,
+            Op::Shl,
+            Op::Shr,
+            Op::Eq,
+            Op::Ne,
+            Op::Lt,
+            Op::Gt,
+            Op::Load8,
+            Op::Load16,
+            Op::Store8,
+            Op::Store16,
+            Op::Jmp,
+            Op::Jz,
+            Op::Jnz,
+            Op::Call,
+            Op::Ret,
+            Op::Dei,
             Op::Deo,
         ];
         ALL.iter().copied().find(|op| op.mnemonic() == up)
@@ -170,8 +199,20 @@ mod tests {
     fn roundtrip_byte_decode() {
         // Every opcode decodes back from its own byte value.
         let ops = [
-            Op::Nop, Op::Halt, Op::Lit8, Op::Lit16, Op::Dup, Op::Rot, Op::Add, Op::Div,
-            Op::Xor, Op::Gt, Op::Store16, Op::Call, Op::Ret, Op::Deo,
+            Op::Nop,
+            Op::Halt,
+            Op::Lit8,
+            Op::Lit16,
+            Op::Dup,
+            Op::Rot,
+            Op::Add,
+            Op::Div,
+            Op::Xor,
+            Op::Gt,
+            Op::Store16,
+            Op::Call,
+            Op::Ret,
+            Op::Deo,
         ];
         for op in ops {
             assert_eq!(Op::from_byte(op as u8), Some(op));
