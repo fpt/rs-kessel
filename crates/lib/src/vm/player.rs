@@ -41,7 +41,12 @@ impl VmPlayer {
     /// as a load error rather than silently opening a dead game.
     pub fn load(&self, source: String, path: String) -> String {
         let mut c = self.inner.lock();
-        c.write_source(&path, &source);
+        // VmPlayer is in-memory (no root), so this never touches disk — but a
+        // write can still fail if a project were ever set, so surface it.
+        if let Err(e) = c.write_source(&path, &source) {
+            c.rom_loaded = false;
+            return e;
+        }
         let built = match c.assemble(&path) {
             Ok(b) => b,
             Err(e) => {

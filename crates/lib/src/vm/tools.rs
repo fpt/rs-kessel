@@ -27,7 +27,18 @@ type Shared = Arc<Mutex<VmConsole>>;
 /// `acp_client::ClientTool`s and served to a remote backend over ACP (kessel as
 /// an ACP client hosting the resident VM).
 pub fn vm_tool_handlers() -> Vec<Box<dyn ToolHandler>> {
-    let console: Shared = Arc::new(Mutex::new(VmConsole::new()));
+    vm_tool_handlers_rooted(None)
+}
+
+/// Build every `vm_*` tool over a console rooted at `root`. With a working
+/// directory set, `vm_write_source`/`vm_assemble` read and write actual files
+/// there — the same files the backend's own file-editing tools touch — so a
+/// game the model wrote to disk is what the VM compiles. `None` keeps the
+/// in-memory workspace (`kessel --play`, tests).
+pub fn vm_tool_handlers_rooted(root: Option<std::path::PathBuf>) -> Vec<Box<dyn ToolHandler>> {
+    let mut console = VmConsole::new();
+    console.set_root(root);
+    let console: Shared = Arc::new(Mutex::new(console));
     vec![
         Box::new(WriteSource(console.clone())),
         Box::new(Assemble(console.clone())),
@@ -78,7 +89,7 @@ impl ToolHandler for WriteSource {
         // DON'T port: sprites are `sprite NAME { rows }` declarations (not table
         // literals), entry points are `update`/`draw` (NOT `_update`/`_draw`),
         // and `cls` requires a colour argument.
-        r#"Write source for the fantasy-console VM to a named file in the VM workspace. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
+        r#"Write source for the fantasy-console VM to a named file. When a working directory is set the file is written ON DISK — the same file your own file-editing tools, a human editor, and `kessel --play` see — so for a small change to an existing game, edit that file directly with your file tools and just call vm_assemble. Use vm_write_source for a first draft or a full rewrite. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
 
 luax essentials (a '.lua' file):
 - Entry points (vector-driven, no main loop): `function init()` runs once; `function update()` then `function draw()` run each frame. Names are bare — NOT `_update`/`_draw`.
@@ -125,8 +136,19 @@ Canonical example:
         let path = str_arg(&args, "path")?;
         let source = str_arg(&args, "source")?;
         let bytes = source.len();
-        self.0.lock().write_source(&path, &source);
-        Ok(ToolResult::text(format!("wrote {bytes} bytes to '{path}'")))
+        let mut console = self.0.lock();
+        if let Err(e) = console.write_source(&path, &source) {
+            return Ok(ToolResult::text(e));
+        }
+        // Report the on-disk location when disk-backed, so the model knows the
+        // exact file its own file tools can edit next time.
+        let where_ = match console.root() {
+            Some(root) => root.join(&path).display().to_string(),
+            None => path.clone(),
+        };
+        Ok(ToolResult::text(format!(
+            "wrote {bytes} bytes to '{where_}'"
+        )))
     }
 }
 
@@ -138,9 +160,11 @@ impl ToolHandler for Assemble {
         "vm_assemble"
     }
     fn description(&self) -> &str {
-        "Assemble a previously written source file into a ROM. A '.lua' file is \
-         compiled from the Lua-ish dialect to assembly first. Returns diagnostics \
-         with line numbers on error, or the byte size and labels on success."
+        "Assemble a source file into a ROM, reading it fresh each time — from the \
+         working directory when one is set, so edits made with any editing tool \
+         (yours or vm_write_source) are picked up. A '.lua' file is compiled from \
+         the Lua-ish dialect to assembly first. Returns diagnostics with line \
+         numbers on error, or the byte size and labels on success."
     }
     fn parameters_schema(&self) -> Value {
         json!({
