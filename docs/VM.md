@@ -101,6 +101,16 @@ SELECT 0x80`. Screen is 128×128, 16-colour (default PICO-8 palette).
 `vm_inspect_stacks`, `vm_get_framebuffer` (PNG) → `vm_snapshot`/`vm_restore`,
 `vm_reset`.
 
+**Sources are actual files on disk.** In the real agent the VM is rooted at the
+backend's working directory (`AgentConfig.working_dir`), so `vm_write_source`
+writes `game.lua` to that directory and `vm_assemble` re-reads it fresh on every
+call. This means the backend's *own* file-editing tools and `vm_assemble` operate
+on the same file: for a small tweak, edit `game.lua` directly and just call
+`vm_assemble`; for a first draft or rewrite, use `vm_write_source`. Model-supplied
+paths are confined to the working directory (no `..`/absolute escapes).
+`VmPlayer` (`kessel --play`) and the test suites set no root and keep sources in
+memory, unchanged.
+
 `vm_run_frame` returns the observation record (screen hash + changed bbox for
 "look at the screen", `vm.*` internals for white-box debugging, and
 game-reported `entities` for black-box tasks):

@@ -22,6 +22,7 @@ pub mod tools;
 pub mod vm;
 
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 
 use device::SCREEN_DIM;
 use vm::{RunOutcome, Vm};
@@ -34,7 +35,13 @@ pub struct VmConsole {
     pub frame: u64,
     /// Framebuffer at the end of the previous frame, for change detection.
     prev_fb: Vec<u8>,
-    /// Source files the model has written (keyed by path).
+    /// Working directory, when disk-backed. With one set, **the filesystem is
+    /// the source of truth**: sources are read from (and written to) disk, so
+    /// whatever the backend's own file-editing tools or a human editor put in
+    /// `game.lua` is what gets compiled. Without one (`VmPlayer`, tests) sources
+    /// stay in the `sources` map below.
+    root: Option<PathBuf>,
+    /// Source files the model has written, when no working directory is set.
     sources: HashMap<String, String>,
     /// Assembled ROMs, keyed by source path.
     roms: HashMap<String, Vec<u8>>,
@@ -71,6 +78,7 @@ impl VmConsole {
             rom_loaded: false,
             frame: 0,
             prev_fb: vec![0u8; device::SCREEN_PIXELS],
+            root: None,
             sources: HashMap::new(),
             roms: HashMap::new(),
             controls: HashMap::new(),
@@ -82,24 +90,92 @@ impl VmConsole {
         }
     }
 
-    pub fn write_source(&mut self, path: &str, source: &str) {
-        self.sources.insert(path.to_string(), source.to_string());
-        // Invalidate any previously built ROM for this path.
-        self.roms.remove(path);
+    /// Point the console at a working directory (or clear it). Cached sources and
+    /// ROMs from the previous workspace are dropped — they describe a different
+    /// game. With a directory set, sources live on disk.
+    pub fn set_root(&mut self, root: Option<PathBuf>) {
+        self.root = root;
+        self.sources.clear();
+        self.roms.clear();
+        self.controls.clear();
     }
 
-    pub fn get_source(&self, path: &str) -> Option<&String> {
-        self.sources.get(path)
+    /// The active working directory, if disk-backed.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// Write a source file. With a working directory set this writes through to
+    /// disk, so the file the model authored is the same one the backend's file
+    /// tools and `kessel --play` see; otherwise it is kept in memory.
+    pub fn write_source(&mut self, path: &str, source: &str) -> Result<(), String> {
+        if let Some(root) = &self.root {
+            let full = resolve_in_root(root, path)?;
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create '{}': {e}", parent.display()))?;
+            }
+            std::fs::write(&full, source)
+                .map_err(|e| format!("write '{}': {e}", full.display()))?;
+        } else {
+            self.sources.insert(path.to_string(), source.to_string());
+        }
+        // Invalidate any previously built ROM for this path.
+        self.roms.remove(path);
+        Ok(())
+    }
+
+    /// Read a source file — from the working directory when disk-backed, else
+    /// from the in-memory workspace.
+    pub fn get_source(&self, path: &str) -> Option<String> {
+        match &self.root {
+            Some(root) => {
+                let full = resolve_in_root(root, path).ok()?;
+                std::fs::read_to_string(full).ok()
+            }
+            None => self.sources.get(path).cloned(),
+        }
+    }
+
+    /// Source files that *are* available, for "no source at 'x'" errors. Sorted;
+    /// from the working directory when disk-backed, else the in-memory map.
+    pub fn list_sources(&self) -> Vec<String> {
+        let mut names: Vec<String> = match &self.root {
+            Some(root) => std::fs::read_dir(root)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| is_lua(n) || n.to_ascii_lowercase().ends_with(".asm"))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            None => self.sources.keys().cloned().collect(),
+        };
+        names.sort();
+        names
     }
 
     /// Assemble a previously written source. On success the ROM is cached for
     /// [`load_rom`](Self::load_rom). Sources ending in `.lua` are first compiled
-    /// from the luax front-end to assembler, then assembled.
+    /// from the luax front-end to assembler, then assembled. When disk-backed the
+    /// source is re-read on every call, so an edit made by *any* tool is compiled.
     pub fn assemble(&mut self, path: &str) -> Result<assembler::Assembled, String> {
-        let src = self
-            .sources
-            .get(path)
-            .ok_or_else(|| format!("no source written at '{path}'"))?;
+        let src = &self.get_source(path).ok_or_else(|| {
+            let available = self.list_sources();
+            let known = if available.is_empty() {
+                "none".to_string()
+            } else {
+                available.join(", ")
+            };
+            match self.root() {
+                Some(root) => format!(
+                    "no source at '{path}' in {} — available: {known}",
+                    root.display()
+                ),
+                None => format!("no source written at '{path}' — available: {known}"),
+            }
+        })?;
 
         // luax (Lua-ish) dialect: compile to assembler first. Compiler
         // diagnostics are returned in an otherwise-empty `Assembled`. The
@@ -247,10 +323,12 @@ impl VmConsole {
     }
 
     pub fn reset(&mut self) {
+        let keep_root = self.root.take();
         let keep_sources = std::mem::take(&mut self.sources);
         let keep_roms = std::mem::take(&mut self.roms);
         let keep_controls = std::mem::take(&mut self.controls);
         *self = VmConsole::new();
+        self.root = keep_root;
         self.sources = keep_sources;
         self.roms = keep_roms;
         self.controls = keep_controls;
@@ -310,6 +388,32 @@ impl Observation {
 /// True if a source path selects the luax (Lua-ish) dialect (`.lua`).
 fn is_lua(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".lua")
+}
+
+/// Resolve a model-supplied source path against the working directory, refusing
+/// anything that would escape it (absolute paths, `..`). Keeps `vm_write_source`
+/// from writing arbitrary files outside the game's directory.
+fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    if rel.trim().is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let p = Path::new(rel);
+    if p.is_absolute() {
+        return Err(format!(
+            "path '{rel}' must be relative to the working directory"
+        ));
+    }
+    for c in p.components() {
+        match c {
+            Component::Normal(_) | Component::CurDir => {}
+            _ => {
+                return Err(format!(
+                    "path '{rel}' must stay inside the working directory"
+                ))
+            }
+        }
+    }
+    Ok(root.join(p))
 }
 
 /// FNV-1a (64-bit) of the framebuffer, as a hex string.
@@ -385,6 +489,63 @@ pub fn buttons_from_names(names: &[String]) -> u8 {
 mod tests {
     use super::*;
 
+    /// A luax source written to the working dir by *any* means is what
+    /// `assemble` compiles — the file write → vm run path.
+    #[test]
+    fn disk_backed_source_is_read_from_the_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = "local x = 0\nfunction update() x = x + 1 end\nfunction draw() cls(0) end\n";
+
+        // Simulate the backend's own file tools writing game.lua to disk —
+        // the console never saw a write_source call for it.
+        std::fs::write(dir.path().join("game.lua"), src).unwrap();
+
+        let mut c = VmConsole::new();
+        c.set_root(Some(dir.path().to_path_buf()));
+
+        assert_eq!(c.get_source("game.lua").as_deref(), Some(src));
+        assert!(
+            c.assemble("game.lua").unwrap().ok(),
+            "the on-disk source should assemble"
+        );
+    }
+
+    /// `write_source` writes through to disk when rooted, and a later edit on
+    /// disk is picked up on the next assemble (fresh read every call).
+    #[test]
+    fn write_source_writes_through_to_disk_and_rereads() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = VmConsole::new();
+        c.set_root(Some(dir.path().to_path_buf()));
+
+        c.write_source("game.lua", "function draw() cls(0) end\n")
+            .unwrap();
+        let on_disk = std::fs::read_to_string(dir.path().join("game.lua")).unwrap();
+        assert!(
+            on_disk.contains("cls(0)"),
+            "wrote through to the actual file"
+        );
+
+        // External edit; assemble must compile the new bytes, not a cached copy.
+        std::fs::write(dir.path().join("game.lua"), "function draw() cls(1) end\n").unwrap();
+        assert_eq!(
+            c.get_source("game.lua").as_deref(),
+            Some("function draw() cls(1) end\n")
+        );
+    }
+
+    /// Model-supplied paths can't escape the working directory.
+    #[test]
+    fn rooted_write_refuses_paths_outside_the_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = VmConsole::new();
+        c.set_root(Some(dir.path().to_path_buf()));
+
+        assert!(c.write_source("../escape.lua", "x").is_err());
+        assert!(c.write_source("/etc/passwd", "x").is_err());
+        assert!(!dir.path().join("../escape.lua").exists());
+    }
+
     #[test]
     fn write_assemble_load_runframe_loop() {
         let mut c = VmConsole::new();
@@ -412,7 +573,7 @@ mod tests {
             @player-x .res 2
         "#;
 
-        c.write_source("game.asm", clean);
+        c.write_source("game.asm", clean).unwrap();
         let built = c.assemble("game.asm").expect("assemble call");
         assert!(built.ok(), "assemble errors: {:?}", built.diagnostics);
         let outcome = c.load_rom("game.asm").expect("load");
@@ -453,7 +614,7 @@ mod tests {
             function draw() cls(0)  entity(n, hits, 1) end
         "#;
         let mut c = VmConsole::new();
-        c.write_source("p.lua", src);
+        c.write_source("p.lua", src).unwrap();
         assert!(c.assemble("p.lua").unwrap().ok());
         c.load_rom("p.lua").unwrap();
 
@@ -485,7 +646,7 @@ mod tests {
         c.write_source(
             "s.asm",
             "on-frame #10 DEO RET @on-frame player-x LOAD16 #01 ADD player-x STORE16 RET @player-x .res 2",
-        );
+        ).unwrap();
         assert!(c.assemble("s.asm").unwrap().ok());
         c.load_rom("s.asm").unwrap();
         c.run_frame(0); // player-x: 0 -> 1
@@ -499,7 +660,7 @@ mod tests {
 
     // Helper: read the 16-bit variable at label player-x from the loaded ROM.
     fn read_u16(c: &VmConsole, path: &str) -> u16 {
-        let built = assembler::assemble(c.get_source(path).unwrap());
+        let built = assembler::assemble(&c.get_source(path).unwrap());
         let addr = *built.labels.get("player-x").unwrap();
         let hi = c.vm.mem[addr as usize];
         let lo = c.vm.mem[addr as usize + 1];
@@ -537,7 +698,7 @@ mod tests {
             @player-x .res 2
         "#;
         let mut c = VmConsole::new();
-        c.write_source("doc.asm", src);
+        c.write_source("doc.asm", src).unwrap();
         let built = c.assemble("doc.asm").expect("assemble");
         assert!(built.ok(), "doc example errors: {:?}", built.diagnostics);
         assert_eq!(c.load_rom("doc.asm").unwrap(), RunOutcome::Completed);

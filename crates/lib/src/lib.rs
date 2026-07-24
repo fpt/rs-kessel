@@ -298,8 +298,14 @@ pub fn agent_new(
     // Client tools served back to the backend: the resident VM, screen capture,
     // the situation reader, and the ambient pacing hint. The backend keeps its
     // own file/bash/skill tools — those run there, in the working dir we pass.
+    //
+    // Root the VM at that same working dir so `vm_write_source`/`vm_assemble`
+    // read and write the actual game file on disk. Otherwise the model writes
+    // `game.lua` with its own file tools but `vm_assemble` compiles a stale
+    // in-memory copy (or nothing) — the write→run path never lines up.
     let mut tools: Vec<Arc<dyn acp_client::ClientTool>> = Vec::new();
-    for handler in vm::tools::vm_tool_handlers() {
+    let vm_root = config.working_dir.clone().map(std::path::PathBuf::from);
+    for handler in vm::tools::vm_tool_handlers_rooted(vm_root) {
         tools.push(Arc::new(acp_client::HandlerClientTool(handler)));
     }
     let capture_handlers: Vec<Box<dyn tool::ToolHandler>> = vec![
@@ -335,7 +341,10 @@ pub fn agent_new(
     // No approver means run autonomously — the backend is told "never", so it
     // never raises approval requests (DeclineApprover is then never consulted).
     let (approver, mutation_policy): (Arc<dyn acp_client::Approver>, String) = match approver {
-        Some(a) => (Arc::new(ApproverAdapter(a)), MUTATION_APPROVAL_POLICY.to_string()),
+        Some(a) => (
+            Arc::new(ApproverAdapter(a)),
+            MUTATION_APPROVAL_POLICY.to_string(),
+        ),
         None => (Arc::new(acp_client::DeclineApprover), "never".to_string()),
     };
 

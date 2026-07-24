@@ -597,8 +597,10 @@ mod tests {
                             json!({ "reason": "write file 'game.lua'" }),
                         )
                         .expect("approval round-trips");
-                    *self.seen_decision.lock() =
-                        resp.get("decision").and_then(Value::as_str).map(str::to_string);
+                    *self.seen_decision.lock() = resp
+                        .get("decision")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
                     conn.notify(
                         "item/completed",
                         json!({
@@ -672,7 +674,10 @@ mod tests {
         let asked = asked.lock().clone();
         assert_eq!(
             asked,
-            Some(("file change".to_string(), "write file 'game.lua'".to_string())),
+            Some((
+                "file change".to_string(),
+                "write file 'game.lua'".to_string()
+            )),
             "approver saw the action + target"
         );
         assert_eq!(
