@@ -1,4 +1,0 @@
-bin/
-obj/
-# uniffi-generated C# bindings (regenerate with scripts/gen_uniffi_cs.sh)
-vendor/

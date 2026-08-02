@@ -2,217 +2,131 @@
 
 ## Overview
 
-A macOS/Windows voice assistant and fantasy-console VM frontend. Kessel does **no
-LLM inference of its own** — it is an **ACP client** that spawns a backend agent
-(`gallium` by default; `codex` via `KESSEL_ACP_BACKEND`) and drives it a turn at a
-time over JSON-RPC, serving its resident tools (the VM, screen capture, situation)
-back to the backend as `dynamicTools`.
+A tiny fantasy console, shipped two ways from one binary:
 
-- **Platform**: macOS 26+ (requires Apple SpeechTranscriber); Windows via the C# frontend
-- **Swift**: swift-tools-version 6.1, `.swiftLanguageMode(.v5)` on all targets
-- **Rust**: workspace in `crates/` with a single member, `lib` (the `kessel_core` cdylib)
+- `kessel mcp` — an **MCP stdio server** serving the `vm_*` tools, so any
+  MCP-capable agent can drive the write → assemble → run → observe → debug loop.
+- `kessel play <file>` — a **window** (winit + softbuffer) for a human to play
+  the result.
+
+Kessel does no LLM inference and hosts no agent. It used to be a macOS/Windows
+voice assistant that embedded the VM; that frontend and its ACP client were
+removed, leaving only the console.
+
+- **Rust**: workspace in `crates/`, two members — `vm` (`kessel-vm`) and `cli` (`kessel`)
+- **Platforms**: macOS, Windows, Linux. `kessel mcp` is headless-safe.
 
 ## Architecture
 
 ```
-Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
-    -> Swift CLI (main.swift)
-    -> UniFFI bridge
-    -> Rust Agent (lib.rs) — an ACP client
-    -> spawns + drives  ==>  gallium app-server (the backend agent:
-                              ReAct loop, LLM providers, tools, MCP)
-    <-  item/tool/call   <==  backend calls kessel's client tools (vm_*, capture, situation)
-    -> final turn text
-    -> AVSpeechSynthesizer (TTS) -> Speaker
+Agent (Claude Code, codex, …)
+  │  MCP over stdio (line-delimited JSON-RPC 2.0)
+  ▼
+kessel mcp ── crates/cli/src/mcp/ ── VmToolSet ──┐
+                                                 ├─► VmConsole (crates/vm)
+kessel play ── crates/cli/src/play.rs ── VmPlayer ┘      │
+                  winit window, 60 Hz tick               ▼
+                  softbuffer CPU blit          indexed framebuffer
+                                               + sound event log
 ```
 
-The backend is swappable: `gallium` and `codex` both speak the same
-codex-app-server JSON-RPC subset. See **[docs/REFACTOR.md](docs/REFACTOR.md)** for
-the split (kessel = VM + platform + ACP client; the agent core lives in
-`../rs-gallium`).
+The load-bearing rule: **`kessel-vm` is host-free.** It does no I/O beyond the
+files under its working directory, synthesizes no audio, and touches no GPU.
+Drawing is a software rasterizer into an indexed framebuffer; sound is an event
+log. Every backend (a window, an audio device, a future GPU upscaler) lives in
+`crates/cli` or further out. This is what keeps the machine deterministic and
+snapshotable — which is the entire point of the agent loop, since
+`vm_snapshot`/`vm_restore` and frame-exact replay depend on it.
 
-### Rust Crate (`crates/lib`, `kessel_core`)
+Corollary: if you are tempted to put wgpu, cpal, or any device backend into
+`crates/vm`, don't. Put it in the player.
+
+### `crates/vm` — `kessel-vm`
 
 | File | Purpose |
 |------|---------|
-| `lib/src/lib.rs` | `Agent` struct + UniFFI exports. Spawns the backend, forwards config as env, serves client tools, drives turns. Goals, situation, backchannel, and the conversation mirror stay local. |
-| `lib/src/acp_client.rs` | ACP client: spawns `gallium app-server` (etc.) and drives it over line-delimited JSON-RPC, reusing the symmetric `appserver::rpc` transport. Sends `initialize`/`thread/start`/`turn/start`; handles inbound `item/tool/call` + approval requests. `ClientTool`/`HandlerClientTool` wrap any `ToolHandler` to serve it back to the backend. |
-| `lib/src/appserver/rpc.rs` | Symmetric JSON-RPC 2.0 transport over stdio (answers inbound requests on their own threads, delivers inbound responses to outbound requests). Shared by the ACP client. |
-| `lib/src/appserver/mod.rs` | Just re-exports `rpc` now (the in-process server was removed with the agent core). |
-| `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`, `ToolDefinition`, `ToolCallInfo`. No provider layer. |
-| `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
-| `lib/src/tool.rs` | The tool trait surface the VM/capture/situation client tools implement: `ToolHandler`, `ToolResult`, `ToolRegistry`, `ToolAccess`. (The built-in file/bash tools and their permission machinery were removed — the backend owns those now.) |
-| `lib/src/vm/` | Tiny fantasy-console stack VM (isa/vm/device/assembler/png) + a statically-typed Lua-ish front-end (`luax.rs`) + `vm_*` tools. The VM stays resident in kessel and is served to the backend as client tools; playable via `kessel --play`. In the real agent it's rooted at `working_dir`, so `vm_write_source`/`vm_assemble` read & write the actual `game.lua` on disk — the same file the backend's own file tools edit (`VmConsole::set_root`; `VmPlayer`/tests stay in-memory). See **[docs/VM.md](docs/VM.md)**. |
-| `lib/src/capture.rs` | Screen capture / find-window / OCR / list-windows tools (executed macOS-side via Swift; served to the backend as client tools). |
-| `lib/src/situation.rs` | `SituationMessages` ambient-context stack + `read_situation_messages` client tool. Fed by the frontend's periodic window-list poller (`push_situation_message`). |
-| `lib/src/goal.rs` | Session goal state + evaluation (runs on a throwaway backend thread). |
-| `lib/src/skill.rs` | `SkillRegistry`; skill catalogs are injected into the backend thread's developer instructions. |
-| `lib/src/memory.rs` | `ConversationMemory` — the local mirror of the conversation (authoritative history lives in the backend thread). |
-| `lib/src/state_updater.rs` | Rule-based backchannel detection. |
-| `lib/src/agent.udl` | UniFFI interface definition. |
+| `src/lib.rs` | `VmConsole` — the machine plus the authoring workspace (sources, ROMs, snapshots) and the `Observation` record. Disk-backed when a root is set. |
+| `src/isa.rs` | The 34-opcode instruction set. |
+| `src/vm.rs` | The stack machine: memory, stacks, fetch/execute, frame runner. |
+| `src/device.rs` | Varvara-lite device layer — screen, gamepad, rng, storage, debug, console, sound (recorded only). |
+| `src/assembler.rs` | Two-pass textual assembler → ROM + diagnostics. |
+| `src/luax.rs` | The statically-typed Lua-ish front-end that compiles to assembly. |
+| `src/png.rs` | Dependency-free PNG + base64 for framebuffer output. |
+| `src/player.rs` | `VmPlayer` — a standalone handle for human play (load, tick, framebuffer_rgba). |
+| `src/tool.rs` | The crate's own tool surface: `VmTool`, `ToolResult`, `ImageContent`, `VmToolError`. Deliberately not borrowed from any host framework. |
+| `src/tools.rs` | The `vm_*` tools and `VmToolSet` (name-dispatch over the set). |
 
-### Swift Packages (`swift/Sources/`)
+### `crates/cli` — `kessel`
 
-| Package | Purpose |
-|---------|---------|
-| `KesselCli` | Main entry point (text/voice REPL), window-list + capture pollers |
-| `AgentKit` | `AgentSession` — shared agent lifecycle (init, skills, TTS) usable from CLI/iOS |
-| `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
-| `TTS` | AVSpeechSynthesizer wrapper |
-| `ScreenCapture` | WindowManager / window info for the capture client tools |
-| `Util` | Config, Logger, HarmonyParser, SkillLoader |
-| `AgentBridge` | Generated UniFFI Swift bindings |
-| `AgentBridgeFFI` | C module map for FFI |
+| File | Purpose |
+|------|---------|
+| `src/main.rs` | Subcommand dispatch (`mcp`, `play`, help/version) and `--root` parsing. |
+| `src/mcp/mod.rs` | The stdio read → dispatch → write loop. |
+| `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
+| `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
+| `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). |
 
-### Key Patterns
+### Key patterns
 
-- **Kessel runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `KESSEL_ACP_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step`/`observe`/`evaluate_goal` each run a backend turn; `observe`/`evaluate_goal` use throwaway threads so they don't pollute history.
-- **Client tools** (`acp_client::ClientTool`): the VM's `vm_*`, screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident kessel state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
-- `ChatMessage` has `#[serde(skip)]` fields for tool state; use helper methods (`ChatMessage::user()`, `ChatMessage::assistant()`, etc.) not struct literals.
-- The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
-- **Approvals**: `agent_new` takes an optional `MutationApprover` (a UniFFI foreign trait). When one is supplied, the main conversation thread opens with `approvalPolicy: "untrusted"` so the backend escalates every file write / shell command; the request arrives as an inbound `item/{fileChange,commandExecution}/requestApproval` and is routed to the approver, which blocks the turn until it answers allow-once / allow-session / deny. The macOS CLI's `ReplApprover` prompts on stdin in text mode, denies in voice mode (no safe way to confirm by speech), and auto-allows for one-shot `--prompt`. **With no approver the main thread opens `"never"` and the backend runs mutations autonomously** (this is what Windows does today, and it's why unconfigured builds edit files without asking). Throwaway `observe`/`evaluate_goal` threads always use `"never"` — they must not block on a prompt. Kessel has no sandbox.
-- Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback.
-
-## Configuration
-
-YAML configs in `configs/`. Two are shipped, one per backend flavor; the system
-prompt supports the `{language}` template variable.
-
-| config | backend | notes |
-|--------|---------|-------|
-| `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
-| `codex.yaml` | `codex` (cloud) | set `KESSEL_ACP_BACKEND=codex` + `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
-
-```yaml
-llm:
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # forwarded as MODEL_PATH (auto-downloaded by the backend)
-  baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL (cloud)
-  model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
-  apiKey: ""                            # or OPENAI_API_KEY env var
-  inferenceEngine: "gallium"            # forwarded as INFERENCE_ENGINE (backend's local engine: llamacpp | gallium)
-  temperature: 0.7
-  maxTokens: 2048
-  reasoningEffort: "medium"
-
-agent:
-  systemPromptPath: "system-prompt.md"  # relative to config dir; carried into the backend thread as developer instructions
-  maxTurns: 50
-  language: "en"                        # "en" or "ja"
-
-tts:  { enabled: true, voice: "com.apple.voice.enhanced.en-US.Zoe", rate: 0.5, pitchMultiplier: 1.0, volume: 1.0 }
-stt:  { enabled: true, locale: "en-US", censor: false }
-```
-
-The `llm:` block is **forwarded to the backend as environment** — kessel does not
-interpret it beyond that. Backend selection is via `KESSEL_ACP_BACKEND` (env), not
-the config.
-
-## Skills
-
-Skills are `SKILL.md` files with YAML frontmatter loaded from:
-1. `skills/` directory (relative to config file's parent)
-2. `~/.claude/plugins/` (recursive)
-
-A skill's catalog is injected into the backend thread's developer instructions.
+- **Tools are dynamically dispatched.** `Vec<Box<dyn VmTool>>` with hand-written
+  JSON schemas, wrapped by `VmToolSet`. This is why the MCP layer is hand-rolled
+  rather than using `rmcp`: that SDK's value is its `#[tool]` macros over typed
+  Rust fns, which buys nothing here, and it would drag in tokio.
+- **Tool failure ≠ protocol error.** A program that won't compile, faults, or
+  halts is a *successful* `tools/call` whose text reports the failure — the model
+  is meant to read it and debug. `VmToolError` (unknown tool, bad argument) comes
+  back as `isError: true`. JSON-RPC errors are reserved for protocol faults.
+- **The filesystem is the source of truth** when a root is set. `vm_write_source`
+  writes through to disk and `vm_assemble` re-reads on every call, so the agent's
+  own file-editing tools and the VM never diverge. In-memory sources exist only
+  for `VmPlayer` and tests.
+- **stdout is the MCP channel.** Every diagnostic in `kessel mcp` goes to stderr.
+- **The `play` feature is default-on but removable.** `--no-default-features`
+  drops winit/softbuffer for a headless `kessel mcp`.
+- Prefer `vm_run_frames` over looping `vm_run_frame`: an MCP round trip per frame
+  is pure overhead. It stops at the first fault/halt and caps at 1800 frames.
 
 ## Build & Run
 
 ```bash
-# Rust core (cdylib for the frontends)
 cd crates && cargo build --release
 cd crates && cargo test
+cd crates && cargo build --release --no-default-features   # headless
 
-# UniFFI (after .udl changes)
-bash scripts/gen_uniffi.sh          # builds release + regenerates + copies into swift/Sources/AgentBridge
-
-# Swift
-cd swift && swift build
-
-# Run (needs a backend on PATH — install `gallium` from ../rs-gallium)
-cd swift && swift run kessel-cli --config ../configs/gallium.yaml           # local backend
-KESSEL_ACP_BACKEND=codex OPENAI_API_KEY=sk-... \
-  swift run kessel-cli --config ../configs/codex.yaml --text                # cloud backend
+./crates/target/release/kessel mcp --root /path/to/project
+./crates/target/release/kessel play games/tetris.lua
 ```
 
-### `make install` — one binary
-
-`make install` builds and installs the Swift voice app as **`kessel`** into
-`$PREFIX/bin` (default `~/bin`). It links `libkessel_core.dylib` by **absolute
-path** into this repo's `crates/target/release`, so the repo must stay put.
-
-The **agent backend is a separate binary** (`gallium`, built and installed from
-`../rs-gallium`) found on PATH at runtime — kessel spawns `gallium app-server`.
-
-## Windows CLI (`win/`)
-
-A C# console frontend (text/listen REPL) that consumes the `kessel_core` cdylib
-through **UniFFI C# bindings**. It produces `kessel.exe`, which needs
-`uniffi_kessel_core.dll` beside it (the csproj copies the cdylib under that name).
-Because kessel no longer does in-process inference, the cdylib has **no C++ deps
-and no feature flags** — an ordinary `cargo build` with any toolchain.
-
-```bash
-# 1. Build the cdylib (kessel_core.dll)
-scripts/build-win-local.bat
-#    -> crates/target/release/kessel_core.dll
-
-# 2. Generate C# bindings into win/vendor/ (install once:
-#    cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.9.0+v0.28.3)
-bash scripts/gen_uniffi_cs.sh
-
-# 3. Build & run the C# frontend (net8.0, x64). Copies the cdylib next to the exe
-#    as uniffi_kessel_core.dll. Emits kessel.exe.
-dotnet build win/KesselCli/KesselCli.csproj -c Release
-win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/gallium.yaml
-```
-
-- `win/KesselCli/Program.cs` — REPL with two modes toggled by **Shift+Tab**: `text` ⇄ `listen`. Commands: `/listen`, `/reset`, `/history`, `/help`, `/quit`.
-- `win/KesselCli/SpeechInput.cs` — STT via `System.Speech`. `win/KesselCli/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`.
-- `win/KesselCli/PlayWindow.cs` — `kessel --play <file.ux|.asm>` opens a WinForms game window backed by the standalone `VmPlayer` (no LLM). macOS analogue: `swift/Sources/KesselCli/PlayWindow.swift`. See **[docs/VM.md](docs/VM.md)**.
-- `win/KesselCli/DotEnv.cs` — loads a local `.env` at startup. `win/KesselCli/AppConfig.cs` — YAML loader (config resolution: `--config` → `KESSEL_CONFIG` → `~/.cache/kessel/config.yml` → `configs/gallium.yaml`).
-
-## ACP client mode (`lib/src/acp_client.rs`)
-
-`agent_new` spawns the backend and drives it as a **whole-turn** ACP client over
-line-delimited JSON-RPC 2.0 on the child's stdio — the mirror of the
-codex-app-server protocol.
-
-| Method | Direction | Purpose |
-|--------|-----------|---------|
-| `initialize` | out | capability negotiation |
-| `thread/start` | out | open a thread (cwd, model, developer instructions, approval policy, MCP config) |
-| `turn/start` | out | run one turn, block until it completes |
-| `item/tool/call` | **in** | backend invokes one of kessel's client tools |
-| `item/{commandExecution,fileChange}/requestApproval` | **in** | backend asks kessel to permit a mutation |
-| `item/completed` | **in** | carries the turn's final `agentMessage` text |
-
-Key points:
-
-- **The transport is bidirectional** (`rpc.rs`): inbound requests are dispatched on their own threads so a `turn/start` in flight can be answered by client-tool calls the backend originates.
-- `config.mcp_servers` is forwarded to the backend via `thread/start`'s `config.mcp_servers`; the backend connects them.
-- Known degradations vs. the old in-process agent: `step` returns text only (no keyword hints / token counts); `observe`/`step_with_allowed_tools` can't restrict the backend's own tool set (advisory only).
+`make install` builds release and copies `kessel` into `$PREFIX/bin` (default
+`~/bin`). The binary is self-contained — no dylib, no separate backend process.
 
 ## Project Structure
 
 ```
 kessel/
-├── configs/                    # gallium.yaml (local), codex.yaml (cloud), system-prompt.md
-├── skills/                     # project-local skills
-├── crates/lib/src/             # kessel_core (cdylib): ACP client, VM, client tools, orchestration
-├── swift/Sources/              # KesselCli, AgentKit, Audio, TTS, ScreenCapture, Util, AgentBridge(FFI)
-├── win/KesselCli/              # C# frontend
-├── scripts/                    # gen_uniffi{,_cs}.sh, build-win-local.bat, build-ios.sh
-└── docs/                       # REFACTOR.md, VM.md, HARNESS.md, VOICE_PROCESSING_IO.md
+├── crates/vm/          kessel-vm: the console (host-free)
+├── crates/cli/         kessel: `mcp` + `play`
+├── games/              sample games / luax reference corpus
+└── docs/VM.md          machine, ISA, devices, luax, agent loop
 ```
+
+## Testing notes
+
+- `crates/vm/tests/games_compile.rs` guards every file in `games/`: each must
+  compile with no diagnostics and survive 300 frames under both idle and rotating
+  button input without faulting. Sources are `include_str!`'d, so renaming a game
+  breaks the build rather than silently skipping it.
+- `crates/cli/src/mcp/server.rs` has a full write → assemble → load → run test
+  over the MCP surface — the thing that actually has to work for a real host.
+- `blit` in `play.rs` is tested separately (channel order, integer upscale,
+  letterboxing, undersized window) because a wrong stride there produces a
+  plausible-but-wrong picture rather than a crash.
 
 ## Troubleshooting
 
-**"library 'kessel_core' not found"**: `cd crates && cargo build --release`
+**`kessel play` reports diagnostics and exits**: the game didn't compile. That's
+deliberate — a blank window would be worse. Fix the source and re-run, or keep
+the window open and press `R` to reload.
 
-**"no such module 'kessel_coreFFI'"**: `bash scripts/gen_uniffi.sh`
-
-**UniFFI checksum mismatch**: regenerate and the script copies for you: `bash scripts/gen_uniffi.sh`
-
-**"spawn backend 'gallium': No such file"**: the backend isn't on PATH. Build/install `gallium` from `../rs-gallium`, or set `KESSEL_ACP_BACKEND` to another codex-app-server binary (e.g. `codex`).
-
-**Model OOM / local inference issues**: these are the **backend's** concern now — tune the model/quant in the backend (`../rs-gallium`). Kessel only forwards `MODEL_PATH`/`INFERENCE_ENGINE`.
+**An agent can't see the VM tools**: check the agent spawned `kessel mcp` (not
+bare `kessel`) and that stdout isn't being polluted — the protocol lives there.

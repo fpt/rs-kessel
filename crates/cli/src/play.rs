@@ -1,0 +1,376 @@
+//! `kessel play` — a window, a keyboard, and a 60 Hz tick.
+//!
+//! Presentation only. The console rasterizes into its own indexed framebuffer
+//! and hands us RGBA; all this module does is nearest-neighbour upscale it to
+//! the window and map keys onto the gamepad bitfield. That's why it uses
+//! `softbuffer` (a CPU surface) rather than a GPU stack: there is no pipeline to
+//! build for a 128×128 image, and keeping pixels on the CPU means what you see
+//! is exactly the buffer an agent would get back from `vm_get_framebuffer`.
+//!
+//! Sound is silent by design — the VM records sound *events* rather than
+//! synthesizing audio, so a game's `sfx()` calls show up in the observation
+//! stream but nothing is played here yet.
+
+use std::num::NonZeroU32;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use kessel_vm::device::{
+    BTN_A, BTN_B, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SELECT, BTN_START, BTN_UP,
+};
+use kessel_vm::VmPlayer;
+
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Window, WindowId};
+
+/// Target frame time. The console is defined at 60 Hz — its frame counter and
+/// any timing a game does assume it — so this paces the tick rather than
+/// rendering as fast as the display allows.
+const FRAME_TIME: Duration = Duration::from_nanos(1_000_000_000 / 60);
+
+/// Initial window scale. 128×128 is unusably small on a modern display.
+const DEFAULT_SCALE: u32 = 5;
+
+/// Load `path` into a player and run the game window until the user quits.
+pub fn run(path: PathBuf) -> Result<(), String> {
+    let source =
+        std::fs::read_to_string(&path).map_err(|e| format!("read '{}': {e}", path.display()))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+
+    let player = VmPlayer::new();
+    // A game that won't load is a hard error with the compiler's diagnostics —
+    // opening a blank window and leaving the user to guess would be worse.
+    let err = player.load(source, name.clone());
+    if !err.is_empty() {
+        return Err(format!("{}:\n{err}", path.display()));
+    }
+
+    let event_loop = EventLoop::new().map_err(|e| format!("create event loop: {e}"))?;
+    // Poll rather than Wait: the console advances on its own clock, not only
+    // when input arrives.
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    let mut app = App {
+        player,
+        path,
+        title: name,
+        buttons: 0,
+        window: None,
+        surface: None,
+        next_frame: Instant::now(),
+        dim: 0,
+    };
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| format!("event loop: {e}"))
+}
+
+struct App {
+    player: VmPlayer,
+    /// Kept so `R` can recompile the file from disk — the edit-and-see loop a
+    /// human wants while working on a game.
+    path: PathBuf,
+    title: String,
+    buttons: u8,
+    window: Option<std::sync::Arc<Window>>,
+    surface: Option<softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>>,
+    next_frame: Instant,
+    dim: u32,
+}
+
+impl App {
+    /// Reload the source from disk and restart the game. Reports failures to
+    /// stderr and keeps the previous ROM unloaded, matching `VmPlayer::load`.
+    fn reload(&mut self) {
+        let source = match std::fs::read_to_string(&self.path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("kessel play: reload failed: {e}");
+                return;
+            }
+        };
+        let err = self.player.load(source, self.title.clone());
+        if err.is_empty() {
+            eprintln!("kessel play: reloaded {}", self.path.display());
+        } else {
+            eprintln!("kessel play: reload failed:\n{err}");
+        }
+    }
+
+    /// Blit the console's framebuffer into the window, scaled to fit with
+    /// nearest-neighbour so pixels stay crisp rather than blurred.
+    fn redraw(&mut self) {
+        let (Some(window), Some(surface)) = (self.window.as_ref(), self.surface.as_mut()) else {
+            return;
+        };
+        let size = window.inner_size();
+        let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
+            return; // minimised
+        };
+        if surface.resize(w, h).is_err() {
+            return;
+        }
+        let Ok(mut buffer) = surface.buffer_mut() else {
+            return;
+        };
+
+        match self.player.framebuffer_rgba() {
+            Some(fb) => blit(&mut buffer, size.width, size.height, &fb, self.dim),
+            // No ROM (a failed reload) — clear rather than leaving a stale frame.
+            None => buffer.fill(0),
+        }
+        let _ = buffer.present();
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        self.dim = self.player.screen_dim();
+        let side = self.dim * DEFAULT_SCALE;
+        let attrs = Window::default_attributes()
+            .with_title(format!("kessel — {}", self.title))
+            .with_inner_size(winit::dpi::LogicalSize::new(side, side));
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => std::sync::Arc::new(w),
+            Err(e) => {
+                eprintln!("kessel play: create window: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        match softbuffer::Context::new(window.clone())
+            .and_then(|ctx| softbuffer::Surface::new(&ctx, window.clone()))
+        {
+            Ok(s) => self.surface = Some(s),
+            Err(e) => {
+                eprintln!("kessel play: create surface: {e}");
+                event_loop.exit();
+                return;
+            }
+        }
+        self.window = Some(window);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::KeyboardInput { event, .. } => {
+                let PhysicalKey::Code(code) = event.physical_key else {
+                    return;
+                };
+                let pressed = event.state == ElementState::Pressed;
+
+                if pressed && code == KeyCode::Escape {
+                    event_loop.exit();
+                    return;
+                }
+                // Reload on the key *release* so holding R doesn't recompile
+                // dozens of times a second.
+                if !pressed && code == KeyCode::KeyR {
+                    self.reload();
+                    return;
+                }
+
+                if let Some(bit) = button_for(code) {
+                    if pressed {
+                        self.buttons |= bit;
+                    } else {
+                        self.buttons &= !bit;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Advance at most one frame per 1/60s of wall clock. Catching up on a
+        // backlog after a stall would fast-forward the game, so a late frame is
+        // simply dropped.
+        let now = Instant::now();
+        if now < self.next_frame {
+            return;
+        }
+        self.next_frame = now + FRAME_TIME;
+
+        self.player.tick(self.buttons);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+}
+
+/// Nearest-neighbour upscale `src` (a `dim`×`dim` RGBA image) into `dst` (a
+/// `dst_w`×`dst_h` buffer of `0RGB` u32s), centred and letterboxed.
+///
+/// The scale is an integer so pixels stay square and crisp: a fractional scale
+/// would make some source pixels one output pixel wider than their neighbours,
+/// which on 8×8 sprite art is glaring.
+fn blit(dst: &mut [u32], dst_w: u32, dst_h: u32, src: &[u8], dim: u32) {
+    dst.fill(0);
+    if dim == 0 {
+        return;
+    }
+    let scale = (dst_w / dim).min(dst_h / dim).max(1);
+    let draw = dim * scale;
+    // A window smaller than one console pixel per pixel still gets the
+    // top-left corner rather than an out-of-bounds write.
+    let ox = dst_w.saturating_sub(draw) / 2;
+    let oy = dst_h.saturating_sub(draw) / 2;
+
+    for y in 0..draw.min(dst_h) {
+        let src_row = (y / scale) * dim;
+        let dst_row = ((oy + y) * dst_w) as usize;
+        for x in 0..draw.min(dst_w) {
+            let s = ((src_row + x / scale) * 4) as usize;
+            // softbuffer wants 0RGB packed into a u32; the console's alpha is
+            // always opaque, so it is simply dropped.
+            dst[dst_row + (ox + x) as usize] =
+                (src[s] as u32) << 16 | (src[s + 1] as u32) << 8 | (src[s + 2] as u32);
+        }
+    }
+}
+
+/// Map a physical key onto a gamepad bit. Arrows and WASD both drive the d-pad;
+/// Z/J and X/K cover the two common right-hand layouts.
+fn button_for(code: KeyCode) -> Option<u8> {
+    Some(match code {
+        KeyCode::ArrowLeft | KeyCode::KeyA => BTN_LEFT,
+        KeyCode::ArrowRight | KeyCode::KeyD => BTN_RIGHT,
+        KeyCode::ArrowUp | KeyCode::KeyW => BTN_UP,
+        KeyCode::ArrowDown | KeyCode::KeyS => BTN_DOWN,
+        KeyCode::KeyZ | KeyCode::KeyJ | KeyCode::Space => BTN_A,
+        KeyCode::KeyX | KeyCode::KeyK => BTN_B,
+        KeyCode::Enter => BTN_START,
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => BTN_SELECT,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_key_layouts_reach_the_same_buttons() {
+        assert_eq!(button_for(KeyCode::ArrowLeft), button_for(KeyCode::KeyA));
+        assert_eq!(button_for(KeyCode::KeyZ), button_for(KeyCode::KeyJ));
+        assert_eq!(button_for(KeyCode::KeyX), button_for(KeyCode::KeyK));
+        assert_eq!(button_for(KeyCode::Enter), Some(BTN_START));
+        assert!(button_for(KeyCode::F1).is_none());
+    }
+
+    /// Every d-pad and face button must be reachable, or a game becomes
+    /// unplayable in a way no test of the VM itself would catch.
+    #[test]
+    fn every_console_button_is_bound() {
+        let bound: u8 = [
+            KeyCode::ArrowLeft,
+            KeyCode::ArrowRight,
+            KeyCode::ArrowUp,
+            KeyCode::ArrowDown,
+            KeyCode::KeyZ,
+            KeyCode::KeyX,
+            KeyCode::Enter,
+            KeyCode::ShiftLeft,
+        ]
+        .into_iter()
+        .filter_map(button_for)
+        .fold(0, |acc, b| acc | b);
+
+        let all = BTN_LEFT | BTN_RIGHT | BTN_UP | BTN_DOWN | BTN_A | BTN_B | BTN_START | BTN_SELECT;
+        assert_eq!(bound, all, "some console button has no key");
+    }
+
+    /// Channel order is the bug that would show as a plausible-but-wrong picture
+    /// (a blue game instead of a red one), so pin it: RGBA in, 0RGB out.
+    #[test]
+    fn blit_packs_rgb_in_the_right_order() {
+        let src = vec![0xAA, 0xBB, 0xCC, 0xFF]; // 1×1 RGBA
+        let mut dst = vec![0u32; 1];
+        blit(&mut dst, 1, 1, &src, 1);
+        assert_eq!(dst[0], 0x00AA_BBCC);
+    }
+
+    /// A 2× window must repeat each source pixel in a 2×2 block — not smear or
+    /// skip, which a stride mistake would do.
+    #[test]
+    fn blit_upscales_by_an_integer_factor() {
+        // 2×2 source: red, green / blue, white.
+        let src = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, // row 0
+            0, 0, 255, 255, 255, 255, 255, 255, // row 1
+        ];
+        let mut dst = vec![0u32; 4 * 4];
+        blit(&mut dst, 4, 4, &src, 2);
+
+        let at = |x: usize, y: usize| dst[y * 4 + x];
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(at(x, y), 0x00FF_0000, "top-left block should be red");
+        }
+        assert_eq!(at(2, 0), 0x0000_FF00, "top-right green");
+        assert_eq!(at(0, 2), 0x0000_00FF, "bottom-left blue");
+        assert_eq!(at(3, 3), 0x00FF_FFFF, "bottom-right white");
+    }
+
+    /// A non-multiple window letterboxes: the image is centred and the margin
+    /// stays black rather than the picture stretching.
+    #[test]
+    fn blit_centres_and_letterboxes() {
+        let src = vec![255, 255, 255, 255]; // 1×1 white
+        let mut dst = vec![0u32; 5 * 3];
+        blit(&mut dst, 5, 3, &src, 1);
+
+        // scale = min(5,3) = 3 → a 3×3 block centred in 5 wide, 3 tall.
+        let at = |x: usize, y: usize| dst[y * 5 + x];
+        assert_eq!(at(0, 0), 0, "left margin stays black");
+        assert_eq!(at(4, 0), 0, "right margin stays black");
+        for y in 0..3 {
+            for x in 1..4 {
+                assert_eq!(at(x, y), 0x00FF_FFFF, "({x},{y}) should be drawn");
+            }
+        }
+    }
+
+    /// A window smaller than the console must not write out of bounds — the
+    /// case a naive scale calculation panics on.
+    #[test]
+    fn blit_survives_a_window_smaller_than_the_console() {
+        let src = vec![0u8; 128 * 128 * 4];
+        let mut dst = vec![0u32; 10 * 10];
+        blit(&mut dst, 10, 10, &src, 128); // would overflow if unclamped
+    }
+
+    /// A missing file is a clean error, not a panic or a blank window.
+    #[test]
+    fn missing_file_is_reported() {
+        let err = run(PathBuf::from("/definitely/not/here.lua")).unwrap_err();
+        assert!(err.contains("read"), "{err}");
+    }
+
+    /// A source that doesn't compile fails before any window is created, with
+    /// the diagnostics attached.
+    #[test]
+    fn broken_source_fails_with_diagnostics() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("kessel-broken-{}.lua", std::process::id()));
+        std::fs::write(&path, "function draw() this is not luax end").unwrap();
+        let err = run(path.clone()).unwrap_err();
+        assert!(
+            err.contains(&path.display().to_string()),
+            "names the file: {err}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+}

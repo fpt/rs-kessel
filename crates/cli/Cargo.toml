@@ -1,0 +1,29 @@
+[package]
+name = "kessel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The kessel fantasy console: an MCP server for agents (`kessel mcp`) and a playable window for humans (`kessel play`)."
+
+[[bin]]
+name = "kessel"
+path = "src/main.rs"
+
+[features]
+# The player is on by default, but `--no-default-features` yields a pure
+# headless binary — `kessel mcp` on a server or in a container has no business
+# linking a window system.
+default = ["play"]
+play = ["dep:winit", "dep:softbuffer"]
+
+[dependencies]
+kessel-vm = { path = "../vm" }
+serde.workspace = true
+serde_json.workspace = true
+
+# Presentation only. The console rasterizes into an indexed framebuffer itself,
+# so the window layer just upscales and blits pixels — no GPU pipeline needed,
+# and nothing here can affect what the VM computes.
+winit = { version = "0.30", optional = true }
+softbuffer = { version = "0.4", optional = true }

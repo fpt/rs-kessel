@@ -2,22 +2,8 @@
 target/
 **/*.rs.bk
 
-# Swift
-.build/
-.swiftpm/
-*.xcodeproj
-*.xcworkspace
-DerivedData/
-
-# Models
-models/
-*.gguf
-*.bin
-
-# Config
+# Env
 .env
-configs/local.yaml
-configs/production.yaml
 
 # IDE
 .vscode/
@@ -31,6 +17,3 @@ configs/production.yaml
 
 # Logs
 *.log
-
-# Generated
-vendor/uniffi-swift/
