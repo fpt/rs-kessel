@@ -1,5 +1,5 @@
 //! The shipped sample games (`games/*.lua`) are the "adapt this" references the
-//! model is pointed at, and the human-playable `kessel play` demos. Guard them
+//! model is pointed at, and the human-playable `kessel run` demos. Guard them
 //! so a luax/assembler/VM change can't silently break the examples: each must
 //! (1) run the full `.lua` → luax compile → assemble → ROM pipeline with no
 //! diagnostics, and (2) execute 300 frames — under both idle and a rotating

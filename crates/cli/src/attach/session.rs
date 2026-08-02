@@ -1,4 +1,4 @@
-//! Session files: how `kessel play` finds a running `kessel mcp`.
+//! Session files: how `kessel attach` finds a running `kessel mcp`.
 //!
 //! Each server writes one small JSON file into the user's cache directory,
 //! naming the loopback port it listens on. Discovery prefers a session whose
@@ -155,7 +155,7 @@ pub enum Discovery {
 ///
 /// `root` (when given) picks a specific one. Otherwise prefer a session rooted
 /// at the current directory — the overwhelmingly common case, since you run
-/// `kessel play` from the project you're working in — and fall back to the only
+/// `kessel attach` from the project you're working in — and fall back to the only
 /// live session if there is exactly one.
 #[cfg(feature = "play")]
 pub fn discover(root: Option<&Path>, is_live: impl Fn(&Session) -> bool) -> Discovery {
@@ -304,7 +304,7 @@ mod tests {
     }
 
     /// Ambiguity is resolved in favour of where you are, which is why running
-    /// `kessel play` from your project just works.
+    /// `kessel attach` from your project just works.
     #[test]
     fn the_cwd_session_wins_over_another_live_one() {
         let dir = scratch("cwd-wins");

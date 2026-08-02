@@ -1,4 +1,4 @@
-//! `kessel play` — a window, a keyboard, and a 60 Hz tick.
+//! `kessel run` / `kessel attach` — a window, a keyboard, and a 60 Hz tick.
 //!
 //! Presentation only. The console rasterizes into its own indexed framebuffer
 //! and hands us RGBA; all this module does is nearest-neighbour upscale it to
@@ -159,21 +159,21 @@ impl App {
         let Source::Local { player, path, name } = &self.source else {
             // Attached: the agent owns what's loaded. Reloading from here would
             // yank its ROM out mid-run, which is a step past sharing a timeline.
-            eprintln!("kessel play: attached to an agent session — it controls what's loaded");
+            eprintln!("kessel attach: the agent owns what's loaded — reload does nothing here");
             return;
         };
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("kessel play: reload failed: {e}");
+                eprintln!("kessel run: reload failed: {e}");
                 return;
             }
         };
         let err = player.load(source, name.clone());
         if err.is_empty() {
-            eprintln!("kessel play: reloaded {}", path.display());
+            eprintln!("kessel run: reloaded {}", path.display());
         } else {
-            eprintln!("kessel play: reload failed:\n{err}");
+            eprintln!("kessel run: reload failed:\n{err}");
         }
     }
 
@@ -231,7 +231,7 @@ impl ApplicationHandler for App {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => std::sync::Arc::new(w),
             Err(e) => {
-                eprintln!("kessel play: create window: {e}");
+                eprintln!("kessel: create window: {e}");
                 event_loop.exit();
                 return;
             }
@@ -241,7 +241,7 @@ impl ApplicationHandler for App {
         {
             Ok(s) => self.surface = Some(s),
             Err(e) => {
-                eprintln!("kessel play: create surface: {e}");
+                eprintln!("kessel: create surface: {e}");
                 event_loop.exit();
                 return;
             }

@@ -142,7 +142,7 @@ impl VmTool for WriteSource {
         // DON'T port: sprites are `sprite NAME { rows }` declarations (not table
         // literals), entry points are `update`/`draw` (NOT `_update`/`_draw`),
         // and `cls` requires a colour argument.
-        r#"Write source for the fantasy-console VM to a named file. When a working directory is set the file is written ON DISK — the same file your own file-editing tools, a human editor, and `kessel play` see — so for a small change to an existing game, edit that file directly with your file tools and just call vm_assemble. Use vm_write_source for a first draft or a full rewrite. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
+        r#"Write source for the fantasy-console VM to a named file. When a working directory is set the file is written ON DISK — the same file your own file-editing tools, a human editor, and `kessel run` see — so for a small change to an existing game, edit that file directly with your file tools and just call vm_assemble. Use vm_write_source for a first draft or a full rewrite. A '.asm' path is stack assembly; a '.lua' path is a small statically-typed Lua-ish dialect (NOT full PICO-8/Lua: no tables/metatables/closures/recursion). Overwrites any previous source at that path and invalidates its built ROM.
 
 luax essentials (a '.lua' file):
 - Entry points (vector-driven, no main loop): `function init()` runs once; `function update()` then `function draw()` run each frame. Names are bare — NOT `_update`/`_draw`.

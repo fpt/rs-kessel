@@ -6,7 +6,7 @@ playable by a human. Lives in `crates/vm/` (the `kessel-vm` crate). Pure Rust,
 deterministic, snapshotable.
 
 The `vm_*` tools reach an agent over MCP: `kessel mcp` serves them on stdio, so
-any MCP-capable agent can drive the loop. `kessel play <file>` opens the same
+any MCP-capable agent can drive the loop. `kessel run <file>` opens the same
 console in a window for a human.
 
 ## Machine
@@ -107,7 +107,7 @@ SELECT 0x80`. Screen is 128×128, 16-colour (default PICO-8 palette).
 file-editing tools and `vm_assemble` operate on the same file: for a small
 tweak, edit `game.lua` directly and just call `vm_assemble`; for a first draft
 or rewrite, use `vm_write_source`. Model-supplied paths are confined to the root
-(no `..`/absolute escapes). `VmPlayer` (`kessel play`) and the test suites set no
+(no `..`/absolute escapes). `VmPlayer` (`kessel run`) and the test suites set no
 root and keep sources in memory, unchanged.
 
 **Prefer `vm_run_frames` over a loop of `vm_run_frame`.** One call plays a whole
@@ -378,23 +378,23 @@ end
 sprites, a `tilemap` level, gravity, `solid()` collision, and a jump — the kind
 of complete example to adapt.
 
-## Playing a game (`kessel play`)
+## Playing a game (`kessel run`)
 
-`kessel play` renders a ROM in a native window, so the games a model authors are
+`kessel run` renders a ROM in a native window, so the games a model authors are
 **human-playable**:
 
 ```bash
-kessel play games/2048.lua      # 2048 — arrows slide tiles, A starts a new game
-kessel play games/bounce.lua    # a self-animating demo
-kessel play games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
-kessel play games/snake.lua     # grid snake — arrows steer, eat food, A restarts
-kessel play games/brick.lua     # Breakout — arrows move the paddle
-kessel play games/shooter.lua   # vertical shooter — arrows move, A fires
-kessel play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
-kessel play games/rogue.lua     # top-down action — arrows move, A swings a sword
-kessel play games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
-kessel play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
-kessel play games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
+kessel run games/2048.lua      # 2048 — arrows slide tiles, A starts a new game
+kessel run games/bounce.lua    # a self-animating demo
+kessel run games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
+kessel run games/snake.lua     # grid snake — arrows steer, eat food, A restarts
+kessel run games/brick.lua     # Breakout — arrows move the paddle
+kessel run games/shooter.lua   # vertical shooter — arrows move, A fires
+kessel run games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
+kessel run games/rogue.lua     # top-down action — arrows move, A swings a sword
+kessel run games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
+kessel run games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
+kessel run games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:
@@ -434,12 +434,12 @@ default `START` = Return) freezes the game.
 
 ### Attaching to an agent's session
 
-`kessel play` with **no file** joins a running `kessel mcp` and drives the
+`kessel attach` joins a running `kessel mcp` and drives the
 agent's own console, so you can play the work in progress:
 
 ```bash
-kessel play                    # joins the running session
-kessel play --root ./my-game   # ...that one, if several are running
+kessel attach                  # joins the running session
+kessel attach ./my-game        # ...that one, if several are running
 ```
 
 You share one machine and one timeline with the agent. Its
@@ -454,7 +454,7 @@ attached, agent runs are exactly as deterministic as before.
 
 ### How it works
 
-`kessel play` loads a `.lua`/`.asm` file into a `VmPlayer` (`crates/vm/src/player.rs`),
+`kessel run` loads a `.lua`/`.asm` file into a `VmPlayer` (`crates/vm/src/player.rs`),
 opens a window with `winit`, and on a 60 Hz tick calls `tick(buttons)` +
 `framebuffer_rgba()`, blitting the 128×128 framebuffer scaled up with
 nearest-neighbour into a `softbuffer` CPU surface (`crates/cli/src/play.rs`).

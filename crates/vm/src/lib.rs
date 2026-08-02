@@ -120,7 +120,7 @@ impl VmConsole {
 
     /// Write a source file. With a working directory set this writes through to
     /// disk, so the file the model authored is the same one the backend's file
-    /// tools and `kessel play` see; otherwise it is kept in memory.
+    /// tools and `kessel run` see; otherwise it is kept in memory.
     pub fn write_source(&mut self, path: &str, source: &str) -> Result<(), String> {
         if let Some(root) = &self.root {
             let full = resolve_in_root(root, path)?;

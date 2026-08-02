@@ -6,7 +6,7 @@ A tiny fantasy console, shipped two ways from one binary:
 
 - `kessel mcp` — an **MCP stdio server** serving the `vm_*` tools, so any
   MCP-capable agent can drive the write → assemble → run → observe → debug loop.
-- `kessel play <file>` — a **window** (winit + softbuffer) for a human to play
+- `kessel run <file>` — a **window** (winit + softbuffer) for a human to play
   the result.
 
 Kessel does no LLM inference and hosts no agent. It used to be a macOS/Windows
@@ -24,7 +24,7 @@ Agent (Claude Code, codex, …)
   ▼
 kessel mcp ── crates/cli/src/mcp/ ── VmToolSet ──┐
                                                  ├─► VmConsole (crates/vm)
-kessel play ── crates/cli/src/play.rs ── VmPlayer ┘      │
+kessel run  ── crates/cli/src/play.rs ── VmPlayer ┘      │
                   winit window, 60 Hz tick               ▼
                   softbuffer CPU blit          indexed framebuffer
                                                + sound event log
@@ -70,9 +70,9 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/attach/server.rs` | Loopback listener inside `kessel mcp`; each TICK locks the shared console. |
 | `src/attach/client.rs` | `AttachClient` — background tick thread, latest-frame slot. |
 
-### Attaching (`kessel play` with no file)
+### Attaching (`kessel attach`)
 
-`kessel play` joins a running `kessel mcp` and drives **the agent's own
+`kessel attach` joins a running `kessel mcp` and drives **the agent's own
 `VmConsole`** — one machine, one timeline, two drivers. This is deliberate and
 was chosen with the consequences understood:
 
@@ -81,7 +81,7 @@ was chosen with the consequences understood:
 - The player's inputs land in the agent's observations, so a run with someone
   attached is not reproducible.
 
-Do not "fix" these — they are what sharing one machine means. `kessel play <file>`
+Do not "fix" these — they are what sharing one machine means. `kessel run <file>`
 is the independent-timeline path.
 
 Two invariants hold it together:
@@ -127,7 +127,7 @@ cd crates && cargo test
 cd crates && cargo build --release --no-default-features   # headless
 
 ./crates/target/release/kessel mcp --root /path/to/project
-./crates/target/release/kessel play games/tetris.lua
+./crates/target/release/kessel run games/tetris.lua
 ```
 
 `make install` builds release and copies `kessel` into `$PREFIX/bin` (default
@@ -157,7 +157,7 @@ kessel/
 
 ## Troubleshooting
 
-**`kessel play` reports diagnostics and exits**: the game didn't compile. That's
+**`kessel run` reports diagnostics and exits**: the game didn't compile. That's
 deliberate — a blank window would be worse. Fix the source and re-run, or keep
 the window open and press `R` to reload.
 
