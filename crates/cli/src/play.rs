@@ -34,6 +34,67 @@ const FRAME_TIME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// Initial window scale. 128×128 is unusably small on a modern display.
 const DEFAULT_SCALE: u32 = 5;
 
+/// What the window is driving.
+///
+/// `Local` owns its VM outright. `Attached` drives the machine inside a running
+/// `kessel mcp`, which the agent is driving too — see [`crate::attach`] for what
+/// sharing one timeline means.
+enum Source {
+    Local {
+        player: VmPlayer,
+        /// Kept so `R` can recompile the file from disk — the edit-and-see loop
+        /// a human wants while working on a game.
+        path: PathBuf,
+        name: String,
+    },
+    Attached(crate::attach::AttachClient),
+}
+
+impl Source {
+    fn screen_dim(&self) -> u32 {
+        match self {
+            Source::Local { player, .. } => player.screen_dim(),
+            Source::Attached(c) => c.screen_dim(),
+        }
+    }
+
+    /// Advance one frame. For `Attached` this only *records* the buttons — the
+    /// client's worker thread owns the round trip, so the event loop never
+    /// blocks on the agent.
+    fn tick(&self, buttons: u8) {
+        match self {
+            Source::Local { player, .. } => player.tick(buttons),
+            Source::Attached(c) => c.set_buttons(buttons),
+        }
+    }
+
+    fn framebuffer_rgba(&self) -> Option<Vec<u8>> {
+        match self {
+            Source::Local { player, .. } => player.framebuffer_rgba(),
+            Source::Attached(c) => c.framebuffer_rgba(),
+        }
+    }
+
+    /// Window title, including live state so it's obvious when the agent has
+    /// taken the game away from you.
+    fn title(&self) -> String {
+        match self {
+            Source::Local { name, .. } => format!("kessel — {name}"),
+            Source::Attached(c) => {
+                if !c.is_connected() {
+                    "kessel — session ended".to_string()
+                } else if !c.has_rom() {
+                    "kessel — attached (agent has no ROM loaded)".to_string()
+                } else if c.is_paused() {
+                    "kessel — attached (paused)".to_string()
+                } else {
+                    "kessel — attached to agent session".to_string()
+                }
+            }
+        }
+    }
+}
+
 /// Load `path` into a player and run the game window until the user quits.
 pub fn run(path: PathBuf) -> Result<(), String> {
     let source =
@@ -51,20 +112,28 @@ pub fn run(path: PathBuf) -> Result<(), String> {
         return Err(format!("{}:\n{err}", path.display()));
     }
 
+    run_window(Source::Local { player, path, name })
+}
+
+/// Attach to a running `kessel mcp` and play its console.
+pub fn run_attached(root: Option<&std::path::Path>) -> Result<(), String> {
+    run_window(Source::Attached(crate::attach::attach(root)?))
+}
+
+fn run_window(source: Source) -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| format!("create event loop: {e}"))?;
     // Poll rather than Wait: the console advances on its own clock, not only
     // when input arrives.
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = App {
-        player,
-        path,
-        title: name,
+        source,
         buttons: 0,
         window: None,
         surface: None,
         next_frame: Instant::now(),
         dim: 0,
+        shown_title: String::new(),
     };
     event_loop
         .run_app(&mut app)
@@ -72,34 +141,51 @@ pub fn run(path: PathBuf) -> Result<(), String> {
 }
 
 struct App {
-    player: VmPlayer,
-    /// Kept so `R` can recompile the file from disk — the edit-and-see loop a
-    /// human wants while working on a game.
-    path: PathBuf,
-    title: String,
+    source: Source,
     buttons: u8,
     window: Option<std::sync::Arc<Window>>,
     surface: Option<softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>>,
     next_frame: Instant,
     dim: u32,
+    /// Last title pushed to the window, so we only call into the window system
+    /// when it actually changes.
+    shown_title: String,
 }
 
 impl App {
     /// Reload the source from disk and restart the game. Reports failures to
     /// stderr and keeps the previous ROM unloaded, matching `VmPlayer::load`.
     fn reload(&mut self) {
-        let source = match std::fs::read_to_string(&self.path) {
+        let Source::Local { player, path, name } = &self.source else {
+            // Attached: the agent owns what's loaded. Reloading from here would
+            // yank its ROM out mid-run, which is a step past sharing a timeline.
+            eprintln!("kessel play: attached to an agent session — it controls what's loaded");
+            return;
+        };
+        let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("kessel play: reload failed: {e}");
                 return;
             }
         };
-        let err = self.player.load(source, self.title.clone());
+        let err = player.load(source, name.clone());
         if err.is_empty() {
-            eprintln!("kessel play: reloaded {}", self.path.display());
+            eprintln!("kessel play: reloaded {}", path.display());
         } else {
             eprintln!("kessel play: reload failed:\n{err}");
+        }
+    }
+
+    /// Keep the title in step with the session state, without hammering the
+    /// window system every frame.
+    fn sync_title(&mut self) {
+        let title = self.source.title();
+        if title != self.shown_title {
+            if let Some(w) = &self.window {
+                w.set_title(&title);
+            }
+            self.shown_title = title;
         }
     }
 
@@ -120,9 +206,10 @@ impl App {
             return;
         };
 
-        match self.player.framebuffer_rgba() {
+        match self.source.framebuffer_rgba() {
             Some(fb) => blit(&mut buffer, size.width, size.height, &fb, self.dim),
-            // No ROM (a failed reload) — clear rather than leaving a stale frame.
+            // No ROM (a failed reload, or an agent that hasn't loaded one yet) —
+            // clear rather than leaving a stale frame on screen.
             None => buffer.fill(0),
         }
         let _ = buffer.present();
@@ -134,10 +221,11 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        self.dim = self.player.screen_dim();
+        self.dim = self.source.screen_dim();
+        self.shown_title = self.source.title();
         let side = self.dim * DEFAULT_SCALE;
         let attrs = Window::default_attributes()
-            .with_title(format!("kessel — {}", self.title))
+            .with_title(&self.shown_title)
             .with_inner_size(winit::dpi::LogicalSize::new(side, side));
 
         let window = match event_loop.create_window(attrs) {
@@ -204,7 +292,8 @@ impl ApplicationHandler for App {
         }
         self.next_frame = now + FRAME_TIME;
 
-        self.player.tick(self.buttons);
+        self.source.tick(self.buttons);
+        self.sync_title();
         if let Some(window) = &self.window {
             window.request_redraw();
         }

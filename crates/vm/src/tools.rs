@@ -14,7 +14,9 @@ use crate::tool::{ImageContent, ToolResult, VmTool, VmToolError};
 
 use super::{buttons_from_names, VmConsole};
 
-type Shared = Arc<Mutex<VmConsole>>;
+/// A console shared between everything that drives it. Exported because a host
+/// that wants an attached player needs to hold one alongside the tools.
+pub type Shared = Arc<Mutex<VmConsole>>;
 
 /// Construct one shared [`VmConsole`] and build every `vm_*` tool over it.
 ///
@@ -36,7 +38,18 @@ pub fn vm_tool_handlers() -> Vec<Box<dyn VmTool>> {
 pub fn vm_tool_handlers_rooted(root: Option<std::path::PathBuf>) -> Vec<Box<dyn VmTool>> {
     let mut console = VmConsole::new();
     console.set_root(root);
-    let console: Shared = Arc::new(Mutex::new(console));
+    vm_tool_handlers_on(Arc::new(Mutex::new(console)))
+}
+
+/// Build every `vm_*` tool over a console the **caller** owns a handle to.
+///
+/// Use this when something other than the tools also drives the machine — an
+/// attached play window, say. Everyone sharing the `Arc` shares one timeline:
+/// the mutex serializes access, but the interleaving is real, so a `vm_restore`
+/// from one holder rewinds the game the other is watching. That is the intended
+/// semantics for an attached player, and the reason it is a separate,
+/// explicitly-named constructor rather than the default.
+pub fn vm_tool_handlers_on(console: Shared) -> Vec<Box<dyn VmTool>> {
     vec![
         Box::new(WriteSource(console.clone())),
         Box::new(Assemble(console.clone())),
@@ -57,15 +70,32 @@ pub fn vm_tool_handlers_rooted(root: Option<std::path::PathBuf>) -> Vec<Box<dyn 
 /// tool name (an MCP server, a test) wants instead of a bare `Vec`.
 pub struct VmToolSet {
     tools: Vec<Box<dyn VmTool>>,
+    console: Shared,
 }
 
 impl VmToolSet {
     /// Build the set over a console rooted at `root`; see
     /// [`vm_tool_handlers_rooted`] for what a root buys you.
     pub fn new(root: Option<std::path::PathBuf>) -> Self {
+        let mut console = VmConsole::new();
+        console.set_root(root);
+        Self::with_console(Arc::new(Mutex::new(console)))
+    }
+
+    /// Build the set over a console the caller keeps a handle to — see
+    /// [`vm_tool_handlers_on`] for what sharing it means.
+    pub fn with_console(console: Shared) -> Self {
         Self {
-            tools: vm_tool_handlers_rooted(root),
+            tools: vm_tool_handlers_on(console.clone()),
+            console,
         }
+    }
+
+    /// The console these tools drive. Locking it drives the *same* machine the
+    /// tools do; hold the lock for as short a time as possible, since a tool
+    /// call in flight blocks on it.
+    pub fn console(&self) -> &Shared {
+        &self.console
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &dyn VmTool> {

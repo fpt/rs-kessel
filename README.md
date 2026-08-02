@@ -101,6 +101,34 @@ Arrows or WASD for the d-pad, `Z`/`X` for A/B, Return for START, Shift for
 SELECT. `R` reloads the file from disk so you can edit and re-run without
 leaving the window; Esc quits.
 
+### Play the game an agent is building
+
+Run `kessel play` with **no file** while a `kessel mcp` session is going, and the
+window attaches to it:
+
+```bash
+kessel play                    # joins the running session
+kessel play --root ./my-game   # ...that one, if several are running
+```
+
+This is a genuinely shared session — the window drives the agent's own machine,
+not a copy. That is the point, and it cuts both ways:
+
+- The agent's `vm_snapshot` / `vm_restore` / `vm_reset` will rewind or wipe the
+  game while you're holding a button.
+- `vm_run_frames` advances the machine in bursts you didn't ask for.
+- Your button presses land in the agent's observations, so a run with someone
+  attached is **not reproducible**.
+
+The window title tells you what's happening (attached / paused / no ROM loaded /
+session ended). If you'd rather have your own timeline, pass a file — a local
+`kessel play game.lua` shares nothing.
+
+Discovery uses a small session file in your cache directory naming a loopback
+port; the server binds `127.0.0.1` only and never advances the machine on its
+own, so with no player attached an agent's runs are exactly as reproducible as
+before.
+
 The `games/` directory doubles as worked luax examples covering the whole
 language — sprite declarations, tilemaps and `solid()` collision, entity pools,
 edge-triggered input, fixed-point trig. Point a model at them.

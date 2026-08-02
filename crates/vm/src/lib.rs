@@ -32,6 +32,7 @@ pub mod vm;
 
 pub use player::VmPlayer;
 pub use tool::{ImageContent, ToolResult, VmTool, VmToolError};
+pub use tools::{Shared, VmToolSet};
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -297,6 +298,12 @@ impl VmConsole {
     /// The current framebuffer expanded to RGBA (for PNG / host window).
     pub fn framebuffer_rgba(&self) -> Vec<u8> {
         self.vm.devices.framebuffer_rgba()
+    }
+
+    /// Screen edge length in pixels (square). Mirrors [`VmPlayer::screen_dim`],
+    /// for hosts that drive a console directly.
+    pub fn screen_dim(&self) -> u32 {
+        SCREEN_DIM as u32
     }
 
     /// Encode the current framebuffer as a base64 PNG.
