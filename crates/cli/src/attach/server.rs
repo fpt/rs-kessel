@@ -27,11 +27,14 @@ use super::session::Session;
 /// leaves nothing for the next `kessel play` to trip over.
 pub struct AttachServer {
     session_path: PathBuf,
+    /// Ours, so [`Session::unpublish`] can tell our advertisement from a newer
+    /// server's that reused the same filename.
+    port: u16,
 }
 
 impl Drop for AttachServer {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.session_path);
+        let _ = Session::unpublish(&self.session_path, self.port);
     }
 }
 
@@ -102,7 +105,7 @@ pub fn start_in(session_dir: &Path, console: Shared, root: &Path) -> Option<Atta
     });
 
     eprintln!("kessel mcp: play attach ready on 127.0.0.1:{port} — run `kessel play` to join");
-    Some(AttachServer { session_path })
+    Some(AttachServer { session_path, port })
 }
 
 /// Serve one attached player until it disconnects.
@@ -168,6 +171,15 @@ fn serve_player(console: &Shared, stream: TcpStream, taken: &AtomicBool) {
                 }
             }
             MSG_TICK => {
+                // A TICK advances the shared machine, so it is only honoured
+                // from a connection that completed a non-busy HELLO. Without
+                // this the one-player admission check is advisory: a refused
+                // player (or anything else on loopback) could skip the
+                // handshake and drive the agent's console anyway.
+                if !holds_slot {
+                    eprintln!("kessel mcp: attach TICK before HELLO from {peer}, dropping");
+                    break;
+                }
                 let mut buttons = [0u8; 1];
                 if reader.read_exact(&mut buttons).is_err() {
                     break;
@@ -227,6 +239,27 @@ mod tests {
 
     fn console() -> Shared {
         Arc::new(Mutex::new(VmConsole::new()))
+    }
+
+    /// A trivial ROM, so `play_tick` actually advances the frame counter.
+    fn load_a_rom(shared: &Shared) {
+        let tools = kessel_vm::VmToolSet::with_console(shared.clone());
+        let src = "local x = 60\n\
+                   function update() x = x + 1 end\n\
+                   function draw() cls(0) pset(x % 128, 60, 7) end\n";
+        tools
+            .call(
+                "vm_write_source",
+                serde_json::json!({"path": "g.lua", "source": src}),
+            )
+            .unwrap();
+        tools
+            .call("vm_assemble", serde_json::json!({"path": "g.lua"}))
+            .unwrap();
+        tools
+            .call("vm_load_rom", serde_json::json!({"path": "g.lua"}))
+            .unwrap();
+        assert!(shared.lock().rom_loaded, "test ROM should be loaded");
     }
 
     /// With no ROM the player still gets a well-formed, blank frame — it must
@@ -306,6 +339,77 @@ mod tests {
         assert!(TcpStream::connect(("127.0.0.1", s.port)).is_ok());
 
         drop(server);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A TICK without a handshake must not advance the machine. Otherwise the
+    /// one-player check is advisory only: a refused player could simply skip
+    /// HELLO and drive the agent's console anyway.
+    #[test]
+    fn tick_before_hello_is_refused() {
+        use std::io::{Read, Write};
+
+        let dir =
+            std::env::temp_dir().join(format!("kessel-attach-nohello-{}", std::process::id()));
+        let sessions = dir.join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Load a ROM first, or the frame counter can't move and the assertion
+        // below would pass whether or not the handshake is enforced.
+        let shared = console();
+        load_a_rom(&shared);
+
+        let server = start_in(&sessions, shared.clone(), &dir).expect("listener should start");
+        let port = Session::list_in(&sessions)[0].1.port;
+
+        let before = shared.lock().frame;
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        sock.write_all(&[MSG_TICK, 0]).unwrap();
+        sock.flush().unwrap();
+
+        // The server should close on us rather than answer with a frame.
+        let mut buf = [0u8; 1];
+        assert!(
+            matches!(sock.read(&mut buf), Ok(0) | Err(_)),
+            "server answered a TICK that skipped the handshake"
+        );
+        assert_eq!(
+            shared.lock().frame,
+            before,
+            "an un-handshaken TICK advanced the shared VM"
+        );
+
+        drop(server);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two servers rooted at the same directory share a filename. The first to
+    /// exit must not delete the second's live advertisement.
+    #[test]
+    fn exiting_does_not_delete_a_newer_servers_session() {
+        let dir = std::env::temp_dir().join(format!("kessel-attach-race-{}", std::process::id()));
+        let sessions = dir.join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let first = start_in(&sessions, console(), &dir).expect("first server");
+        let first_port = Session::list_in(&sessions)[0].1.port;
+
+        // A second server for the same root overwrites the advertisement.
+        let second = start_in(&sessions, console(), &dir).expect("second server");
+        let second_port = Session::list_in(&sessions)[0].1.port;
+        assert_ne!(first_port, second_port, "servers should get distinct ports");
+
+        // The older one exits: the newer, still-live entry must survive.
+        drop(first);
+        let after = Session::list_in(&sessions);
+        assert_eq!(after.len(), 1, "newer session was deleted by the older one");
+        assert_eq!(after[0].1.port, second_port);
+
+        drop(second);
+        assert!(
+            Session::list_in(&sessions).is_empty(),
+            "the owning server should clean up on exit"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

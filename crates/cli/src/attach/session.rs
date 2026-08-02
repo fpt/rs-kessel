@@ -80,12 +80,33 @@ impl Session {
             pid: std::process::id(),
             version: crate::VERSION.to_string(),
         };
-        let path = dir.join(format!("{}.json", root_key(root)));
-        std::fs::write(&path, serde_json::to_string_pretty(&session)?)?;
+        let key = root_key(root);
+        let path = dir.join(format!("{key}.json"));
+
+        // Write-then-rename rather than writing in place: `discover` reads these
+        // concurrently, and a reader that caught a half-written file would see
+        // the session as absent. Rename within one directory is atomic.
+        let tmp = dir.join(format!("{key}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, serde_json::to_string_pretty(&session)?)?;
+        std::fs::rename(&tmp, &path)?;
         Ok(path)
     }
 
-    #[cfg(any(feature = "play", test))]
+    /// Remove a published session, but only if the file still describes *this*
+    /// server.
+    ///
+    /// Two servers rooted at the same directory share a filename, so the second
+    /// to start overwrites the first's advertisement. Without this check the
+    /// first one's exit would then delete the *second's* live entry, and
+    /// discovery would lose a session whose listener is still up.
+    pub fn unpublish(path: &Path, port: u16) -> io::Result<()> {
+        match Session::load(path) {
+            Some(s) if s.port == port && s.pid == std::process::id() => std::fs::remove_file(path),
+            // Someone else's now (or already gone) — leave it alone.
+            _ => Ok(()),
+        }
+    }
+
     fn load(path: &Path) -> Option<Session> {
         let text = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&text).ok()
