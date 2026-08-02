@@ -1,6 +1,6 @@
 //! Attaching a play window to a running `kessel mcp`.
 //!
-//! `kessel play` with no file joins a live MCP session and drives **the agent's
+//! `kessel attach` joins a live MCP session and drives **the agent's
 //! own `VmConsole`** — one machine, one timeline, two drivers. That is the
 //! literal shared session, and it has consequences worth stating plainly:
 //!
@@ -11,7 +11,7 @@
 //!   with someone attached is not reproducible.
 //!
 //! None of that is a bug to be fixed here — it is what sharing one machine
-//! means. `kessel play <file>` remains fully independent for when you want your
+//! means. `kessel run <file>` remains fully independent for when you want your
 //! own timeline.
 //!
 //! The transport is loopback TCP rather than a Unix socket so the same code path
@@ -51,12 +51,12 @@ pub fn attach(root: Option<&std::path::Path>) -> Result<AttachClient, String> {
     match discover(root, is_live) {
         Discovery::Found(s) => {
             let client = AttachClient::connect(&s)?;
-            eprintln!("kessel play: attached to the session at {}", s.root);
+            eprintln!("kessel attach: joined the session at {}", s.root);
             Ok(client)
         }
         Discovery::None => Err("no running `kessel mcp` to attach to.\n\n\
-             Start one (or let your agent start it), then run `kessel play` again — \
-             or play a file on its own timeline with `kessel play <file.lua>`."
+             Start one (or let your agent start it), then run `kessel attach` again — \
+             or play a file on its own timeline with `kessel run <file.lua>`."
             .to_string()),
         Discovery::Ambiguous(sessions) => {
             let list = sessions

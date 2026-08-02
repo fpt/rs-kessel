@@ -1,4 +1,4 @@
-//! The `kessel play` side of an attached session.
+//! The `kessel attach` side of a shared session.
 //!
 //! The round trip runs on its own thread, not the UI thread. That matters: the
 //! agent can hold the console mutex for a long time — `vm_run_frames(1800)` is

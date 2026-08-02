@@ -2,7 +2,7 @@
 //! play**: load a game, advance a frame with the current gamepad state, and read
 //! back the framebuffer as RGBA.
 //!
-//! `kessel play` renders `framebuffer_rgba()` scaled up and calls `tick()` on a
+//! `kessel run` renders `framebuffer_rgba()` scaled up and calls `tick()` on a
 //! 60 Hz timer with the keyboard-derived button bitfield. The window layer is
 //! deliberately on the other side of this API: the player hands out plain pixels
 //! and knows nothing about how they reach a screen.
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn shipped_sample_games_load() {
-        // The games/ assets shipped for `kessel play` must stay valid.
+        // The games/ assets shipped for `kessel run` must stay valid.
         for (src, name) in [
             (include_str!("../../../games/2048.lua"), "2048.lua"),
             (include_str!("../../../games/bounce.lua"), "bounce.lua"),

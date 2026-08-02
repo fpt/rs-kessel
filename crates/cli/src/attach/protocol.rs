@@ -1,5 +1,5 @@
 //! The wire protocol between a running `kessel mcp` and an attached
-//! `kessel play`.
+//! `kessel attach`.
 //!
 //! Deliberately a tiny binary protocol rather than the JSON used for MCP: this
 //! carries a 60 Hz stream of full framebuffers, and base64-in-JSON would cost

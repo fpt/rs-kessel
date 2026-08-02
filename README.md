@@ -9,7 +9,7 @@ and debugs — then you play the result in a window.
 
 ```bash
 kessel mcp                      # serve the console to an agent over MCP
-kessel play games/tetris.lua    # play a game yourself
+kessel run games/tetris.lua    # play a game yourself
 ```
 
 ## Why
@@ -91,10 +91,10 @@ the screen changed — an MCP round trip per frame is pure overhead.
 ## Play
 
 ```bash
-kessel play games/2048.lua      # arrows slide tiles, A starts a new game
-kessel play games/tetris.lua    # L/R move, A rotates, Down soft-drops
-kessel play games/platform.lua  # arrows move, A jumps and wall-jumps
-kessel play games/outrun.lua    # pseudo-3D road racer
+kessel run games/2048.lua      # arrows slide tiles, A starts a new game
+kessel run games/tetris.lua    # L/R move, A rotates, Down soft-drops
+kessel run games/platform.lua  # arrows move, A jumps and wall-jumps
+kessel run games/outrun.lua    # pseudo-3D road racer
 ```
 
 Arrows or WASD for the d-pad, `Z`/`X` for A/B, Return for START, Shift for
@@ -103,12 +103,12 @@ leaving the window; Esc quits.
 
 ### Play the game an agent is building
 
-Run `kessel play` with **no file** while a `kessel mcp` session is going, and the
-window attaches to it:
+Run `kessel attach` while a `kessel mcp` session is going, and the window joins
+it:
 
 ```bash
-kessel play                    # joins the running session
-kessel play --root ./my-game   # ...that one, if several are running
+kessel attach                  # joins the running session
+kessel attach ./my-game        # ...that one, if several are running
 ```
 
 This is a genuinely shared session — the window drives the agent's own machine,
@@ -121,8 +121,8 @@ not a copy. That is the point, and it cuts both ways:
   attached is **not reproducible**.
 
 The window title tells you what's happening (attached / paused / no ROM loaded /
-session ended). If you'd rather have your own timeline, pass a file — a local
-`kessel play game.lua` shares nothing.
+session ended). If you'd rather have your own timeline, use `kessel run game.lua` — that shares
+nothing.
 
 Discovery uses a small session file in your cache directory naming a loopback
 port; the server binds `127.0.0.1` only and never advances the machine on its

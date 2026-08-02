@@ -24,7 +24,7 @@ use super::protocol::{Frame, Hello, MSG_HELLO, MSG_TICK, PROTOCOL_VERSION};
 use super::session::Session;
 
 /// A published listener. Dropping it removes the session file, so a clean exit
-/// leaves nothing for the next `kessel play` to trip over.
+/// leaves nothing for the next `kessel attach` to trip over.
 pub struct AttachServer {
     session_path: PathBuf,
     /// Ours, so [`Session::unpublish`] can tell our advertisement from a newer
@@ -63,28 +63,28 @@ pub fn start_in(session_dir: &Path, console: Shared, root: &Path) -> Option<Atta
     let listener = match TcpListener::bind(bind_addr()) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("kessel mcp: play attach unavailable (bind: {e})");
+            eprintln!("kessel mcp: attach unavailable (bind: {e})");
             return None;
         }
     };
     let port = match listener.local_addr() {
         Ok(a) => a.port(),
         Err(e) => {
-            eprintln!("kessel mcp: play attach unavailable (local_addr: {e})");
+            eprintln!("kessel mcp: attach unavailable (local_addr: {e})");
             return None;
         }
     };
     let session_path = match Session::publish_in(session_dir, root, port) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("kessel mcp: play attach unavailable (session file: {e})");
+            eprintln!("kessel mcp: attach unavailable (session file: {e})");
             return None;
         }
     };
 
     // One player at a time — two humans plus an agent on one timeline is a
     // problem this design already has enough of. Connections are still handled
-    // on their own threads so a second `kessel play` gets an immediate refusal
+    // on their own threads so a second `kessel attach` gets an immediate refusal
     // instead of sitting in the accept backlog, and so a liveness probe never
     // waits behind an active player.
     let taken = Arc::new(AtomicBool::new(false));
@@ -104,7 +104,7 @@ pub fn start_in(session_dir: &Path, console: Shared, root: &Path) -> Option<Atta
         }
     });
 
-    eprintln!("kessel mcp: play attach ready on 127.0.0.1:{port} — run `kessel play` to join");
+    eprintln!("kessel mcp: attach ready on 127.0.0.1:{port} — run `kessel attach` to join");
     Some(AttachServer { session_path, port })
 }
 
@@ -118,7 +118,7 @@ fn serve_player(console: &Shared, stream: TcpStream, taken: &AtomicBool) {
         .unwrap_or_else(|_| "?".into());
     // Discovery probes the port to test liveness, so a bare connection is not a
     // player. Only announce one once it has actually said HELLO, or the log
-    // reports an attach every time someone runs `kessel play` elsewhere.
+    // reports an attach every time someone runs `kessel attach` elsewhere.
     let mut announced = false;
     // Claimed on HELLO, released when this connection ends.
     let mut holds_slot = false;

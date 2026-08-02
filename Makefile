@@ -34,7 +34,8 @@ install: build
 	@cp crates/target/release/kessel "$(BINDIR)/kessel"
 	@echo "✅ Installed $(BINDIR)/kessel"
 	@echo "   kessel mcp   — serve the console to an agent over MCP"
-	@echo "   kessel play  — open a game window"
+	@echo "   kessel run    — open a game window"
+	@echo "   kessel attach — join a running mcp session"
 	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "   ⚠️  $(BINDIR) is not on your PATH — add it to use 'kessel' directly." ;; esac
 
 uninstall:
@@ -52,7 +53,7 @@ fmt-fix:
 
 GAME ?= games/bounce.lua
 play: build
-	@./crates/target/release/kessel play "$(GAME)"
+	@./crates/target/release/kessel run "$(GAME)"
 
 ROOT ?= .
 mcp: build
