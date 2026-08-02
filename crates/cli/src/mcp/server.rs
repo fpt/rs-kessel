@@ -31,6 +31,11 @@ impl Server {
         }
     }
 
+    /// The console these tools drive, for an attached play window to share.
+    pub fn console(&self) -> &kessel_vm::Shared {
+        self.tools.console()
+    }
+
     /// Handle one request. `None` means "no reply" — the correct response to a
     /// notification, which JSON-RPC forbids answering.
     pub fn handle(&self, req: Request) -> Option<Response> {

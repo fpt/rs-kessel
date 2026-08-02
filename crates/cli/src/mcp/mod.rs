@@ -23,7 +23,14 @@ pub fn run(root: PathBuf) {
         crate::VERSION,
         root.display()
     );
-    let server = Server::new(root);
+    let server = Server::new(root.clone());
+
+    // Publish the console for `kessel play` to join. Held until we return, so
+    // the session file goes away when this server does. A failure here is
+    // reported and ignored — the play bridge is optional, and an agent's session
+    // must not die because a port was unavailable.
+    let _attach = crate::attach::server::start(server.console().clone(), &root);
+
     serve(&server, std::io::stdin().lock(), std::io::stdout().lock());
 }
 

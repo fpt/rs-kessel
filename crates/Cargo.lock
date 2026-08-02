@@ -570,6 +570,7 @@ name = "kessel"
 version = "0.1.0"
 dependencies = [
  "kessel-vm",
+ "parking_lot",
  "serde",
  "serde_json",
  "softbuffer",

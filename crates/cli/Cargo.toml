@@ -19,6 +19,7 @@ play = ["dep:winit", "dep:softbuffer"]
 
 [dependencies]
 kessel-vm = { path = "../vm" }
+parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

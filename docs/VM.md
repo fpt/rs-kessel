@@ -432,6 +432,26 @@ and a `sin`-bobbed sun).
 while editing. Pressing the ROM's **pause** button (from its `controls` metadata,
 default `START` = Return) freezes the game.
 
+### Attaching to an agent's session
+
+`kessel play` with **no file** joins a running `kessel mcp` and drives the
+agent's own console, so you can play the work in progress:
+
+```bash
+kessel play                    # joins the running session
+kessel play --root ./my-game   # ...that one, if several are running
+```
+
+You share one machine and one timeline with the agent. Its
+`vm_snapshot`/`vm_restore`/`vm_reset` rewind the game under you, `vm_run_frames`
+advances it in bursts, and your button presses appear in its observations — a run
+with a player attached is not reproducible. `R` does nothing when attached: the
+agent owns what's loaded. Pass a file for an independent timeline.
+
+The server publishes a session file (cache dir) naming a loopback port, binds
+`127.0.0.1` only, and never advances the machine on its own — with no player
+attached, agent runs are exactly as deterministic as before.
+
 ### How it works
 
 `kessel play` loads a `.lua`/`.asm` file into a `VmPlayer` (`crates/vm/src/player.rs`),

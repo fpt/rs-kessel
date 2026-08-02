@@ -1,0 +1,16 @@
+# Check everything out with LF on every platform.
+#
+# This is not a style preference. The `games/` corpus is embedded into the test
+# binary with `include_str!` and then pattern-matched by fixtures that splice in
+# deterministic starting state, e.g.
+#
+#     GAME.replace("  spawn_tile()\n  spawn_tile()", "  cells[0] = 2 …")
+#
+# Under a CRLF checkout the file contains "\r\n", the pattern never matches, and
+# `replace` silently returns the text unchanged — so the test runs the *unmodified*
+# game and fails somewhere far away ("first swipe scored incorrectly") with no
+# hint that line endings were the cause. `corpus_is_lf_only` guards this too.
+#
+# The VM itself is indifferent: luax compiles CRLF and LF to identical assembly.
+# What matters is that the embedded corpus is byte-identical everywhere.
+* text=auto eol=lf

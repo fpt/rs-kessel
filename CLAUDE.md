@@ -64,7 +64,40 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/mcp/mod.rs` | The stdio read → dispatch → write loop. |
 | `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
-| `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). |
+| `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). `Source` picks local vs. attached. |
+| `src/attach/session.rs` | Session files in the cache dir: publish, list, discover. Directory is a parameter, never read from env inside logic — the tests run in parallel. |
+| `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. |
+| `src/attach/server.rs` | Loopback listener inside `kessel mcp`; each TICK locks the shared console. |
+| `src/attach/client.rs` | `AttachClient` — background tick thread, latest-frame slot. |
+
+### Attaching (`kessel play` with no file)
+
+`kessel play` joins a running `kessel mcp` and drives **the agent's own
+`VmConsole`** — one machine, one timeline, two drivers. This is deliberate and
+was chosen with the consequences understood:
+
+- The agent's `vm_snapshot`/`vm_restore`/`vm_reset` rewind the game under the
+  player; `vm_run_frames` advances it in bursts.
+- The player's inputs land in the agent's observations, so a run with someone
+  attached is not reproducible.
+
+Do not "fix" these — they are what sharing one machine means. `kessel play <file>`
+is the independent-timeline path.
+
+Two invariants hold it together:
+
+- **The server never ticks on its own.** With no player attached, the machine
+  advances only through tool calls, so reproducibility is untouched by the mere
+  existence of this feature.
+- **The client ticks off the UI thread.** The agent can hold the console mutex
+  for a long time (`vm_run_frames(1800)` is one call); a tick issued from the
+  event loop would freeze the whole window, not just the game. The worker blocks,
+  the UI redraws the last frame it got.
+
+Transport is loopback TCP (not a Unix socket) so the same path works on Windows,
+carrying a small binary protocol (not JSON) because it's a 60 Hz framebuffer
+stream. It binds `127.0.0.1` only — `bind_addr()` is a separate function with a
+test, because that's a security property rather than an incidental literal.
 
 ### Key patterns
 

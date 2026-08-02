@@ -7,11 +7,17 @@ on:
     branches: [main]
 
 jobs:
+  # Windows is in the matrix because the attach layer makes platform claims it
+  # would otherwise only assert: loopback TCP rather than a Unix socket so the
+  # same path works there, and session publication that relies on
+  # `fs::rename` replacing an existing file (it does — std uses MoveFileExW /
+  # SetFileInformationByHandle, not the Win32 `MoveFile` that refuses).
+  # Those are worth testing rather than reasoning about.
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
