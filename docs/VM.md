@@ -1,13 +1,13 @@
 # Kessel Fantasy-Console VM
 
-A tiny 16-bit stack VM (Uxn-inspired) that lets the model **write a small game,
+A tiny 16-bit stack VM (Uxn-inspired) that lets a model **write a small game,
 assemble it, run it, observe the result, and debug it** — and the game is
-playable by a human. Lives in `crates/lib/src/vm/`. Pure Rust, deterministic,
-snapshotable.
+playable by a human. Lives in `crates/vm/` (the `kessel-vm` crate). Pure Rust,
+deterministic, snapshotable.
 
-The `vm_*` tools are registered **only** in `agent_new` (the standalone `kessel`
-app), so they are present in the mac/Windows voice app alongside
-screenshot/STT/TTS but **absent** from `kessel-cli`/app-server.
+The `vm_*` tools reach an agent over MCP: `kessel mcp` serves them on stdio, so
+any MCP-capable agent can drive the loop. `kessel play <file>` opens the same
+console in a window for a human.
 
 ## Machine
 
@@ -97,19 +97,32 @@ SELECT 0x80`. Screen is 128×128, 16-colour (default PICO-8 palette).
 ## The tools (agent-facing loop)
 
 `vm_write_source(path, source)` → `vm_assemble(path)` → `vm_load_rom(path)` →
-`vm_run_frame(buttons)` / `vm_run_cycles(n)` → `vm_inspect_memory`,
-`vm_inspect_stacks`, `vm_get_framebuffer` (PNG) → `vm_snapshot`/`vm_restore`,
-`vm_reset`.
+`vm_run_frame(buttons)` / `vm_run_frames(script)` / `vm_run_cycles(n)` →
+`vm_inspect_memory`, `vm_inspect_stacks`, `vm_get_framebuffer` (PNG) →
+`vm_snapshot`/`vm_restore`, `vm_reset`.
 
-**Sources are actual files on disk.** In the real agent the VM is rooted at the
-backend's working directory (`AgentConfig.working_dir`), so `vm_write_source`
-writes `game.lua` to that directory and `vm_assemble` re-reads it fresh on every
-call. This means the backend's *own* file-editing tools and `vm_assemble` operate
-on the same file: for a small tweak, edit `game.lua` directly and just call
-`vm_assemble`; for a first draft or rewrite, use `vm_write_source`. Model-supplied
-paths are confined to the working directory (no `..`/absolute escapes).
-`VmPlayer` (`kessel --play`) and the test suites set no root and keep sources in
-memory, unchanged.
+**Sources are actual files on disk.** `kessel mcp` roots the console at `--root`
+(default: the cwd), so `vm_write_source` writes `game.lua` there and
+`vm_assemble` re-reads it fresh on every call. This means the agent's *own*
+file-editing tools and `vm_assemble` operate on the same file: for a small
+tweak, edit `game.lua` directly and just call `vm_assemble`; for a first draft
+or rewrite, use `vm_write_source`. Model-supplied paths are confined to the root
+(no `..`/absolute escapes). `VmPlayer` (`kessel play`) and the test suites set no
+root and keep sources in memory, unchanged.
+
+**Prefer `vm_run_frames` over a loop of `vm_run_frame`.** One call plays a whole
+scenario from an input script and returns the final observation plus a summary
+(frames run, whether it stopped early on a fault/halt, every sound trigger, and
+how many frames the screen changed on) — an MCP round trip per frame is pure
+overhead:
+
+```json
+{"script": [{"buttons": ["RIGHT"], "frames": 30}, {"buttons": ["A"], "frames": 2}],
+ "image": true}
+```
+
+It stops at the first fault or halt so the returned observation is the one
+showing the failure, and caps at 1800 frames (30s of play).
 
 `vm_run_frame` returns the observation record (screen hash + changed bbox for
 "look at the screen", `vm.*` internals for white-box debugging, and
@@ -365,23 +378,23 @@ end
 sprites, a `tilemap` level, gravity, `solid()` collision, and a jump — the kind
 of complete example to adapt.
 
-## Playing a game (`kessel --play`)
+## Playing a game (`kessel play`)
 
-The standalone `kessel` app can render a ROM in a native window, so the games the
-model authors are **human-playable**:
+`kessel play` renders a ROM in a native window, so the games a model authors are
+**human-playable**:
 
 ```bash
-kessel --play games/2048.lua      # 2048 — arrows slide tiles, A starts a new game
-kessel --play games/bounce.lua    # a self-animating demo
-kessel --play games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
-kessel --play games/snake.lua     # grid snake — arrows steer, eat food, A restarts
-kessel --play games/brick.lua     # Breakout — arrows move the paddle
-kessel --play games/shooter.lua   # vertical shooter — arrows move, A fires
-kessel --play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
-kessel --play games/rogue.lua     # top-down action — arrows move, A swings a sword
-kessel --play games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
-kessel --play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
-kessel --play games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
+kessel play games/2048.lua      # 2048 — arrows slide tiles, A starts a new game
+kessel play games/bounce.lua    # a self-animating demo
+kessel play games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
+kessel play games/snake.lua     # grid snake — arrows steer, eat food, A restarts
+kessel play games/brick.lua     # Breakout — arrows move the paddle
+kessel play games/shooter.lua   # vertical shooter — arrows move, A fires
+kessel play games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
+kessel play games/rogue.lua     # top-down action — arrows move, A swings a sword
+kessel play games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
+kessel play games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
+kessel play games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:
@@ -403,19 +416,39 @@ and a `sin`-bobbed sun).
 > coordinate), keep explicit `if x < 0` comparisons — see `shooter`'s player
 > clamp — since `min`/`max` would treat the wrapped negative as a huge number.
 
-`--play` needs no model or API key. It loads a `.lua`/`.asm` file into a standalone
-`VmPlayer` (`lib/src/vm/player.rs`, exported over UniFFI), opens an AppKit window,
-and on a 60 Hz timer calls `tick(buttons)` + `framebuffer_rgba()`, blitting the
-128×128 framebuffer scaled up with nearest-neighbour. The keyboard maps to the
-gamepad. Pressing the ROM's **pause** button (from its `controls` metadata,
-default `START` = Return) freezes the game and the title shows "PAUSED"; `tick`
-handles this in the player, so both host windows get it for free. `games/` holds sample ROMs.
+### Controls
 
-Under the hood the render loop is just: expand the palette-indexed framebuffer to
-RGBA (`Devices::framebuffer_rgba`), hand it to a `CGImage`, and draw it with
-interpolation off.
+| Key | Button |
+|-----|--------|
+| Arrows / WASD | D-pad |
+| `Z` or `J` (or Space) | A |
+| `X` or `K` | B |
+| Return | START |
+| Shift | SELECT |
+| `R` | reload the file from disk |
+| Esc | quit |
 
-**Windows** mirrors this: `kessel --play <file>` in the C# frontend
-(`win/KesselCli/PlayWindow.cs`) opens a WinForms window backed by the same
-`VmPlayer`, blitting the framebuffer into a `Bitmap` (RGBA→BGRA) drawn with
-`InterpolationMode.NearestNeighbor` on a 60 Hz timer, same keyboard mapping.
+`R` recompiles the source and restarts the game, so you can keep the window open
+while editing. Pressing the ROM's **pause** button (from its `controls` metadata,
+default `START` = Return) freezes the game.
+
+### How it works
+
+`kessel play` loads a `.lua`/`.asm` file into a `VmPlayer` (`crates/vm/src/player.rs`),
+opens a window with `winit`, and on a 60 Hz tick calls `tick(buttons)` +
+`framebuffer_rgba()`, blitting the 128×128 framebuffer scaled up with
+nearest-neighbour into a `softbuffer` CPU surface (`crates/cli/src/play.rs`).
+
+There is deliberately **no GPU** in the path. The console rasterizes into its own
+palette-indexed framebuffer, so presentation is a plain upscale-and-blit; keeping
+it on the CPU means the pixels you see are exactly the buffer an agent gets back
+from `vm_get_framebuffer`, and it keeps the binary runnable on a machine with no
+usable graphics adapter. The player is behind a default-on `play` feature —
+`cargo build --no-default-features` yields a headless binary with `kessel mcp`
+only, for servers and containers.
+
+Sound is **silent by design**: the VM records sound *events* rather than
+synthesizing audio, so a game's `sfx()` calls appear in the observation stream
+(and in `vm_run_frames`' summary) but nothing is played. Audio synthesis, if it
+ever lands, belongs on this side of the boundary — never in the VM, which has to
+stay deterministic.

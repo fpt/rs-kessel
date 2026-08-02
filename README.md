@@ -1,217 +1,154 @@
 # Kessel
 
-A voice-and-text assistant and fantasy-console VM that runs on **macOS and
-Windows**. Kessel does **no LLM inference of its own** — it is an **ACP client**:
-it spawns a backend agent and drives it a turn at a time over JSON-RPC, serving
-its resident tools (the VM, screen capture) back to the backend.
+A tiny **fantasy console** for AI agents and humans.
 
-The frontend is native per platform; the agent backend is a separate binary
-(`gallium` by default) found on PATH.
-
-## Platforms
-
-| | Frontend | Speech |
-|---|---|---|
-| **macOS 26+** | Swift — `kessel` | Apple SpeechTranscriber (STT) + AVSpeechSynthesizer (TTS) |
-| **Windows** | C# / .NET 8 — `kessel.exe` | `System.Speech` recognizer + synthesizer |
-
-The backend is swappable: `gallium` and `codex` both speak the same
-codex-app-server JSON-RPC subset. Select it with `KESSEL_ACP_BACKEND` (default
-`gallium`).
-
-## Features
-
-- **Backend-agnostic ACP client**: spawns and drives whatever app-server it's pointed at; no local inference or agent loop of its own
-- **Fantasy-console VM**: a tiny stack VM + a statically-typed Lua-ish front-end (`luax`); served to the backend as `vm_*` client tools so the model can write → assemble → run → observe → debug games. Playable standalone via `kessel --play` ([details](docs/VM.md))
-- **Screen awareness**: window capture / OCR client tools + an ambient situation feed
-- **MCP**: `mcpServers` are forwarded to the backend, which connects them ([details](#mcp))
-- **Voice I/O**: continuous conversation, half-duplex (mic muted during playback to prevent echo)
-- **Multi-language**: English and Japanese, with configurable system-prompt templates
-
-## Requirements
-
-**Common**
-- Rust toolchain
-- A backend on PATH — build/install `gallium` from [`../rs-gallium`](https://github.com/fpt/rs-gallium), or point `KESSEL_ACP_BACKEND` at `codex`
-
-**macOS**
-- macOS 26+ (Apple SpeechTranscriber)
-- Xcode Command Line Tools
-
-**Windows**
-- .NET 8 SDK (the Rust cdylib has no C++ deps — any toolchain works)
-
-## Quick Start
-
-### macOS
+Kessel gives a model a real machine to write games for: a 16-bit stack VM with a
+128×128 screen, a gamepad, and a statically-typed Lua-ish language that compiles
+to it. The model writes a game, assembles it, runs frames, looks at the screen,
+and debugs — then you play the result in a window.
 
 ```bash
-# Build the Rust core + Swift app and install `kessel` to ~/bin
-make install
-
-# Run against the local gallium backend (auto-downloads the model on first run)
-kessel --config configs/gallium.yaml
-
-# ...or a cloud backend
-export OPENAI_API_KEY=sk-...
-KESSEL_ACP_BACKEND=codex kessel --config configs/codex.yaml
+kessel mcp                      # serve the console to an agent over MCP
+kessel play games/tetris.lua    # play a game yourself
 ```
 
-`make install` installs a single binary, **`kessel`** (the voice app). The agent
-backend (`gallium`) is installed separately from its own repo and found on PATH.
+## Why
 
-### Windows
+Most "let an LLM make a game" setups hand the model a browser and hope. Kessel
+hands it a machine small enough to reason about completely — 34 opcodes, a flat
+64 KiB address space, a fixed palette — and a feedback loop that actually closes:
+every frame returns an observation (screen hash, changed-pixel bbox, stack state,
+faults, game-reported entities) and the screen itself comes back as a PNG.
+
+The VM is **deterministic and snapshotable**. Drawing is a software rasterizer
+into an indexed framebuffer; sound is an event log, not audio. That is what makes
+`vm_snapshot`/`vm_restore` and frame-exact replays possible, and it means the
+console runs anywhere — CI, a container, a headless box — with no GPU.
+
+## Install
 
 ```bash
-# Build the Rust cdylib (kessel_core.dll), then the C# frontend
-make build-win
-
-# Generate the C# bindings once (see CLAUDE.md for the one-time install)
-bash scripts/gen_uniffi_cs.sh
-
-# Run
-win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/gallium.yaml
+cargo install --path crates/cli     # installs `kessel`
 ```
 
-The Windows REPL has two modes, toggled with **Shift+Tab**: `text` (type → printed
-reply) and `listen` (speak → reply printed *and* spoken).
-
-## Configuration
-
-YAML configs live in `configs/`; the same schema is read by every frontend. Two
-are shipped, one per backend flavor:
-
-| config | backend | notes |
-|--------|---------|-------|
-| `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
-| `codex.yaml` | `codex` (cloud) | set `KESSEL_ACP_BACKEND=codex` + `OPENAI_API_KEY` |
-
-```yaml
-llm:                                  # forwarded to the backend as environment
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # local (MODEL_PATH)
-  baseURL: "https://api.openai.com/v1"                            # cloud (LLM_BASE_URL)
-  model: "gpt-5.6-luna"
-  inferenceEngine: "gallium"          # backend's local engine: llamacpp | gallium
-  temperature: 0.7
-  maxTokens: 2048
-
-agent:
-  systemPromptPath: "system-prompt.md"  # supports the {language} variable
-  maxTurns: 50
-  language: "en"                        # "en" or "ja"
-
-mcpServers:                             # forwarded to the backend, which connects them
-  - command: "godevmcp"
-    args: ["serve"]
-  - url: "http://127.0.0.1:27182/mcp"
-
-tts: { enabled: true, voice: "com.apple.voice.enhanced.en-US.Zoe" }
-stt: { enabled: true, locale: "en-US" }
-```
-
-The `llm:` block is **forwarded to the backend** — kessel does not interpret it.
-Backend selection is via `KESSEL_ACP_BACKEND` (env), not the config.
-
-## MCP
-
-Kessel forwards the config's `mcpServers` to the backend over `thread/start`; the
-**backend** connects them (stdio via `command`/`args`, or Streamable HTTP via
-`url`) and exposes their tools to the model. A server that fails to connect is
-logged and skipped.
-
-```yaml
-mcpServers:
-  - command: "npx"                          # stdio
-    args: ["-y", "@modelcontextprotocol/server-everything"]
-  - url: "http://127.0.0.1:27182/mcp"       # Streamable HTTP
-```
-
-## ACP client
-
-`kessel` spawns the backend (`gallium app-server` by default) and drives it as a
-**whole-turn** ACP client over line-delimited JSON-RPC on stdio — it sends
-`initialize`/`thread/start`/`turn/start` and handles the backend's inbound
-`item/tool/call` + approval requests. The backend runs its own ReAct loop, tools,
-and MCP connections inside each turn; kessel serves the VM (`vm_*`), screen
-capture, and situation reader back as `dynamicTools`.
-
-Override the backend program with `KESSEL_ACP_BACKEND` (default `gallium`; may be
-`"prog arg1 arg2"`). See [CLAUDE.md](CLAUDE.md) and [docs/REFACTOR.md](docs/REFACTOR.md).
-
-## Skills
-
-Skills load from `skills/` (project) and `~/.claude/plugins/`. Each is a `SKILL.md`
-with YAML frontmatter; its catalog is injected into the backend thread's developer
-instructions.
-
-```markdown
----
-name: my-skill
-description: "What this skill does"
----
-Prompt body injected as system context...
-```
-
-## Commands
-
-**macOS (`kessel`)**
-
-| Command | Description |
-|---------|-------------|
-| `/listen` | Listen once, then reply |
-| `/goal <condition>` | Work toward a condition across turns; `/goal` for status, `/goal clear` to stop |
-| `/loop [interval] <prompt>` | Ambient mode: run a prompt periodically in the background |
-| `/reset` | Clear conversation history |
-| `/history` | Show conversation |
-| `/voices` | List available TTS voices |
-| `/stop` | Stop current TTS playback |
-| `/help` | Show help |
-| `/quit` | Exit |
-
-**Windows (`kessel.exe`)**
-
-| Command | Description |
-|---------|-------------|
-| **Shift+Tab** | Toggle `text` ⇄ `listen` mode |
-| `/listen` | Listen once, then reply |
-| `/reset` | Clear conversation history |
-| `/history` | Show conversation |
-| `/help` | Show help |
-| `/quit` | Exit |
-
-## Architecture
-
-```
-macOS:    Mic -> SpeechTranscriber -> Swift CLI ─┐
-Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust ACP client
-                                                 │              │  spawns + drives
-                                                 │              v
-                                                 │       gallium app-server
-                                                 │       (ReAct + LLM + tools + MCP)
-                                                 └───<── item/tool/call (vm_*, capture)
-```
-
-- **Rust** (`crates/lib`, `kessel_core`): ACP client, the VM, client tools, and local orchestration (goals, situation, backchannel). No inference.
-- **Swift** (`swift/`): macOS voice app, audio pipeline, TTS.
-- **C#** (`win/`): Windows frontend.
-- **UniFFI**: generates the Swift and C# bindings to the Rust core.
-- The agent backend (ReAct loop, LLM providers, tools, MCP) lives in [`../rs-gallium`](https://github.com/fpt/rs-gallium).
-
-## Development
-
-See [CLAUDE.md](CLAUDE.md) for the full developer guide.
+Or build in place:
 
 ```bash
-cd crates && cargo build --release
-cd crates && cargo test
+make build          # cargo build --release
+make install        # -> ~/bin/kessel (override with PREFIX=/usr/local)
+make test
+```
 
-# Regenerate UniFFI bindings after changing crates/lib/src/agent.udl
-bash scripts/gen_uniffi.sh        # Swift (copies into the tracked tree)
-bash scripts/gen_uniffi_cs.sh     # C#
+For a server or container with no window system, drop the player:
 
-cd swift && swift build
+```bash
+cargo build --release --no-default-features   # `kessel mcp` only
+```
+
+## Use it with an agent
+
+`kessel mcp` is an MCP stdio server. Register it with any MCP-capable agent:
+
+```json
+{
+  "mcpServers": {
+    "kessel": { "command": "kessel", "args": ["mcp", "--root", "/path/to/project"] }
+  }
+}
+```
+
+With Claude Code, that's:
+
+```bash
+claude mcp add kessel -- kessel mcp --root .
+```
+
+The console is rooted at `--root` (default: the current directory) and **the
+filesystem is the source of truth**. `vm_write_source` writes a real `game.lua`
+there and `vm_assemble` re-reads it on every call — so the agent can equally well
+edit the file with its own editing tools and just call `vm_assemble`. No stale
+in-memory copy to get out of sync.
+
+### The tools
+
+| Tool | What it does |
+|------|--------------|
+| `vm_write_source` | Write a `.lua` (luax) or `.asm` source file |
+| `vm_assemble` | Compile + assemble it to a ROM, with line-numbered diagnostics |
+| `vm_load_rom` | Load a ROM and run its reset vector |
+| `vm_run_frames` | Play an input script for many frames — **the one to reach for** |
+| `vm_run_frame` | Advance a single frame with buttons held |
+| `vm_run_cycles` | Step N instructions (fine-grained debugging) |
+| `vm_get_framebuffer` | The screen as a PNG, so the model can *see* it |
+| `vm_inspect_memory` / `vm_inspect_stacks` | Hex dump / stack + pc + fault state |
+| `vm_snapshot` / `vm_restore` | Save and rewind machine state |
+| `vm_reset` | Reset the machine |
+
+Prefer `vm_run_frames`: it plays a whole scenario in one call and reports the
+frames run, any fault that stopped it early, every sound trigger, and how often
+the screen changed — an MCP round trip per frame is pure overhead.
+
+## Play
+
+```bash
+kessel play games/2048.lua      # arrows slide tiles, A starts a new game
+kessel play games/tetris.lua    # L/R move, A rotates, Down soft-drops
+kessel play games/platform.lua  # arrows move, A jumps and wall-jumps
+kessel play games/outrun.lua    # pseudo-3D road racer
+```
+
+Arrows or WASD for the d-pad, `Z`/`X` for A/B, Return for START, Shift for
+SELECT. `R` reloads the file from disk so you can edit and re-run without
+leaving the window; Esc quits.
+
+The `games/` directory doubles as worked luax examples covering the whole
+language — sprite declarations, tilemaps and `solid()` collision, entity pools,
+edge-triggered input, fixed-point trig. Point a model at them.
+
+## Write a game
+
+```lua
+sprite hero {
+  ..7777..
+  .777777.
+  77777777
+  77.77.77
+  77777777
+  .777777.
+  ..7777..
+  .77..77.
+}
+
+local x = 60
+
+function update()
+  if btn(LEFT)  then x = x - 1 end
+  if btn(RIGHT) then x = x + 1 end
+end
+
+function draw()
+  cls(0)
+  spr(hero, x, 60, 0)
+  entity(x, 60, 1)   -- reported back in the observation
+end
+```
+
+luax is Lua-*flavored*, not Lua: statically typed, no tables, closures, or
+recursion. It exists because models have strong Lua priors from PICO-8 and
+TIC-80, and reusing those priors beats teaching a new syntax. See
+**[docs/VM.md](docs/VM.md)** for the full language, instruction set, and device
+map.
+
+## Layout
+
+```
+crates/vm/     kessel-vm — the console: ISA, VM, assembler, luax, PNG, vm_* tools.
+               Host-free: no I/O beyond the working directory, no audio, no GPU.
+crates/cli/    kessel — the binary. `mcp` (stdio server) and `play` (winit window).
+games/         Sample games, and the luax reference corpus.
+docs/VM.md     Machine, instruction set, devices, luax, and the agent loop.
 ```
 
 ## License
 
-MIT
+MIT OR Apache-2.0. See [LICENSE.txt](LICENSE.txt).

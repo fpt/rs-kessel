@@ -1,0 +1,16 @@
+[package]
+name = "kessel-vm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "A tiny deterministic fantasy-console VM: stack machine, assembler, Lua-ish front-end, and the vm_* agent tool surface."
+
+[dependencies]
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

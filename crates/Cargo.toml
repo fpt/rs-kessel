@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "lib",
+    "cli",
+    "vm",
 ]
 
 [workspace.package]
@@ -11,8 +12,6 @@ license = "MIT OR Apache-2.0"
 authors = ["Kessel Contributors"]
 
 [workspace.dependencies]
-# Concurrency
-crossbeam = "0.8"
 parking_lot = "0.12"
 
 # Serialization
@@ -20,12 +19,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Error handling
-anyhow = "1.0"
 thiserror = "1.0"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# UniFFI
-uniffi = "0.28"

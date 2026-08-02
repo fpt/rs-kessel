@@ -1,4 +1,0 @@
-module kessel_coreFFI {
-    header "kessel_coreFFI.h"
-    export *
-}
