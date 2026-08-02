@@ -62,17 +62,35 @@ pub fn attach(root: Option<&std::path::Path>) -> Result<AttachClient, String> {
     }
 }
 
+/// Quote a path for pasting into a shell.
+///
+/// Unconditional double quotes rather than quote-only-when-needed: they are
+/// understood identically by sh/bash/zsh, cmd.exe and PowerShell, so there is
+/// one rule and no per-platform list of metacharacters to get subtly wrong. A
+/// workdir with a space in it is ordinary on macOS and near-universal on
+/// Windows (`C:\Users\Me\My Games`), and unquoted it would reach `attach` as
+/// two arguments.
+///
+/// Backslashes are left alone — they are the Windows path separator and are
+/// literal inside double quotes there. Only an embedded `"` needs escaping, and
+/// that character is illegal in Windows paths and pathological elsewhere.
+#[cfg(feature = "play")]
+fn shell_quote(path: &str) -> String {
+    format!("\"{}\"", path.replace('"', "\\\""))
+}
+
 /// The "which session did you mean?" error.
 ///
-/// Each line must be a command the user can actually run — see
-/// `suggestions_are_commands_attach_accepts`, which feeds them back through the
-/// real parser. This previously suggested `--root <path>`, which `attach`
-/// rejects, so the printed recovery path could not work.
+/// Each line must be a command the user can actually run, which has now been
+/// wrong twice: first suggesting the `--root` flag that `attach` rejects, then
+/// printing paths unquoted so any workdir with a space became two arguments.
+/// `suggestions_survive_a_shell_and_the_parser` guards both by pasting the
+/// suggestions through a shell-like splitter and into the real parser.
 #[cfg(feature = "play")]
 fn ambiguous_message(sessions: &[Session]) -> String {
     let list = sessions
         .iter()
-        .map(|s| format!("  kessel attach {}", s.root))
+        .map(|s| format!("  kessel attach {}", shell_quote(&s.root)))
         .collect::<Vec<_>>()
         .join("\n");
     format!("several `kessel mcp` sessions are running; say which one:\n{list}")
@@ -91,31 +109,88 @@ mod tests {
         }
     }
 
-    /// Every command the ambiguity error suggests must survive the real parser.
-    ///
-    /// This is the guard for the class of bug where the CLI grammar changes and
-    /// an error message keeps recommending the old spelling — the message looks
-    /// helpful, and following it fails.
-    #[test]
-    fn suggestions_are_commands_attach_accepts() {
-        let msg = ambiguous_message(&[session("/work/one"), session("/work/two")]);
+    /// Split a command line the way a shell would, honouring double quotes.
+    /// Enough to model someone copy-pasting our suggestion into a terminal.
+    fn shell_split(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut quoted = false;
+        let mut started = false;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    started = true;
+                }
+                '\\' if quoted && chars.peek() == Some(&'"') => {
+                    chars.next();
+                    cur.push('"');
+                }
+                c if c.is_whitespace() && !quoted => {
+                    if started || !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                        started = false;
+                    }
+                }
+                c => cur.push(c),
+            }
+        }
+        if started || !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
 
-        let suggestions: Vec<&str> = msg
+    /// Every command the ambiguity error suggests must survive a shell *and*
+    /// the real parser, and arrive as the workdir we meant.
+    ///
+    /// This has been wrong twice — once recommending a removed flag, once
+    /// printing paths unquoted so a workdir with a space split into two
+    /// arguments. Both are the same class: an error message that documents a
+    /// grammar it is not checked against. Hence a root with a space here.
+    #[test]
+    fn suggestions_survive_a_shell_and_the_parser() {
+        let roots = ["/work/one", "/work/my game", "/work/two words/deep"];
+        let sessions: Vec<Session> = roots.iter().map(|r| session(r)).collect();
+        let msg = ambiguous_message(&sessions);
+
+        let lines: Vec<&str> = msg
             .lines()
-            .filter_map(|l| l.trim().strip_prefix("kessel attach "))
+            .map(str::trim)
+            .filter(|l| l.starts_with("kessel attach"))
             .collect();
         assert_eq!(
-            suggestions.len(),
-            2,
-            "both sessions should be offered: {msg}"
+            lines.len(),
+            roots.len(),
+            "every session should be offered: {msg}"
         );
 
-        for s in suggestions {
-            let args: Vec<String> = s.split_whitespace().map(String::from).collect();
-            let parsed = crate::parse_attach(&args)
-                .unwrap_or_else(|e| panic!("suggested `kessel attach {s}` is rejected: {e}"));
-            assert_eq!(parsed, Some(std::path::PathBuf::from(s)));
+        for (line, expected) in lines.iter().zip(roots) {
+            let argv = shell_split(line);
+            assert_eq!(&argv[..2], ["kessel", "attach"], "from {line:?}");
+            let parsed = crate::parse_attach(&argv[2..])
+                .unwrap_or_else(|e| panic!("suggested {line:?} is rejected: {e}"));
+            assert_eq!(
+                parsed,
+                Some(std::path::PathBuf::from(expected)),
+                "suggested {line:?} did not round-trip to its workdir"
+            );
         }
+    }
+
+    /// The splitter above is only trustworthy if it actually splits on spaces —
+    /// otherwise the test could pass by never exercising the quoting.
+    #[test]
+    fn shell_split_models_word_splitting() {
+        assert_eq!(
+            shell_split("kessel attach /a b"),
+            ["kessel", "attach", "/a", "b"]
+        );
+        assert_eq!(
+            shell_split("kessel attach \"/a b\""),
+            ["kessel", "attach", "/a b"]
+        );
     }
 
     /// The roots have to appear, or the user can't tell the sessions apart.
