@@ -58,15 +58,71 @@ pub fn attach(root: Option<&std::path::Path>) -> Result<AttachClient, String> {
              Start one (or let your agent start it), then run `kessel attach` again — \
              or play a file on its own timeline with `kessel run <file.lua>`."
             .to_string()),
-        Discovery::Ambiguous(sessions) => {
-            let list = sessions
-                .iter()
-                .map(|s| format!("  --root {}", s.root))
-                .collect::<Vec<_>>()
-                .join("\n");
-            Err(format!(
-                "several `kessel mcp` sessions are running; say which one:\n{list}"
-            ))
+        Discovery::Ambiguous(sessions) => Err(ambiguous_message(&sessions)),
+    }
+}
+
+/// The "which session did you mean?" error.
+///
+/// Each line must be a command the user can actually run — see
+/// `suggestions_are_commands_attach_accepts`, which feeds them back through the
+/// real parser. This previously suggested `--root <path>`, which `attach`
+/// rejects, so the printed recovery path could not work.
+#[cfg(feature = "play")]
+fn ambiguous_message(sessions: &[Session]) -> String {
+    let list = sessions
+        .iter()
+        .map(|s| format!("  kessel attach {}", s.root))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("several `kessel mcp` sessions are running; say which one:\n{list}")
+}
+
+#[cfg(all(test, feature = "play"))]
+mod tests {
+    use super::*;
+
+    fn session(root: &str) -> Session {
+        Session {
+            port: 1234,
+            root: root.to_string(),
+            pid: 1,
+            version: "0.1.0".into(),
         }
+    }
+
+    /// Every command the ambiguity error suggests must survive the real parser.
+    ///
+    /// This is the guard for the class of bug where the CLI grammar changes and
+    /// an error message keeps recommending the old spelling — the message looks
+    /// helpful, and following it fails.
+    #[test]
+    fn suggestions_are_commands_attach_accepts() {
+        let msg = ambiguous_message(&[session("/work/one"), session("/work/two")]);
+
+        let suggestions: Vec<&str> = msg
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("kessel attach "))
+            .collect();
+        assert_eq!(
+            suggestions.len(),
+            2,
+            "both sessions should be offered: {msg}"
+        );
+
+        for s in suggestions {
+            let args: Vec<String> = s.split_whitespace().map(String::from).collect();
+            let parsed = crate::parse_attach(&args)
+                .unwrap_or_else(|e| panic!("suggested `kessel attach {s}` is rejected: {e}"));
+            assert_eq!(parsed, Some(std::path::PathBuf::from(s)));
+        }
+    }
+
+    /// The roots have to appear, or the user can't tell the sessions apart.
+    #[test]
+    fn ambiguous_message_names_every_root() {
+        let msg = ambiguous_message(&[session("/work/one"), session("/work/two")]);
+        assert!(msg.contains("/work/one"), "{msg}");
+        assert!(msg.contains("/work/two"), "{msg}");
     }
 }
