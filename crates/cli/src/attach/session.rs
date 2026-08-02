@@ -86,6 +86,13 @@ impl Session {
         // Write-then-rename rather than writing in place: `discover` reads these
         // concurrently, and a reader that caught a half-written file would see
         // the session as absent. Rename within one directory is atomic.
+        //
+        // This replaces an existing file on every platform we support, Windows
+        // included: `std::fs::rename` is documented to replace the destination,
+        // and uses `MoveFileExW`/`SetFileInformationByHandle` — not the Win32
+        // `MoveFile` that refuses an existing target, which is where the
+        // folklore comes from. A concurrent reader doesn't block it either,
+        // since Rust opens files with `FILE_SHARE_DELETE` by default.
         let tmp = dir.join(format!("{key}.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(&session)?)?;
         std::fs::rename(&tmp, &path)?;
