@@ -641,6 +641,42 @@ fn rogue_chests_and_stairs_advance_stages() {
     }
 }
 
+/// The whole shipped corpus. Kept as one list so a guard can cover every game
+/// rather than only the ones a given test happens to embed.
+const GAMES: &[(&str, &str)] = &[
+    ("2048.lua", include_str!("../../../games/2048.lua")),
+    ("bounce.lua", include_str!("../../../games/bounce.lua")),
+    ("brick.lua", include_str!("../../../games/brick.lua")),
+    ("mover.lua", include_str!("../../../games/mover.lua")),
+    ("outrun.lua", include_str!("../../../games/outrun.lua")),
+    ("platform.lua", include_str!("../../../games/platform.lua")),
+    ("rogue.lua", include_str!("../../../games/rogue.lua")),
+    ("shooter.lua", include_str!("../../../games/shooter.lua")),
+    ("snake.lua", include_str!("../../../games/snake.lua")),
+    ("sokoban.lua", include_str!("../../../games/sokoban.lua")),
+    ("sprite.lua", include_str!("../../../games/sprite.lua")),
+    ("tetris.lua", include_str!("../../../games/tetris.lua")),
+];
+
+/// Every embedded game must use LF endings.
+///
+/// The fixtures below splice deterministic starting state into a game with
+/// `str::replace` on multi-line patterns. Under a CRLF checkout those patterns
+/// silently fail to match, `replace` returns the text unchanged, and the test
+/// runs the *unmodified* game — surfacing as an unrelated gameplay assertion
+/// ("first swipe scored incorrectly") with no hint at the real cause. `.gitattributes`
+/// enforces the checkout; this names the problem if that ever stops working.
+#[test]
+fn corpus_is_lf_only() {
+    for (name, src) in GAMES {
+        assert!(
+            !src.contains('\r'),
+            "{name} has CR in it — check .gitattributes; multi-line test fixtures \
+             will silently stop matching"
+        );
+    }
+}
+
 #[test]
 fn game_2048_merges_wins_loses_and_restarts() {
     const LEFT: u8 = 0x01;
