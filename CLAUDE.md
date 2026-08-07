@@ -144,8 +144,22 @@ additions rather than a rewrite.
 | `vm/KesselVm.kt` | The safe handle: owns the pointer's lifetime, one lock so `close` cannot race a `tick`. |
 | `vm/Controls.kt` | Parses the ROM's control metadata, so the pad shows only the buttons that do something. |
 | `game/GameCatalog.kt` | The library, read from `assets/`. |
-| `game/GameEngine.kt` | The 60 Hz thread; publishes `PlayState` to Compose. |
+| `game/GameEngine.kt` | The 60 Hz thread. Draws to a `Surface`; publishes only pause/halt to Compose. |
+| `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. |
+| `ui/GameSurface.kt` | The `SurfaceView` the engine draws into. |
 | `ui/Gamepad.kt` | Geometry-driven touch pad — one `pointerInput` hit-tests every pointer, which is what makes multi-touch and d-pad diagonals work. |
+
+**Frames never enter Compose.** The screen is a `SurfaceView`, not an `Image`,
+and this is the one place the app deliberately isn't Compose. A producer thread
+and a compositor need an ownership handoff; `lockCanvas` /
+`unlockCanvasAndPost` is one, and "publish alternating bitmaps and assume the
+reader is done with the older one" is not — that was the first version, and
+nothing enforced the assumption. It also keeps 60 frames a second from meaning
+60 recompositions a second.
+
+`destRect` is a pure function over plain ints rather than `android.graphics.Rect`
+because that class is a throwing stub on the unit-test classpath, and geometry
+that draws a wrong-but-plausible picture is exactly what needs a test.
 
 Three decisions worth not re-litigating:
 

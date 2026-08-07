@@ -1,8 +1,10 @@
 package dev.kessel.game
 
 import android.graphics.Bitmap
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.view.SurfaceHolder
 import dev.kessel.vm.Controls
 import dev.kessel.vm.KesselVm
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,9 +12,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.locks.LockSupport
 
-/** What the UI needs to know about the running game. */
+/**
+ * What the UI needs to know about the running game.
+ *
+ * Note what is *not* here: the frame. Pixels go straight to a `Surface` from the
+ * game thread and never enter the Compose world — see [render]. Publishing an
+ * image sixty times a second would also recompose this screen sixty times a
+ * second, to show something Compose is not the right tool to show.
+ */
 data class PlayState(
-    val frame: ImageBitmap? = null,
     val controls: Controls = Controls(),
     val paused: Boolean = false,
     /** The machine halted or faulted — game over, or a crash. */
@@ -22,17 +30,21 @@ data class PlayState(
 )
 
 /**
- * Runs one game at 60 Hz on its own thread.
+ * Runs one game at 60 Hz on its own thread, drawing straight to a `Surface`.
  *
  * **The loop is not on the main thread**, for the same reason `kessel attach`
  * ticks off the UI thread: a frame is the VM running arbitrary game code, and a
- * game that takes 40 ms should drop a frame, not jank the whole app. The UI
- * only ever reads [state].
+ * game that takes 40 ms should drop a frame, not jank the app.
  *
- * Frames are double-buffered. The loop renders into whichever bitmap Compose is
- * *not* currently showing and then publishes it; mutating a single bitmap under
- * the compositor would tear. Two 128×128 bitmaps is 128 KiB, which is nothing
- * next to being wrong.
+ * **Frames are handed over through the surface, not through shared memory.**
+ * An earlier version published alternating `Bitmap`s into a `StateFlow` and
+ * assumed Compose would be finished with one before the loop came back around
+ * to reuse it — an assumption nothing enforced, so a slow UI thread could be
+ * reading a bitmap while this thread rewrote it. `lockCanvas` /
+ * `unlockCanvasAndPost` is the acknowledgement protocol that was missing: the
+ * consumer cannot be handed a buffer this thread still owns. The single
+ * [scratch] bitmap below is safe precisely because nothing outside this class
+ * ever sees it.
  */
 class GameEngine(private val vm: KesselVm) : AutoCloseable {
 
@@ -53,12 +65,31 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
     @Volatile
     private var running = false
 
+    /** The surface to draw on, or null while the view is away. */
+    @Volatile
+    private var holder: SurfaceHolder? = null
+
     private var thread: Thread? = null
 
-    private val bitmaps = Array(2) {
+    /**
+     * The game thread's private staging bitmap. Never published, never touched
+     * by another thread — `drawBitmap` copies out of it into the locked canvas
+     * before the frame is posted.
+     */
+    private val scratch =
         Bitmap.createBitmap(vm.screenDim, vm.screenDim, Bitmap.Config.ARGB_8888)
+
+    /** Nearest-neighbour: smoothing a 128×128 image is not nicer, just blurrier. */
+    private val paint = Paint().apply {
+        isFilterBitmap = false
+        isAntiAlias = false
+        isDither = false
     }
-    private var back = 0
+
+    private val src = Rect(0, 0, vm.screenDim, vm.screenDim)
+
+    /** Reused so the 60 Hz path allocates nothing; only the game thread sees it. */
+    private val dst = Rect()
 
     /** Buttons currently held. Called from the UI thread on every touch. */
     fun setButtons(mask: Int) {
@@ -68,6 +99,16 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
     /** Press [mask] for exactly one frame, whatever the fingers are doing. */
     fun pulse(mask: Int) {
         pulse = pulse or mask
+    }
+
+    /**
+     * Point the loop at a surface, or pass null when the view goes away.
+     *
+     * Safe at any time: the loop re-reads this every frame and simply skips
+     * drawing when there is nothing to draw on.
+     */
+    fun setSurface(target: SurfaceHolder?) {
+        holder = target
     }
 
     /**
@@ -125,7 +166,8 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         while (running) {
             val held = buttons or consumePulse()
             vm.tick(held)
-            publishFrame()
+            render()
+            publishState()
 
             deadline += FRAME_NANOS
             val remaining = deadline - System.nanoTime()
@@ -146,15 +188,54 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         return p
     }
 
-    private fun publishFrame() {
-        val target = bitmaps[back]
-        if (!vm.readFrame(target)) return
-        back = 1 - back
-        _state.value = _state.value.copy(
-            frame = target.asImageBitmap(),
-            paused = vm.isPaused(),
-            halted = vm.isHalted(),
-        )
+    /**
+     * Draw the current frame, if there is one and somewhere to put it.
+     *
+     * Everything here is best-effort: a surface can be torn down by the system
+     * at any moment, and the honest response to that is to skip a frame, not to
+     * take the app down.
+     */
+    private fun render() {
+        val h = holder ?: return
+        if (!vm.readFrame(scratch)) return
+
+        val canvas = try {
+            h.lockCanvas() ?: return
+        } catch (_: IllegalStateException) {
+            return // Surface went away between the null check and the lock.
+        }
+        try {
+            // Letterbox rather than leave whatever the previous owner of this
+            // buffer left behind.
+            canvas.drawColor(Color.BLACK)
+            val r = destRect(vm.screenDim, canvas.width, canvas.height)
+            if (!r.isEmpty) {
+                dst.set(r.left, r.top, r.right, r.bottom)
+                canvas.drawBitmap(scratch, src, dst, paint)
+            }
+        } finally {
+            try {
+                h.unlockCanvasAndPost(canvas)
+            } catch (_: IllegalStateException) {
+                // Surface died mid-frame; the next loop sees holder == null.
+            }
+        }
+    }
+
+    /**
+     * Push pause/halt changes to Compose — but only on a change.
+     *
+     * `MutableStateFlow` conflates equal values, so assigning an unchanged
+     * `PlayState` every frame would be harmless; building one to throw away
+     * sixty times a second would not be.
+     */
+    private fun publishState() {
+        val paused = vm.isPaused()
+        val halted = vm.isHalted()
+        val current = _state.value
+        if (paused != current.paused || halted != current.halted) {
+            _state.value = current.copy(paused = paused, halted = halted)
+        }
     }
 
     private companion object {
