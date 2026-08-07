@@ -28,6 +28,9 @@ object Buttons {
     }
 }
 
+/** Screen edge length of [dev.kessel.vm.KesselNative]'s default mode. */
+const val CLASSIC_DIM = 128
+
 /**
  * A console, with a lifetime Kotlin can be trusted with.
  *
@@ -45,16 +48,24 @@ class KesselVm : AutoCloseable {
 
     private var handle: Long = KesselNative.playerNew()
 
-    /** Screen edge length; the framebuffer is [screenDim]² pixels. */
-    val screenDim: Int = KesselNative.screenDim()
+    /**
+     * Screen edge length; the framebuffer is `screenDim()²` pixels.
+     *
+     * **Only meaningful after [load].** The ROM picks the resolution through
+     * its `screen { … }` block, so anything sized from this before a game is
+     * loaded gets the 128 default — and would tear a 240×240 game across it.
+     */
+    fun screenDim(): Int = if (handle == 0L) CLASSIC_DIM else KesselNative.playerScreenDim(handle)
 
     /**
      * The frame staging buffer. Direct, so the native side can write into it
-     * without a copy, and allocated once rather than per frame — sixty 64 KiB
-     * allocations a second is a GC problem nobody needs.
+     * without a copy, and reused rather than reallocated per frame — sixty
+     * 64 KiB allocations a second is a GC problem nobody needs.
+     *
+     * Grown on demand instead of at construction, because the size is not known
+     * until a ROM has been loaded.
      */
-    private val frame: ByteBuffer =
-        ByteBuffer.allocateDirect(screenDim * screenDim * 4)
+    private var frame: ByteBuffer = ByteBuffer.allocateDirect(CLASSIC_DIM * CLASSIC_DIM * 4)
 
     /**
      * Compile and load a game. Returns null on success, or diagnostics to show
@@ -84,6 +95,10 @@ class KesselVm : AutoCloseable {
     @Synchronized
     fun readFrame(bitmap: Bitmap): Boolean {
         if (handle == 0L) return false
+        val need = screenDim() * screenDim() * 4
+        if (frame.capacity() < need) {
+            frame = ByteBuffer.allocateDirect(need)
+        }
         frame.rewind()
         if (!KesselNative.playerFramebuffer(handle, frame)) return false
         frame.rewind()

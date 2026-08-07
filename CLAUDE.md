@@ -36,6 +36,37 @@ Android app ── android/ (Kotlin/Compose)          │
              60 Hz game thread, direct ByteBuffer
 ```
 
+### Video: two sizes, one colour model
+
+The console has two screens — `Classic128` (128×128) and `Extended240`
+(240×240) — and **only the size differs**. Both are an 8-bit palette-index
+framebuffer over one 256-entry palette, with the same ports and the same 4bpp
+sprite sheet. A second mode that also changed the colour model would fork the
+blitter, the PNG encoder, and every host's upload path for nothing.
+
+A ROM picks its screen with `screen { mode = Extended240 }`, parsed like
+`controls` and carried as ROM metadata rather than in the ROM bytes. The mode is
+fixed when the ROM loads: `Vm::load_rom` takes it, because the reset vector
+draws and must draw at the size the game asked for.
+
+Three things follow, and none of them should be re-litigated:
+
+- **Sprites stay 4bpp.** Nibble `n` under bank `b` (screen port `0x1e`) draws as
+  `b*16 + n`, so bank 0 is the identity and every existing sprite keeps its
+  colours. Going 8bpp would have doubled the sheet and broken the
+  one-char-per-pixel sprite syntax across the whole corpus — for reach that
+  banks already provide.
+- **Nibble 0 is transparent in every bank.** Otherwise a bank switch would give
+  sprites a solid background.
+- **The palette commits on the *index* write** (`0x01`), not blue. That is the
+  order a stack machine yields for free: `pal(i,r,g,b)` pushes `i` first, so `b`
+  pops first and `i` last.
+
+`dim` is runtime state on `Devices`, not a constant. Anything that sizes a
+buffer must read it **after** the ROM loads — `kessel_player_screen_dim(p)`,
+`KesselVm.screenDim()`. Reading it earlier silently yields 128 and tears a
+240×240 game across the buffer.
+
 The load-bearing rule: **`kessel-vm` is host-free.** It does no I/O beyond the
 files under its working directory, synthesizes no audio, and touches no GPU.
 Drawing is a software rasterizer into an indexed framebuffer; sound is an event
@@ -72,7 +103,7 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
 | `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). `Source` picks local vs. attached. |
 | `src/attach/session.rs` | Session files in the cache dir: publish, list, discover. Directory is a parameter, never read from env inside logic — the tests run in parallel. |
-| `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. |
+| `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. Each TICK response carries its own `dim`. |
 | `src/attach/server.rs` | Loopback listener inside `kessel mcp`; each TICK locks the shared console. |
 | `src/attach/client.rs` | `AttachClient` — background tick thread, latest-frame slot. |
 

@@ -113,13 +113,14 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTick(
     let _ = catch_unwind(AssertUnwindSafe(|| p.player.tick(buttons as u8)));
 }
 
-/// Screen edge length in pixels. Static on the Kotlin side — no handle needed.
+/// Screen edge length. Valid only after `playerLoad` — the ROM chooses it.
 #[no_mangle]
-pub extern "system" fn Java_dev_kessel_vm_KesselNative_screenDim(
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerScreenDim(
     _env: JNIEnv,
     _class: JClass,
+    handle: jlong,
 ) -> jint {
-    crate::kessel_screen_dim() as jint
+    crate::kessel_player_screen_dim(handle as *mut KesselPlayer) as jint
 }
 
 /// Write the current frame into `dst`, which **must** be a direct `ByteBuffer`

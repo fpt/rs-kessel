@@ -215,6 +215,7 @@ fn tick(console: &Shared, buttons: u8) -> Frame {
             has_rom: true,
             paused: c.is_paused(),
             halted: c.vm.halted,
+            dim: c.screen_dim() as u16,
             rgba: c.framebuffer_rgba(),
         }
     } else {
@@ -225,6 +226,7 @@ fn tick(console: &Shared, buttons: u8) -> Frame {
             has_rom: false,
             paused: false,
             halted: false,
+            dim: dim as u16,
             rgba: vec![0; dim * dim * 4],
         }
     }

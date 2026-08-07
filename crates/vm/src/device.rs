@@ -6,8 +6,8 @@
 //!
 //! | dev | name    | registers |
 //! |-----|---------|-----------|
-//! | 0x0 | system  | 0 halt · 1 pal-index · 2 pal-r · 3 pal-g · 4 pal-b (commit) |
-//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) · d hspan(x2) |
+//! | 0x0 | system  | 0 halt · 1 pal-index (0..255, commits) · 2 pal-r · 3 pal-g · 4 pal-b |
+//! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) · d hspan(x2) · e sprite-bank |
 //! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) — all read |
 //! | 0x3 | rng     | 0 next (read) / set-seed (write) |
 //! | 0x4 | storage | 0 addr · 1 read · 2 write |
@@ -20,10 +20,62 @@
 //! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
 
-/// Screen edge length in pixels (square framebuffer).
-pub const SCREEN_DIM: usize = 128;
-/// Total framebuffer cells (palette indices).
-pub const SCREEN_PIXELS: usize = SCREEN_DIM * SCREEN_DIM;
+/// Screen edge length for [`VideoMode::Classic128`].
+pub const CLASSIC_DIM: usize = 128;
+/// Screen edge length for [`VideoMode::Extended240`].
+pub const EXTENDED_DIM: usize = 240;
+
+/// The screen a ROM asks for.
+///
+/// Both modes are the *same machine*: an 8-bit palette-index framebuffer, one
+/// 256-entry palette, the same drawing ports, the same 4bpp sprite sheet. The
+/// only difference is how many pixels there are. Keeping it that way is the
+/// whole point — a second mode that also changed the colour model would double
+/// the blitter, the PNG path, and every host's upload code for no gain.
+///
+/// The screen stays square in both. That is what lets every host treat the
+/// framebuffer as one number (`dim`) rather than a width and a height it has to
+/// keep in agreement.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum VideoMode {
+    /// 128×128 — the original console. What a ROM gets if it asks for nothing.
+    #[default]
+    Classic128,
+    /// 240×240 — room for a HUD beside the play field.
+    Extended240,
+}
+
+impl VideoMode {
+    /// Screen edge length in pixels.
+    pub fn dim(self) -> usize {
+        match self {
+            VideoMode::Classic128 => CLASSIC_DIM,
+            VideoMode::Extended240 => EXTENDED_DIM,
+        }
+    }
+
+    /// Total framebuffer cells (one palette index each).
+    pub fn pixels(self) -> usize {
+        self.dim() * self.dim()
+    }
+
+    /// Parse a mode name as written in a `screen { … }` block. Case-insensitive
+    /// so `Extended240` and `extended240` both work.
+    pub fn from_name(name: &str) -> Option<VideoMode> {
+        match name.to_ascii_lowercase().as_str() {
+            "classic128" | "classic" | "128" => Some(VideoMode::Classic128),
+            "extended240" | "extended" | "240" => Some(VideoMode::Extended240),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            VideoMode::Classic128 => "Classic128",
+            VideoMode::Extended240 => "Extended240",
+        }
+    }
+}
 
 /// Gamepad button bits, matching the values the host pushes.
 pub const BTN_LEFT: u8 = 0x01;
@@ -126,9 +178,12 @@ pub struct SoundEvent {
     pub id: u16,
 }
 
-/// The default 16-colour palette (PICO-8's), RGB. Index 0 is treated as
-/// transparent when blitting sprites.
-pub const DEFAULT_PALETTE: [(u8, u8, u8); 16] = [
+/// The 16 colours a ROM gets without touching the palette (PICO-8's).
+///
+/// These occupy indices 0–15, which is exactly the range a 4bpp sprite nibble
+/// can name in bank 0 — so existing art keeps its colours, and a game that
+/// never calls `pal` or `sprbank` sees the console it always saw.
+pub const BASE_16: [(u8, u8, u8); 16] = [
     (0x00, 0x00, 0x00),
     (0x1D, 0x2B, 0x53),
     (0x7E, 0x25, 0x53),
@@ -147,12 +202,76 @@ pub const DEFAULT_PALETTE: [(u8, u8, u8); 16] = [
     (0xFF, 0xCC, 0xAA),
 ];
 
+/// The default 256-entry palette.
+///
+/// Laid out the way an xterm-256 palette is, and for the same reason — an index
+/// should mean something predictable before anyone calls `pal`:
+///
+/// - `0–15`   the [`BASE_16`] colours, so old art is unchanged
+/// - `16–231` a 6×6×6 RGB cube, so `rgb6(r,g,b)` names a colour arithmetically
+/// - `232–255` a 24-step grey ramp, for shadows, fades and dimming
+///
+/// A ROM may overwrite any of it; nothing here is reserved. The console draws
+/// no UI of its own, so there is no system colour to protect — a host that
+/// wants a pause menu draws it in native UI, outside the framebuffer.
+pub const DEFAULT_PALETTE: [(u8, u8, u8); 256] = build_default_palette();
+
+/// The 6 levels each channel takes in the colour cube, matching xterm's.
+const CUBE_LEVELS: [u8; 6] = [0x00, 0x5F, 0x87, 0xAF, 0xD7, 0xFF];
+
+/// Built at compile time so the default palette is a constant, not a lazily
+/// initialised table every `Devices::new` would have to copy from.
+const fn build_default_palette() -> [(u8, u8, u8); 256] {
+    let mut p = [(0u8, 0u8, 0u8); 256];
+
+    let mut i = 0;
+    while i < 16 {
+        p[i] = BASE_16[i];
+        i += 1;
+    }
+
+    // 16..232 — the 6×6×6 cube, red-major so index = 16 + 36r + 6g + b.
+    let mut r = 0;
+    while r < 6 {
+        let mut g = 0;
+        while g < 6 {
+            let mut b = 0;
+            while b < 6 {
+                p[16 + 36 * r + 6 * g + b] = (CUBE_LEVELS[r], CUBE_LEVELS[g], CUBE_LEVELS[b]);
+                b += 1;
+            }
+            g += 1;
+        }
+        r += 1;
+    }
+
+    // 232..256 — grey ramp, 8..238 in steps of 10.
+    let mut k = 0;
+    while k < 24 {
+        let v = (8 + k * 10) as u8;
+        p[232 + k] = (v, v, v);
+        k += 1;
+    }
+
+    p
+}
+
+/// The palette index of a colour in the default cube, for `r`/`g`/`b` in 0..6.
+/// Out-of-range channels clamp, so this is total.
+pub fn rgb6(r: u8, g: u8, b: u8) -> u8 {
+    let c = |v: u8| v.min(5) as usize;
+    (16 + 36 * c(r) + 6 * c(g) + c(b)) as u8
+}
+
 /// All device-side state. Cloned wholesale for snapshots.
 #[derive(Clone)]
 pub struct Devices {
-    /// 128×128 palette-index framebuffer.
+    /// `dim * dim` palette indices, one byte each.
     pub framebuffer: Vec<u8>,
-    pub palette: [(u8, u8, u8); 16],
+    /// Screen edge length. Fixed for the life of a loaded ROM — see
+    /// [`set_mode`](Devices::set_mode).
+    dim: usize,
+    pub palette: [(u8, u8, u8); 256],
     /// Current gamepad button bitfield.
     pub gamepad: u8,
     /// Gamepad bitfield from the *previous* frame, for edge detection
@@ -181,10 +300,10 @@ pub struct Devices {
     sx: u16,
     sy: u16,
     scolor: u8,
-    // pending palette entry being built
-    pidx: u8,
+    // pending palette entry being staged (committed by a write to pal-index)
     pr: u8,
     pg: u8,
+    pb: u8,
     // pending entity coords
     ex: u16,
     ey: u16,
@@ -193,6 +312,8 @@ pub struct Devices {
     cam_y: i16,
     // flip flags for the next sprite blit: bit0 = flip-x, bit1 = flip-y
     sprite_flags: u8,
+    // palette bank for sprite blits: a nibble `n` draws in colour `bank*16 + n`
+    sprite_bank: u8,
     // base address of the sprite sheet (32-byte 4bpp tiles) for blit-by-id
     tileset_base: u16,
     // tilemap device (page 0x7): base/width of the tile-id grid + pending region
@@ -222,8 +343,17 @@ impl Default for Devices {
 
 impl Devices {
     pub fn new() -> Self {
+        Self::with_mode(VideoMode::default())
+    }
+
+    /// A fresh device set at `mode`. The resolution is fixed at construction
+    /// because the reset vector draws — a ROM that sets up its first frame in
+    /// `init()` must do it at the size it asked for, not at the default and
+    /// then again after a switch.
+    pub fn with_mode(mode: VideoMode) -> Self {
         Devices {
-            framebuffer: vec![0u8; SCREEN_PIXELS],
+            framebuffer: vec![0u8; mode.pixels()],
+            dim: mode.dim(),
             palette: DEFAULT_PALETTE,
             gamepad: 0,
             prev_gamepad: 0,
@@ -239,14 +369,15 @@ impl Devices {
             sx: 0,
             sy: 0,
             scolor: 0,
-            pidx: 0,
             pr: 0,
             pg: 0,
+            pb: 0,
             ex: 0,
             ey: 0,
             cam_x: 0,
             cam_y: 0,
             sprite_flags: 0,
+            sprite_bank: 0,
             tileset_base: 0,
             map_base: 0,
             map_width: 0,
@@ -297,24 +428,28 @@ impl Devices {
                         self.halt_requested = true;
                     }
                 }
-                0x1 => self.pidx = val as u8,
+                // Palette: stage r/g/b, then strobe the index to commit.
+                //
+                // The index commits (rather than blue) because that is the
+                // order a stack machine can produce for free: `pal(i,r,g,b)`
+                // pushes i first, so b comes off the stack first and i last.
+                // Committing on blue would need the arguments reversed.
+                0x1 => self.palette[(val & 0xff) as usize] = (self.pr, self.pg, self.pb),
                 0x2 => self.pr = val as u8,
                 0x3 => self.pg = val as u8,
-                0x4 => {
-                    self.palette[(self.pidx & 0x0f) as usize] = (self.pr, self.pg, val as u8);
-                }
+                0x4 => self.pb = val as u8,
                 _ => {}
             },
             0x1 => match reg {
                 0x0 => self.frame_vector = val,
                 0x1 => self.sx = val,
                 0x2 => self.sy = val,
-                0x3 => self.scolor = (val & 0x0f) as u8,
+                0x3 => self.scolor = val as u8,
                 0x4 => self.put_pixel(self.sx, self.sy, self.scolor),
                 0x5 => self.blit_sprite(val, mem),
                 0x6 => {
                     // cls ignores the camera — it clears the whole screen.
-                    let c = (val & 0x0f) as u8;
+                    let c = val as u8;
                     for px in self.framebuffer.iter_mut() {
                         *px = c;
                     }
@@ -322,6 +457,8 @@ impl Devices {
                 0x7 => self.cam_x = val as i16,
                 0x8 => self.cam_y = val as i16,
                 0x9 => self.sprite_flags = val as u8,
+                // Palette bank for subsequent sprite blits (0..15).
+                0xe => self.sprite_bank = (val & 0x0f) as u8,
                 // Blit sprite by id from the tileset (base + id*32).
                 0xa => {
                     let addr = self
@@ -493,14 +630,51 @@ impl Devices {
         self.halt_requested = false;
     }
 
+    /// Screen edge length in pixels.
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Total framebuffer cells.
+    pub fn pixels(&self) -> usize {
+        self.dim * self.dim
+    }
+
+    /// Switch resolution, resizing and clearing the framebuffer.
+    ///
+    /// Called once when a ROM is loaded, from its `screen { … }` metadata —
+    /// never mid-run. A game's art and layout are authored for one size, so a
+    /// resolution that could change under it would be a bug source, not a
+    /// feature. The clear matters: a resized buffer would otherwise show the
+    /// previous ROM's pixels reinterpreted at the new stride, which is exactly
+    /// the plausible-but-wrong picture that is hard to diagnose.
+    pub fn set_mode(&mut self, mode: VideoMode) {
+        self.dim = mode.dim();
+        self.framebuffer = vec![0u8; mode.pixels()];
+    }
+
+    /// Map a sprite's 4-bit pixel `nibble` onto a palette index through the
+    /// current bank: bank `b` draws nibble `n` as colour `b * 16 + n`.
+    ///
+    /// This is how 4bpp art reaches a 256-colour palette without changing the
+    /// sprite format. Bank 0 is the identity, so every existing sprite keeps
+    /// exactly the colours it had, and one tile can be drawn in sixteen
+    /// different colour schemes by changing a single register.
+    ///
+    /// Nibble 0 never gets here — it is transparent in every bank, so a bank
+    /// switch can't accidentally make a sprite's holes opaque.
+    fn banked(&self, nibble: u8) -> u8 {
+        (self.sprite_bank << 4) | (nibble & 0x0f)
+    }
+
     /// Draw a pixel at world coordinate (x, y). The camera offset translates
     /// world→screen; off-screen pixels are clipped.
     fn put_pixel(&mut self, x: u16, y: u16, color: u8) {
         let sx = x as i32 - self.cam_x as i32;
         let sy = y as i32 - self.cam_y as i32;
-        let dim = SCREEN_DIM as i32;
+        let dim = self.dim as i32;
         if (0..dim).contains(&sx) && (0..dim).contains(&sy) {
-            self.framebuffer[sy as usize * SCREEN_DIM + sx as usize] = color & 0x0f;
+            self.framebuffer[sy as usize * self.dim + sx as usize] = color;
         }
     }
 
@@ -524,7 +698,8 @@ impl Devices {
                     byte & 0x0f
                 };
                 if ci != 0 {
-                    self.put_pixel(self.sx.wrapping_add(col), self.sy.wrapping_add(row), ci);
+                    let c = self.banked(ci);
+                    self.put_pixel(self.sx.wrapping_add(col), self.sy.wrapping_add(row), c);
                 }
             }
         }
@@ -536,7 +711,7 @@ impl Devices {
     /// cheap enough to draw a full pseudo-3D road one row at a time.
     fn draw_hline(&mut self, xa: u16, xb: u16, y: u16, color: u8) {
         let sy = y as i32 - self.cam_y as i32;
-        if !(0..SCREEN_DIM as i32).contains(&sy) {
+        if !(0..self.dim as i32).contains(&sy) {
             return;
         }
         // Interpret the endpoints as signed, so a span whose left edge runs off
@@ -545,9 +720,9 @@ impl Devices {
         let (xa, xb) = (xa as i16 as i32, xb as i16 as i32);
         let (lo, hi) = if xa <= xb { (xa, xb) } else { (xb, xa) };
         let sxa = (lo - self.cam_x as i32).max(0);
-        let sxb = (hi - self.cam_x as i32).min(SCREEN_DIM as i32 - 1);
-        let c = color & 0x0f;
-        let row = sy as usize * SCREEN_DIM;
+        let sxb = (hi - self.cam_x as i32).min(self.dim as i32 - 1);
+        let c = color;
+        let row = sy as usize * self.dim;
         let mut sx = sxa;
         while sx <= sxb {
             self.framebuffer[row + sx as usize] = c;
@@ -565,7 +740,7 @@ impl Devices {
         let flip_x = self.sprite_flags & 0x01 != 0;
         let flip_y = self.sprite_flags & 0x02 != 0;
         // Destination side length in px = 8 * scale / 256, at least 1.
-        let dst = ((8u32 * self.scale_fp as u32 / 256).max(1)).min(SCREEN_DIM as u32) as u16;
+        let dst = ((8u32 * self.scale_fp as u32 / 256).max(1)).min(self.dim as u32) as u16;
         for dy in 0..dst {
             let src_row0 = (dy as u32 * 8 / dst as u32) as u16; // 0..7
             let src_row = if flip_y { 7 - src_row0 } else { src_row0 };
@@ -580,7 +755,8 @@ impl Devices {
                     byte & 0x0f
                 };
                 if ci != 0 {
-                    self.put_pixel(self.sx.wrapping_add(dx), self.sy.wrapping_add(dy), ci);
+                    let c = self.banked(ci);
+                    self.put_pixel(self.sx.wrapping_add(dx), self.sy.wrapping_add(dy), c);
                 }
             }
         }
@@ -599,23 +775,23 @@ impl Devices {
     /// Expand the palette-index framebuffer into packed RGBA (4 bytes/pixel),
     /// for the host window and the PNG encoder.
     pub fn framebuffer_rgba(&self) -> Vec<u8> {
-        let mut out = vec![0u8; SCREEN_PIXELS * 4];
+        let mut out = vec![0u8; self.pixels() * 4];
         self.framebuffer_rgba_into(&mut out);
         out
     }
 
     /// The same expansion, written into a caller-owned buffer. Returns false if
-    /// `dst` is smaller than `SCREEN_PIXELS * 4`.
+    /// `dst` is smaller than `dim * dim * 4`.
     ///
     /// This exists for hosts that blit every frame at 60 Hz — a mobile app
     /// filling a direct `ByteBuffer`, say. Handing them the allocating variant
     /// would churn 64 KiB per frame through their allocator for nothing.
     pub fn framebuffer_rgba_into(&self, dst: &mut [u8]) -> bool {
-        if dst.len() < SCREEN_PIXELS * 4 {
+        if dst.len() < self.pixels() * 4 {
             return false;
         }
         for (px, &idx) in dst.chunks_exact_mut(4).zip(self.framebuffer.iter()) {
-            let (r, g, b) = self.palette[(idx & 0x0f) as usize];
+            let (r, g, b) = self.palette[idx as usize];
             px.copy_from_slice(&[r, g, b, 0xff]);
         }
         true
@@ -626,6 +802,9 @@ impl Devices {
 mod tests {
     use super::*;
 
+    /// Every test here runs the default screen.
+    const CLASSIC_PIXELS: usize = CLASSIC_DIM * CLASSIC_DIM;
+
     #[test]
     fn pixel_and_cls() {
         let mut d = Devices::new();
@@ -634,7 +813,7 @@ mod tests {
         d.write(0x11, 10, &mem); // x = 10
         d.write(0x12, 20, &mem); // y = 20
         d.write(0x14, 0, &mem); // pixel
-        assert_eq!(d.framebuffer[20 * SCREEN_DIM + 10], 5);
+        assert_eq!(d.framebuffer[20 * CLASSIC_DIM + 10], 5);
         d.write(0x16, 3, &mem); // cls color 3
         assert!(d.framebuffer.iter().all(|&p| p == 3));
     }
@@ -677,7 +856,7 @@ mod tests {
         d.write(0x11, 12, &mem);
         d.write(0x12, 7, &mem);
         d.write(0x14, 0, &mem); // pixel
-        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 2], 6);
+        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 2], 6);
         // World (0,0) -> screen (-10,-5) -> clipped.
         d.write(0x11, 0, &mem);
         d.write(0x12, 0, &mem);
@@ -714,7 +893,7 @@ mod tests {
         d.write(0x11, 3, &mem); // x = 3
         d.write(0x12, 4, &mem); // y = 4
         d.write(0x1a, 1, &mem); // blit id 1
-        assert_eq!(d.framebuffer[4 * SCREEN_DIM + 3], 5);
+        assert_eq!(d.framebuffer[4 * CLASSIC_DIM + 3], 5);
     }
 
     #[test]
@@ -740,7 +919,7 @@ mod tests {
         d.write(0x77, 2, &mem); // th
         d.write(0x78, 0, &mem); // draw
         assert_eq!(d.framebuffer[8], 5); // cell (1,0) = tile 1 -> screen (8,0)
-        assert_eq!(d.framebuffer[8 * SCREEN_DIM], 5); // cell (0,1) -> screen (0,8)
+        assert_eq!(d.framebuffer[8 * CLASSIC_DIM], 5); // cell (0,1) -> screen (0,8)
         assert_eq!(d.framebuffer[0], 0); // cell (0,0) = tile 0 (blank)
     }
 
@@ -791,14 +970,140 @@ mod tests {
     }
 
     #[test]
-    fn palette_write_commits_on_blue() {
+    fn palette_write_commits_on_the_index_strobe() {
         let mut d = Devices::new();
         let mem = [0u8; 8];
-        d.write(0x01, 2, &mem); // index 2
         d.write(0x02, 0x11, &mem); // r
         d.write(0x03, 0x22, &mem); // g
-        d.write(0x04, 0x33, &mem); // b -> commit
+        d.write(0x04, 0x33, &mem); // b
+        assert_ne!(d.palette[2], (0x11, 0x22, 0x33), "must not commit early");
+        d.write(0x01, 2, &mem); // index -> commit
         assert_eq!(d.palette[2], (0x11, 0x22, 0x33));
+    }
+
+    /// The whole 256-entry range is writable — the high indices are what a
+    /// 240×240 game with a deep palette actually uses.
+    #[test]
+    fn palette_reaches_index_255() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x02, 1, &mem);
+        d.write(0x03, 2, &mem);
+        d.write(0x04, 3, &mem);
+        d.write(0x01, 255, &mem);
+        assert_eq!(d.palette[255], (1, 2, 3));
+    }
+
+    /// The default palette must be a *known* 256 colours, not 16 real ones and
+    /// 240 blacks — a game drawing in index 200 should see a colour.
+    #[test]
+    fn default_palette_fills_all_256_entries() {
+        let d = Devices::new();
+        assert_eq!(d.palette[0..16], BASE_16, "base 16 must be unchanged");
+        // 6x6x6 cube: index 16 is black, 231 is white, and rgb6 names them.
+        assert_eq!(d.palette[rgb6(0, 0, 0) as usize], (0x00, 0x00, 0x00));
+        assert_eq!(d.palette[rgb6(5, 5, 5) as usize], (0xFF, 0xFF, 0xFF));
+        assert_eq!(d.palette[rgb6(5, 0, 0) as usize], (0xFF, 0x00, 0x00));
+        // Grey ramp ascends and is neutral.
+        let (r, g, b) = d.palette[240];
+        assert!(
+            r == g && g == b,
+            "grey ramp must be neutral, got {r},{g},{b}"
+        );
+        assert!(d.palette[255].0 > d.palette[232].0, "ramp must ascend");
+    }
+
+    /// Colours above 15 must survive the trip to the framebuffer. They used to
+    /// be masked to a nibble, which silently drew a different colour.
+    #[test]
+    fn colours_above_15_are_not_masked() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 200, &mem); // color = 200
+        d.write(0x11, 5, &mem);
+        d.write(0x12, 6, &mem);
+        d.write(0x14, 0, &mem); // pixel
+        assert_eq!(d.framebuffer[6 * CLASSIC_DIM + 5], 200);
+
+        d.write(0x16, 231, &mem); // cls to a cube colour
+        assert!(d.framebuffer.iter().all(|&p| p == 231));
+    }
+
+    /// A sprite nibble is drawn as `bank * 16 + nibble`, so one 4bpp tile can
+    /// wear sixteen different colour schemes.
+    #[test]
+    fn sprite_bank_offsets_the_nibble() {
+        let mut mem = [0u8; 64];
+        // One 8x8 tile at addr 0: top-left pixel is nibble 5, rest transparent.
+        mem[0] = 0x50;
+        let mut d = Devices::new();
+
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0x15, 0, &mem); // blit raw at (0,0), bank 0
+        assert_eq!(d.framebuffer[0], 5, "bank 0 must be the identity");
+
+        d.write(0x1e, 3, &mem); // bank 3
+        d.write(0x11, 8, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0x15, 0, &mem);
+        assert_eq!(d.framebuffer[8], 0x35, "bank 3 -> 3*16 + 5");
+    }
+
+    /// Nibble 0 is a hole in every bank. If a bank switch made it opaque,
+    /// sprites would gain a solid background at bank 1+.
+    #[test]
+    fn nibble_zero_stays_transparent_in_every_bank() {
+        let mut mem = [0u8; 64];
+        mem[0] = 0x50; // pixel (0,0) = 5, pixel (1,0) = 0
+        let mut d = Devices::new();
+        d.write(0x16, 9, &mem); // fill with colour 9
+        d.write(0x1e, 7, &mem); // bank 7
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0x15, 0, &mem);
+        assert_eq!(d.framebuffer[0], 0x75, "opaque nibble is banked");
+        assert_eq!(d.framebuffer[1], 9, "nibble 0 left the background alone");
+    }
+
+    #[test]
+    fn extended_mode_resizes_and_clears_the_framebuffer() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x16, 7, &mem); // dirty the classic framebuffer
+        assert_eq!(d.dim(), CLASSIC_DIM);
+
+        d.set_mode(VideoMode::Extended240);
+        assert_eq!(d.dim(), EXTENDED_DIM);
+        assert_eq!(d.framebuffer.len(), EXTENDED_DIM * EXTENDED_DIM);
+        assert!(
+            d.framebuffer.iter().all(|&p| p == 0),
+            "stale pixels would be re-read at the new stride"
+        );
+    }
+
+    /// Clipping must follow the *current* screen, not a compile-time constant.
+    /// x=200 is off-screen on Classic and on-screen on Extended.
+    #[test]
+    fn clipping_follows_the_active_mode() {
+        let mem = [0u8; 8];
+        let mut d = Devices::new();
+        d.write(0x13, 5, &mem);
+        d.write(0x11, 200, &mem);
+        d.write(0x12, 10, &mem);
+        d.write(0x14, 0, &mem);
+        assert!(d.framebuffer.iter().all(|&p| p == 0), "clipped on Classic");
+
+        let mut d = Devices::with_mode(VideoMode::Extended240);
+        d.write(0x13, 5, &mem);
+        d.write(0x11, 200, &mem);
+        d.write(0x12, 10, &mem);
+        d.write(0x14, 0, &mem);
+        assert_eq!(
+            d.framebuffer[10 * EXTENDED_DIM + 200],
+            5,
+            "drawn on Extended"
+        );
     }
 
     #[test]
@@ -808,7 +1113,7 @@ mod tests {
         d.write(0x16, 7, &mem); // cls to color 7 = (0xFF,0xF1,0xE8)
         let rgba = d.framebuffer_rgba();
         assert_eq!(&rgba[0..4], &[0xFF, 0xF1, 0xE8, 0xFF]);
-        assert_eq!(rgba.len(), SCREEN_PIXELS * 4);
+        assert_eq!(rgba.len(), CLASSIC_PIXELS * 4);
     }
 
     #[test]
@@ -833,10 +1138,10 @@ mod tests {
         d.write(0x12, 3, &mem); // sy = 3
         d.write(0x11, 10, &mem); // sx = 10 (x1)
         d.write(0x1d, 14, &mem); // x2 = 14 -> draw span 10..=14 at row 3
-        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 9], 0);
-        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 10], 5);
-        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 14], 5);
-        assert_eq!(d.framebuffer[3 * SCREEN_DIM + 15], 0);
+        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 9], 0);
+        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 10], 5);
+        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 14], 5);
+        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 15], 0);
     }
 
     #[test]
@@ -849,8 +1154,8 @@ mod tests {
         d.write(0x12, 2, &mem); // row 2
         d.write(0x11, 0xFFEC, &mem); // x1 = -20 as u16
         d.write(0x1d, 30, &mem); // x2 = 30
-        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 0], 9, "left edge drawn");
-        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 30], 9, "right end drawn");
-        assert_eq!(d.framebuffer[2 * SCREEN_DIM + 31], 0);
+        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 0], 9, "left edge drawn");
+        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 30], 9, "right end drawn");
+        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 31], 0);
     }
 }

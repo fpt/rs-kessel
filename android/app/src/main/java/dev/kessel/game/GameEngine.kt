@@ -75,9 +75,12 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      * The game thread's private staging bitmap. Never published, never touched
      * by another thread — `drawBitmap` copies out of it into the locked canvas
      * before the frame is posted.
+     *
+     * Created in [start] rather than here: the ROM's `screen { … }` block
+     * decides the resolution, so there is nothing to size this from until a
+     * game has been loaded.
      */
-    private val scratch =
-        Bitmap.createBitmap(vm.screenDim, vm.screenDim, Bitmap.Config.ARGB_8888)
+    private var scratch: Bitmap? = null
 
     /** Nearest-neighbour: smoothing a 128×128 image is not nicer, just blurrier. */
     private val paint = Paint().apply {
@@ -86,7 +89,7 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         isDither = false
     }
 
-    private val src = Rect(0, 0, vm.screenDim, vm.screenDim)
+    private val src = Rect()
 
     /** Reused so the 60 Hz path allocates nothing; only the game thread sees it. */
     private val dst = Rect()
@@ -124,6 +127,10 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
             _state.value = PlayState(error = error)
             return
         }
+        // Only now is the resolution known.
+        val dim = vm.screenDim()
+        scratch = Bitmap.createBitmap(dim, dim, Bitmap.Config.ARGB_8888)
+        src.set(0, 0, dim, dim)
         _state.value = PlayState(controls = vm.controls())
 
         running = true
@@ -197,7 +204,8 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      */
     private fun render() {
         val h = holder ?: return
-        if (!vm.readFrame(scratch)) return
+        val bmp = scratch ?: return
+        if (!vm.readFrame(bmp)) return
 
         val canvas = try {
             h.lockCanvas() ?: return
@@ -208,10 +216,10 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
             // Letterbox rather than leave whatever the previous owner of this
             // buffer left behind.
             canvas.drawColor(Color.BLACK)
-            val r = destRect(vm.screenDim, canvas.width, canvas.height)
+            val r = destRect(bmp.width, canvas.width, canvas.height)
             if (!r.isEmpty) {
                 dst.set(r.left, r.top, r.right, r.bottom)
-                canvas.drawBitmap(scratch, src, dst, paint)
+                canvas.drawBitmap(bmp, src, dst, paint)
             }
         } finally {
             try {

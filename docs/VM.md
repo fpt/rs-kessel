@@ -12,6 +12,18 @@ console in a window for a human.
 ## Machine
 
 - 16-bit stack machine. Data stack + return stack, 256 `u16` cells each.
+- **Video**: a square, 8-bit palette-index framebuffer plus one 256-entry RGB
+  palette. Two screen sizes, and *only* the size differs — same ports, same
+  4bpp sprite sheet, same palette:
+
+  | mode | screen | framebuffer | selected by |
+  |------|--------|-------------|-------------|
+  | `Classic128` | 128×128 | 16 KiB | the default |
+  | `Extended240` | 240×240 | 56.25 KiB | `screen { mode = Extended240 }` |
+
+  The mode is fixed when the ROM loads and never changes under a running game.
+  The framebuffer lives outside the 64 KiB address space, so the wider screen
+  costs a game no RAM.
 - Flat 64 KiB memory (`u16` addresses — no out-of-range accesses).
 - ROMs load at `0x0100`; the **reset vector** runs once (init).
 - Each frame calls the installed **frame vector**; it runs until `RET` (to the
@@ -72,13 +84,15 @@ Port byte = `(device << 4) | register`.
 | Port | Dir | Meaning |
 |------|-----|---------|
 | `0x00` | out | system/halt (non-zero halts the machine) |
-| `0x01..0x04` | out | palette: index, r, g, b (writing **b** commits the entry) |
+| `0x02..0x04` | out | palette: stage r, g, b |
+| `0x01` | out | palette index (0–255) — **commits** the staged colour |
 | `0x10` | out | screen/vector — install the frame vector (address) |
 | `0x11` `0x12` | out | screen x, y |
-| `0x13` | out | screen colour (0–15; 0 = transparent for sprites) |
+| `0x13` | out | screen colour (0–255 palette index) |
 | `0x14` | out | draw pixel at (x,y) |
 | `0x15` | out | draw 8×8 sprite from `mem[addr]` (32 bytes, 4bpp, hi-nibble = left) |
 | `0x16` | out | clear screen to colour |
+| `0x1e` | out | sprite palette bank (0–15): a sprite nibble `n` draws as `bank*16 + n` |
 | `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
 | `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id (scaled tile at screen x/y) |
 | `0xc0` | in/out | trig: write angle (0..255 = a turn) → read sin; `0xc1` reads cos. Signed 8.8 fixed (-256..256) |
@@ -92,7 +106,35 @@ Port byte = `(device << 4) | register`.
 | `0x60` | out | console: write a byte to the text buffer |
 
 Gamepad bits: `LEFT 0x01 RIGHT 0x02 UP 0x04 DOWN 0x08 A 0x10 B 0x20 START 0x40
-SELECT 0x80`. Screen is 128×128, 16-colour (default PICO-8 palette).
+SELECT 0x80`.
+
+### Colour
+
+Every drawing port takes a **palette index**, never RGB; only ports
+`0x01..0x04` deal in RGB. That keeps one colour model across the framebuffer,
+sprites, tilemaps and text.
+
+The palette is 256 entries and the default fills all of them:
+
+| range | contents |
+|-------|----------|
+| `0–15` | the PICO-8 16, so existing art is unchanged |
+| `16–231` | a 6×6×6 RGB cube — index = `16 + 36r + 6g + b` |
+| `232–255` | a 24-step grey ramp |
+
+Nothing is reserved: the console draws no UI of its own, so a host that wants a
+pause menu draws it in native UI, outside the framebuffer.
+
+The palette commits on the **index** write, not the blue write, because that is
+the order a stack machine produces for free — `pal(i,r,g,b)` pushes `i` first,
+so `b` pops first and `i` last.
+
+**Sprites stay 4bpp.** A tile is 32 bytes, one nibble per pixel, and nibble `0`
+is transparent in every bank. Port `0x1e` selects a bank, so nibble `n` draws
+as `bank*16 + n`: bank 0 is the identity (old art keeps its colours) and one
+tile can wear sixteen colour schemes without a second copy. Widening sprites to
+8bpp instead would have doubled the sheet and broken the one-char-per-pixel
+sprite syntax for no extra reach.
 
 ## The tools (agent-facing loop)
 
@@ -275,6 +317,16 @@ end
   `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
+- **Colour:**
+  - `pal(i,r,g,b)` — rewrite palette entry `i` (0–255). The framebuffer is
+    untouched, so recolouring the screen costs one loop and no redraw: fades,
+    damage flashes, day/night, and palette cycling all fall out of this.
+  - `sprbank(n)` — draw subsequent sprites through bank `n` (0–15), so a tile's
+    nibble `c` becomes colour `n*16 + c`. Bank 0 is the identity. One tile, up
+    to sixteen colour schemes; nibble 0 stays transparent in every bank.
+  - `screen { mode = Extended240 }` — a 240×240 screen instead of 128×128.
+    Declared like `controls`, read by the host when the ROM loads, fixed for the
+    run. `games/spectrum.lua` demonstrates all three.
 - **Pseudo-3D / scaling (racers, mode-7-ish effects):**
   - `hline(x1,x2,y,c)` — fill a horizontal span at row `y`. The endpoints are
     signed, so a span whose left edge runs off-screen clips cleanly. Drawing one
@@ -456,8 +508,9 @@ attached, agent runs are exactly as deterministic as before.
 
 `kessel run` loads a `.lua`/`.asm` file into a `VmPlayer` (`crates/vm/src/player.rs`),
 opens a window with `winit`, and on a 60 Hz tick calls `tick(buttons)` +
-`framebuffer_rgba()`, blitting the 128×128 framebuffer scaled up with
-nearest-neighbour into a `softbuffer` CPU surface (`crates/cli/src/play.rs`).
+`framebuffer_rgba()`, blitting the framebuffer (128×128 or 240×240, whichever
+the ROM asked for) scaled up with nearest-neighbour into a `softbuffer` CPU
+surface (`crates/cli/src/play.rs`).
 
 There is deliberately **no GPU** in the path. The console rasterizes into its own
 palette-indexed framebuffer, so presentation is a plain upscale-and-blit; keeping

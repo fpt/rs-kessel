@@ -3,7 +3,7 @@
 //! halt the machine) rather than panicking, so a buggy ROM the model wrote can
 //! be observed and debugged instead of taking the process down.
 
-use super::device::Devices;
+use super::device::{Devices, VideoMode};
 use super::isa::Op;
 
 /// Flat memory size (64 KiB). `pc` and all addresses are `u16`, so memory
@@ -93,7 +93,7 @@ impl Vm {
     /// ROM's frame vector, framebuffer, storage, and palette would leak into the
     /// new program (e.g. a ROM that installs no frame vector would keep running
     /// the old one's frame code).
-    pub fn load_rom(&mut self, rom: &[u8]) -> RunOutcome {
+    pub fn load_rom(&mut self, rom: &[u8], mode: VideoMode) -> RunOutcome {
         for b in self.mem.iter_mut() {
             *b = 0;
         }
@@ -105,7 +105,7 @@ impl Vm {
         self.cycle = 0;
         self.halted = false;
         self.fault = None;
-        self.devices = Devices::new();
+        self.devices = Devices::with_mode(mode);
         self.run_vector(ROM_ORIGIN, cap())
     }
 
@@ -399,7 +399,7 @@ mod tests {
     /// Build a ROM from opcodes/bytes and run it to completion (reset vector).
     fn run(bytes: &[u8]) -> Vm {
         let mut vm = Vm::new();
-        vm.load_rom(bytes);
+        vm.load_rom(bytes, VideoMode::default());
         vm
     }
 
@@ -512,7 +512,7 @@ mod tests {
         let a = assemble("on-frame #10 DEO RET  @on-frame  #05 #16 DEO RET");
         assert!(a.ok(), "{:?}", a.diagnostics);
         let mut vm = Vm::new();
-        vm.load_rom(&a.rom);
+        vm.load_rom(&a.rom, VideoMode::default());
         vm.run_frame(0, cap());
         assert_ne!(vm.devices.frame_vector, 0);
         assert!(vm.devices.framebuffer.iter().all(|&p| p == 5));
@@ -521,7 +521,7 @@ mod tests {
         // vector and framebuffer must be gone.
         let b = assemble("RET");
         assert!(b.ok());
-        vm.load_rom(&b.rom);
+        vm.load_rom(&b.rom, VideoMode::default());
         assert_eq!(vm.devices.frame_vector, 0, "stale frame vector leaked");
         assert!(
             vm.devices.framebuffer.iter().all(|&p| p == 0),
@@ -541,7 +541,7 @@ mod tests {
         let a = assemble("on-frame #10 DEO RET  @on-frame  on-frame JMP");
         assert!(a.ok(), "{:?}", a.diagnostics);
         let mut vm = Vm::new();
-        vm.load_rom(&a.rom);
+        vm.load_rom(&a.rom, VideoMode::default());
         for _ in 0..5 {
             assert_eq!(vm.run_frame(0, 1000), RunOutcome::CapExceeded);
             assert_eq!(
@@ -561,7 +561,7 @@ mod tests {
         rom.extend_from_slice(&0x0100u16.to_be_bytes());
         rom.push(Op::Jmp as u8);
         // load_rom runs the reset vector with the default cap; expect CapExceeded.
-        let outcome = vm.load_rom(&rom);
+        let outcome = vm.load_rom(&rom, VideoMode::default());
         assert_eq!(outcome, RunOutcome::CapExceeded);
         assert_eq!(vm.cycle, cap());
     }

@@ -654,6 +654,7 @@ const GAMES: &[(&str, &str)] = &[
     ("shooter.lua", include_str!("../../../games/shooter.lua")),
     ("snake.lua", include_str!("../../../games/snake.lua")),
     ("sokoban.lua", include_str!("../../../games/sokoban.lua")),
+    ("spectrum.lua", include_str!("../../../games/spectrum.lua")),
     ("sprite.lua", include_str!("../../../games/sprite.lua")),
     ("tetris.lua", include_str!("../../../games/tetris.lua")),
 ];
@@ -803,4 +804,33 @@ games_ok! {
     rogue_ok => "rogue",
     tetris_ok => "tetris",
     sokoban_ok => "sokoban",
+}
+
+/// spectrum.lua is the reference for the video features, so its ROM must
+/// actually select the wide screen and paint colours a 16-entry palette could
+/// not name. A silent fallback to 128×128 would still "work" and still be wrong.
+#[test]
+fn spectrum_uses_the_extended_screen_and_high_colours() {
+    use kessel_vm::device::{VideoMode, EXTENDED_DIM};
+
+    let mut c = VmConsole::new();
+    c.write_source("s.lua", include_str!("../../../games/spectrum.lua"))
+        .unwrap();
+    assert!(c.assemble("s.lua").unwrap().ok());
+    c.load_rom("s.lua").unwrap();
+
+    assert_eq!(c.video_mode(), VideoMode::Extended240);
+    assert_eq!(c.screen_dim(), EXTENDED_DIM as u32);
+
+    c.run_frame(0);
+    let fb = &c.vm.devices.framebuffer;
+    assert_eq!(fb.len(), EXTENDED_DIM * EXTENDED_DIM);
+    assert!(
+        fb.iter().any(|&p| p > 15),
+        "nothing drawn above index 15 — the deep palette is unused"
+    );
+    assert!(
+        fb.iter().any(|&p| p != 0),
+        "the extended framebuffer is blank"
+    );
 }
