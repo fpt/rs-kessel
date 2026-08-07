@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose supplies the real theme; this only needs to keep the window
+         dark so there is no white flash before the first frame. -->
+    <style name="Theme.Kessel" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/kessel_background</item>
+        <item name="android:statusBarColor">@color/kessel_background</item>
+        <item name="android:navigationBarColor">@color/kessel_background</item>
+    </style>
+</resources>

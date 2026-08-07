@@ -119,6 +119,16 @@ impl VmPlayer {
         }
     }
 
+    /// The current framebuffer written into a caller-owned RGBA buffer. True if
+    /// a frame was written; false if no ROM is loaded or `dst` is too small.
+    ///
+    /// The zero-allocation counterpart to [`framebuffer_rgba`](Self::framebuffer_rgba),
+    /// for hosts blitting at 60 Hz into a buffer they already own.
+    pub fn framebuffer_rgba_into(&self, dst: &mut [u8]) -> bool {
+        let c = self.inner.lock();
+        c.rom_loaded && c.framebuffer_rgba_into(dst)
+    }
+
     /// Screen edge length in pixels (square).
     pub fn screen_dim(&self) -> u32 {
         SCREEN_DIM as u32

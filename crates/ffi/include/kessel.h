@@ -1,0 +1,86 @@
+/*
+ * kessel.h — the C ABI over the kessel console's play surface.
+ *
+ * Link against libkessel_ffi (staticlib for iOS, cdylib for anything that
+ * dlopen's it). Android does not use this header; it goes through the JNI
+ * entry points in src/android.rs, which call these same functions.
+ *
+ * Contract, in full:
+ *   - Every function tolerates a NULL handle, returning a zero value.
+ *   - char* returned here is owned by the caller and must go to
+ *     kessel_string_free(). Do not free() it.
+ *   - A handle may be used from several threads at once; it may not be freed
+ *     while another thread is using it.
+ */
+#ifndef KESSEL_H
+#define KESSEL_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Opaque console handle. */
+typedef struct KesselPlayer KesselPlayer;
+
+/* Gamepad bits, as passed to kessel_player_tick. */
+#define KESSEL_BTN_LEFT   0x01
+#define KESSEL_BTN_RIGHT  0x02
+#define KESSEL_BTN_UP     0x04
+#define KESSEL_BTN_DOWN   0x08
+#define KESSEL_BTN_A      0x10
+#define KESSEL_BTN_B      0x20
+#define KESSEL_BTN_START  0x40
+#define KESSEL_BTN_SELECT 0x80
+
+/* Create / destroy a console. */
+KesselPlayer *kessel_player_new(void);
+void kessel_player_free(KesselPlayer *p);
+
+/*
+ * Compile and load a game. `name`'s extension picks the dialect: .lua/.ux for
+ * luax, .asm for assembly.
+ *
+ * Returns NULL on success, or an owned diagnostics string for the caller to
+ * display and then pass to kessel_string_free(). A failed load leaves the
+ * console with no ROM.
+ */
+char *kessel_player_load(KesselPlayer *p, const char *source, const char *name);
+
+/* Advance one frame with `buttons` held. No-op until a ROM is loaded. */
+void kessel_player_tick(KesselPlayer *p, uint8_t buttons);
+
+/* Screen edge length in pixels; a frame is dim*dim*4 bytes. Constant. */
+uint32_t kessel_screen_dim(void);
+
+/*
+ * Write the current frame into `dst` as packed RGBA.
+ *
+ * True if a frame was written. False — with `dst` untouched, so the caller can
+ * keep presenting its last good frame — if there is no ROM, `dst` is NULL, or
+ * `len` is under kessel_screen_dim()^2 * 4.
+ */
+bool kessel_player_framebuffer(KesselPlayer *p, uint8_t *dst, size_t len);
+
+/*
+ * The loaded ROM's control metadata as JSON: which buttons the game uses and
+ * what they are called, so a host can draw only the controls that do
+ * something. Always a parseable object. Owned by the caller.
+ */
+char *kessel_player_controls_json(KesselPlayer *p);
+
+bool kessel_player_has_rom(KesselPlayer *p);
+bool kessel_player_is_paused(KesselPlayer *p);
+bool kessel_player_is_halted(KesselPlayer *p);
+
+/* Release a string returned by this API. NULL is a no-op. */
+void kessel_string_free(char *s);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* KESSEL_H */
