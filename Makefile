@@ -1,4 +1,5 @@
-.PHONY: help build build-headless install uninstall test fmt fmt-fix clean play mcp
+.PHONY: help build build-headless install uninstall test fmt fmt-fix clean play mcp \
+        android android-install android-test android-deps
 
 # Install location (override with: make install PREFIX=/usr/local)
 PREFIX ?= $(HOME)
@@ -17,6 +18,11 @@ help:
 	@echo ""
 	@echo "  make play GAME=games/tetris.lua   - Build and play a game"
 	@echo "  make mcp  ROOT=.                  - Run the MCP server on stdio"
+	@echo ""
+	@echo "  make android-deps    - Install the Rust Android targets and cargo-ndk"
+	@echo "  make android         - Build the Android APK (debug)"
+	@echo "  make android-install - Build and install onto a connected device"
+	@echo "  make android-test    - Run the Android unit tests"
 	@echo ""
 
 build:
@@ -59,6 +65,29 @@ ROOT ?= .
 mcp: build
 	@./crates/target/release/kessel mcp --root "$(ROOT)"
 
+# --- Android ---------------------------------------------------------------
+#
+# The APK bundles the Rust console as a .so and this repo's games/ directory as
+# its assets, so `make android` is the only step — Gradle drives cargo-ndk
+# itself. Requires a JDK 17+ and the NDK named in android/app/build.gradle.kts.
+
+android-deps:
+	@rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+	@cargo install cargo-ndk
+	@echo "✅ Android Rust toolchain ready"
+
+android:
+	@cd android && ./gradlew assembleDebug
+	@echo "Built android/app/build/outputs/apk/debug/app-debug.apk"
+
+android-install:
+	@cd android && ./gradlew installDebug
+	@echo "✅ Installed; launch 'Kessel' on the device"
+
+android-test:
+	@cd android && ./gradlew testDebugUnitTest
+
 clean:
 	@cd crates && cargo clean
+	@cd android && ./gradlew clean 2>/dev/null || true
 	@echo "Cleaned."

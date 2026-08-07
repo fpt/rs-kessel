@@ -129,6 +129,32 @@ port; the server binds `127.0.0.1` only and never advances the machine on its
 own, so with no player attached an agent's runs are exactly as reproducible as
 before.
 
+### On Android
+
+`android/` is a plain-Kotlin player for the games in `games/`, running the same
+Rust console compiled to a `.so`. Pick a game, play it — no MCP, no agent, no
+editor yet.
+
+```bash
+make android-deps      # once: the Rust Android targets and cargo-ndk
+make android-install   # build and push to a connected device or emulator
+```
+
+Gradle drives `cargo-ndk` itself, so there is no separate Rust step, and the APK
+takes its assets straight from `games/` rather than a copy. Needs a JDK 17+ and
+the NDK version named in `android/app/build.gradle.kts`; ABIs are `arm64-v8a`,
+`armeabi-v7a`, and `x86_64` (the last so the emulator works).
+
+The on-screen pad is built from each ROM's own `controls { … }` block, so it
+shows only the buttons that game actually reads, captioned with what they do —
+`tetris.lua` gets a d-pad plus A "rotate cw" and B "rotate ccw"; `bounce.lua`
+declares `dpad = false` and gets no pad at all.
+
+An editor, cloud upload, and an in-app LLM coding loop are later releases. The
+FFI is scoped to the play surface for now (`crates/ffi`), so those are additions
+rather than a rewrite — and because the portable layer is a C ABI with a header,
+an iOS app is a build-system problem rather than a second port.
+
 The `games/` directory doubles as worked luax examples covering the whole
 language — sprite declarations, tilemaps and `solid()` collision, entity pools,
 edge-triggered input, fixed-point trig. Point a model at them.
@@ -173,6 +199,8 @@ map.
 crates/vm/     kessel-vm — the console: ISA, VM, assembler, luax, PNG, vm_* tools.
                Host-free: no I/O beyond the working directory, no audio, no GPU.
 crates/cli/    kessel — the binary. `mcp` (stdio server) and `play` (winit window).
+crates/ffi/    kessel-ffi — the C ABI and JNI bindings, for hosts that aren't Rust.
+android/       The Android app: plain Kotlin + Compose over the same VM.
 games/         Sample games, and the luax reference corpus.
 docs/VM.md     Machine, instruction set, devices, luax, and the agent loop.
 ```

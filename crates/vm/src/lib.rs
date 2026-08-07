@@ -300,6 +300,12 @@ impl VmConsole {
         self.vm.devices.framebuffer_rgba()
     }
 
+    /// The same pixels written into a caller-owned buffer, for hosts that blit
+    /// every frame. False if `dst` is too small.
+    pub fn framebuffer_rgba_into(&self, dst: &mut [u8]) -> bool {
+        self.vm.devices.framebuffer_rgba_into(dst)
+    }
+
     /// Screen edge length in pixels (square). Mirrors [`VmPlayer::screen_dim`],
     /// for hosts that drive a console directly.
     pub fn screen_dim(&self) -> u32 {

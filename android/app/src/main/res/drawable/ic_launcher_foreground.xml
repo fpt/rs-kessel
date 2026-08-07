@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A console screen: a square with a lit pixel, at 108dp adaptive-icon scale. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF5A9BE8"
+        android:pathData="M34,34h40v40h-40z" />
+    <path
+        android:fillColor="#FF101216"
+        android:pathData="M42,42h24v24h-24z" />
+    <path
+        android:fillColor="#FF5A9BE8"
+        android:pathData="M50,50h8v8h-8z" />
+</vector>

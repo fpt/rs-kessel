@@ -599,12 +599,26 @@ impl Devices {
     /// Expand the palette-index framebuffer into packed RGBA (4 bytes/pixel),
     /// for the host window and the PNG encoder.
     pub fn framebuffer_rgba(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(SCREEN_PIXELS * 4);
-        for &idx in &self.framebuffer {
-            let (r, g, b) = self.palette[(idx & 0x0f) as usize];
-            out.extend_from_slice(&[r, g, b, 0xff]);
-        }
+        let mut out = vec![0u8; SCREEN_PIXELS * 4];
+        self.framebuffer_rgba_into(&mut out);
         out
+    }
+
+    /// The same expansion, written into a caller-owned buffer. Returns false if
+    /// `dst` is smaller than `SCREEN_PIXELS * 4`.
+    ///
+    /// This exists for hosts that blit every frame at 60 Hz — a mobile app
+    /// filling a direct `ByteBuffer`, say. Handing them the allocating variant
+    /// would churn 64 KiB per frame through their allocator for nothing.
+    pub fn framebuffer_rgba_into(&self, dst: &mut [u8]) -> bool {
+        if dst.len() < SCREEN_PIXELS * 4 {
+            return false;
+        }
+        for (px, &idx) in dst.chunks_exact_mut(4).zip(self.framebuffer.iter()) {
+            let (r, g, b) = self.palette[(idx & 0x0f) as usize];
+            px.copy_from_slice(&[r, g, b, 0xff]);
+        }
+        true
     }
 }
 

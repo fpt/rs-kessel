@@ -2,19 +2,22 @@
 
 ## Overview
 
-A tiny fantasy console, shipped two ways from one binary:
+A tiny fantasy console, shipped three ways from one VM:
 
 - `kessel mcp` — an **MCP stdio server** serving the `vm_*` tools, so any
   MCP-capable agent can drive the write → assemble → run → observe → debug loop.
 - `kessel run <file>` — a **window** (winit + softbuffer) for a human to play
   the result.
+- **The Android app** (`android/`) — a plain-Kotlin player for the games bundled
+  in `games/`, over the same VM compiled to a `.so`.
 
 Kessel does no LLM inference and hosts no agent. It used to be a macOS/Windows
 voice assistant that embedded the VM; that frontend and its ACP client were
 removed, leaving only the console.
 
-- **Rust**: workspace in `crates/`, two members — `vm` (`kessel-vm`) and `cli` (`kessel`)
-- **Platforms**: macOS, Windows, Linux. `kessel mcp` is headless-safe.
+- **Rust**: workspace in `crates/`, three members — `vm` (`kessel-vm`),
+  `cli` (`kessel`), and `ffi` (`kessel-ffi`)
+- **Platforms**: macOS, Windows, Linux, Android. `kessel mcp` is headless-safe.
 
 ## Architecture
 
@@ -24,10 +27,13 @@ Agent (Claude Code, codex, …)
   ▼
 kessel mcp ── crates/cli/src/mcp/ ── VmToolSet ──┐
                                                  ├─► VmConsole (crates/vm)
-kessel run  ── crates/cli/src/play.rs ── VmPlayer ┘      │
-                  winit window, 60 Hz tick               ▼
-                  softbuffer CPU blit          indexed framebuffer
-                                               + sound event log
+kessel run  ── crates/cli/src/play.rs ── VmPlayer ┤      │
+                  winit window, 60 Hz tick        │      ▼
+                  softbuffer CPU blit             │  indexed framebuffer
+                                                  │  + sound event log
+Android app ── android/ (Kotlin/Compose)          │
+  └─ JNI ── crates/ffi ── C ABI ── VmPlayer ──────┘
+             60 Hz game thread, direct ByteBuffer
 ```
 
 The load-bearing rule: **`kessel-vm` is host-free.** It does no I/O beyond the
@@ -70,6 +76,33 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/attach/server.rs` | Loopback listener inside `kessel mcp`; each TICK locks the shared console. |
 | `src/attach/client.rs` | `AttachClient` — background tick thread, latest-frame slot. |
 
+### `crates/ffi` — `kessel-ffi`
+
+The console's play surface for hosts that are not Rust. `VmPlayer` only: load,
+tick, read pixels, read the ROM's control metadata. The authoring half
+(`vm_assemble`, `vm_snapshot`, …) is deliberately absent until an in-app editor
+needs it — widening this later is additive, but shipping bindings nothing calls
+means carrying and testing them for free.
+
+| File | Purpose |
+|------|---------|
+| `src/lib.rs` | The C ABI (`kessel_player_*`). Every entry point tolerates a null handle; strings are owned and freed by `kessel_string_free`. |
+| `src/android.rs` | JNI entry points, `cfg(target_os = "android")` only, bound by name to `dev.kessel.vm.KesselNative`. |
+| `include/kessel.h` | The C header — what an iOS target compiles against. |
+
+The C ABI is the portable layer and the JNI module is a wrapper over it, not a
+parallel implementation. That is what makes "iOS later" a build-system problem
+rather than a second port: Swift calls the header directly.
+
+Two things the JNI layer owes the JVM, both load-bearing:
+
+- **Frames go through a direct `ByteBuffer`.** Returning a `byte[]` would put
+  64 KiB on the Java heap sixty times a second. `framebuffer_rgba_into` exists
+  in `kessel-vm` for exactly this.
+- **Panics stop at the boundary.** Unwinding into the JVM is UB, so the two
+  functions that run game code — `playerLoad`, `playerTick` — sit inside
+  `catch_unwind`.
+
 ### Attaching (`kessel attach`)
 
 `kessel attach` joins a running `kessel mcp` and drives **the agent's own
@@ -98,6 +131,37 @@ Transport is loopback TCP (not a Unix socket) so the same path works on Windows,
 carrying a small binary protocol (not JSON) because it's a 60 Hz framebuffer
 stream. It binds `127.0.0.1` only — `bind_addr()` is a separate function with a
 test, because that's a security property rather than an incidental literal.
+
+### The Android app (`android/`)
+
+Run-only: pick a game from the bundled library, play it. The editor, cloud
+upload, and LLM coding loop are later releases — the FFI is scoped so they are
+additions rather than a rewrite.
+
+| File | Purpose |
+|------|---------|
+| `vm/KesselNative.kt` | The raw `external fun` declarations. Names bind to symbols in `crates/ffi/src/android.rs` — renaming this class or its package breaks them at *runtime*, not build time. |
+| `vm/KesselVm.kt` | The safe handle: owns the pointer's lifetime, one lock so `close` cannot race a `tick`. |
+| `vm/Controls.kt` | Parses the ROM's control metadata, so the pad shows only the buttons that do something. |
+| `game/GameCatalog.kt` | The library, read from `assets/`. |
+| `game/GameEngine.kt` | The 60 Hz thread; publishes `PlayState` to Compose. |
+| `ui/Gamepad.kt` | Geometry-driven touch pad — one `pointerInput` hit-tests every pointer, which is what makes multi-touch and d-pad diagonals work. |
+
+Three decisions worth not re-litigating:
+
+- **`games/` is the assets directory**, via `assets.srcDir` in
+  `app/build.gradle.kts` — not a copy. A copy would fork the corpus that
+  `crates/vm/tests/games_compile.rs` guards, and the fork would rot.
+- **The Rust is always built `--release`**, even into a debug APK. A debug
+  `kessel-vm` is roughly an order of magnitude slower, and a machine that must
+  finish a frame in 16 ms cannot afford it.
+- **The game loop is not on the main thread**, for the reason `kessel attach`
+  isn't either: a frame runs arbitrary game code, and a slow one should drop a
+  frame rather than jank the app.
+
+R8 cannot see JNI's by-name binding, so `proguard-rules.pro` keeps
+`dev.kessel.vm.KesselNative`. Without it a release build fails at first call
+with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bug.
 
 ### Key patterns
 
