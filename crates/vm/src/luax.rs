@@ -36,6 +36,7 @@
 use std::collections::HashMap;
 
 use super::assembler::Diagnostic;
+use super::device::VideoMode;
 
 /// Result of compiling luax source: generated assembler text plus diagnostics
 /// and the game's control-layout metadata (see [`Controls`]).
@@ -43,6 +44,8 @@ pub struct Compiled {
     pub asm: String,
     pub diagnostics: Vec<Diagnostic>,
     pub controls: Controls,
+    /// The screen the ROM asked for via `screen { … }`; Classic128 by default.
+    pub mode: VideoMode,
 }
 
 impl Compiled {
@@ -120,11 +123,13 @@ pub fn compile(src: &str) -> Compiled {
     let mut parser = Parser::new(tokens);
     let decls = parser.parse_program(&mut diagnostics);
     let controls = extract_controls(&decls, &mut diagnostics);
+    let mode = extract_mode(&decls, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Compiled {
             asm: String::new(),
             diagnostics,
             controls,
+            mode,
         };
     }
     let asm = Compiler::new().compile(&decls, &mut diagnostics);
@@ -132,7 +137,25 @@ pub fn compile(src: &str) -> Compiled {
         asm,
         diagnostics,
         controls,
+        mode,
     }
+}
+
+/// Pull the single `screen { … }` block out of the parsed program. Absent →
+/// [`VideoMode::Classic128`], so a ROM that says nothing gets the console it
+/// always had.
+fn extract_mode(decls: &[Decl], d: &mut Vec<Diagnostic>) -> VideoMode {
+    let mut found: Option<VideoMode> = None;
+    for decl in decls {
+        if let Decl::Screen { mode, line } = decl {
+            if found.is_some() {
+                d.push(err(*line, "duplicate 'screen' block"));
+            } else {
+                found = Some(*mode);
+            }
+        }
+    }
+    found.unwrap_or_default()
 }
 
 /// Pull the single `controls { … }` block out of the parsed program (a second
@@ -491,7 +514,14 @@ enum Decl {
         line: usize,
     },
     /// Control-layout metadata for the host UI. Emits no code.
-    Controls { controls: Controls, line: usize },
+    Controls {
+        controls: Controls,
+        line: usize,
+    },
+    Screen {
+        mode: VideoMode,
+        line: usize,
+    },
 }
 
 // ======================================================================
@@ -576,6 +606,8 @@ impl Parser {
                 decls.push(self.parse_tilemap(d));
             } else if self.is_kw("controls") {
                 decls.push(self.parse_controls(d));
+            } else if self.is_kw("screen") {
+                decls.push(self.parse_screen(d));
             } else {
                 d.push(err(
                     self.line(),
@@ -652,6 +684,48 @@ impl Parser {
     /// host-UI layout metadata. Entries are `key = value` pairs (commas
     /// optional); recognized keys: `dpad` (bool), `a`/`b`/`start`/`select`
     /// (string label), `pause` (a button name). Emits no code.
+    /// `screen { mode = Extended240 }` — which resolution the ROM is authored
+    /// for. Emits no code; the console reads it when the ROM is loaded, the
+    /// same way it reads `controls`.
+    ///
+    /// An unknown mode name is a diagnostic rather than a silent fallback: a
+    /// game that asked for a bigger screen and quietly got 128×128 would draw
+    /// its HUD off the edge, which looks like a game bug rather than a typo.
+    fn parse_screen(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("screen");
+        self.expect_sym("{", d);
+        let mut mode = VideoMode::default();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            let key_line = self.line();
+            let key = self.ident(d);
+            self.expect_sym("=", d);
+            match key.as_str() {
+                "mode" => {
+                    let name = self.ident(d);
+                    match VideoMode::from_name(&name) {
+                        Some(m) => mode = m,
+                        None => d.push(err(
+                            key_line,
+                            format!(
+                                "unknown screen mode '{name}' (expected Classic128 or Extended240)"
+                            ),
+                        )),
+                    }
+                }
+                other => {
+                    d.push(err(key_line, format!("unknown screen key '{other}'")));
+                    self.advance();
+                }
+            }
+            if matches!(self.peek(), Tok::Sym(",")) {
+                self.advance();
+            }
+        }
+        self.expect_sym("}", d);
+        Decl::Screen { mode, line }
+    }
+
     fn parse_controls(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
         let line = self.line();
         self.eat_kw("controls");
@@ -1232,6 +1306,8 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "sspr" => (4, false),
         "entity" => (3, false),
         "camera" => (2, false),
+        "pal" => (4, false),
+        "sprbank" => (1, false),
         "poke" => (2, false),
         "poke16" => (2, false),
         "btn" => (1, true),
@@ -2190,6 +2266,12 @@ impl Compiler {
             "sprn" => "#19 DEO #a2 DEO #a1 DEO #12 DEO #11 DEO #a0 DEO #00 #a3 DEO",
             "sspr" => "#19 DEO #12 DEO #11 DEO #15 DEO", // ( addr x y flags ) raw blit
             "camera" => "#18 DEO #17 DEO",               // ( x y )
+            // ( index r g b ) — stage the colour, then strobe the index to
+            // commit. Arguments come off the stack blue-first, which is exactly
+            // the order the system device wants.
+            "pal" => "#04 DEO #03 DEO #02 DEO #01 DEO",
+            // ( bank ) — subsequent sprite blits draw nibble n as bank*16 + n.
+            "sprbank" => "#1e DEO",
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
             "btn" => "#20 DEI AND #00 NE",
@@ -3789,5 +3871,145 @@ mod tests {
         assert!(!compile("controls { dpad = 3 } function draw() end").ok()); // non-bool
         assert!(!compile("controls { a = 5 } function draw() end").ok()); // non-string label
         assert!(!compile("controls {} controls {} function draw() end").ok()); // duplicate block
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+    use crate::device::{VideoMode, CLASSIC_DIM, EXTENDED_DIM};
+    use crate::VmConsole;
+
+    fn load(src: &str) -> VmConsole {
+        let mut console = VmConsole::new();
+        console.write_source("game.lua", src).unwrap();
+        let built = console.assemble("game.lua").unwrap();
+        assert!(built.ok(), "diagnostics: {:?}", built.diagnostics);
+        console.load_rom("game.lua").unwrap();
+        console
+    }
+
+    #[test]
+    fn a_rom_without_a_screen_block_gets_the_classic_console() {
+        let c = load("function draw() cls(0) end");
+        assert_eq!(c.video_mode(), VideoMode::Classic128);
+        assert_eq!(c.screen_dim(), CLASSIC_DIM as u32);
+    }
+
+    #[test]
+    fn screen_block_selects_the_extended_console() {
+        let c = load("screen { mode = Extended240 } function draw() cls(0) end");
+        assert_eq!(c.video_mode(), VideoMode::Extended240);
+        assert_eq!(c.screen_dim(), EXTENDED_DIM as u32);
+        assert_eq!(c.framebuffer_rgba().len(), EXTENDED_DIM * EXTENDED_DIM * 4);
+    }
+
+    /// The extra pixels have to be *reachable*, not just allocated — this is
+    /// the whole point of the mode.
+    #[test]
+    fn extended_mode_can_draw_beyond_the_classic_edge() {
+        let mut c = load(
+            "screen { mode = Extended240 }
+             function draw() cls(0)  pset(200, 200, 7) end",
+        );
+        c.run_frame(0);
+        let dim = c.screen_dim() as usize;
+        assert_eq!(c.vm.devices.framebuffer[200 * dim + 200], 7);
+    }
+
+    /// A typo must be a diagnostic. Silently falling back to 128 would draw a
+    /// 240-authored HUD off the edge, which reads as a game bug.
+    #[test]
+    fn an_unknown_mode_is_a_diagnostic() {
+        let c = compile("screen { mode = Ultra4K } function draw() cls(0) end");
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("Ultra4K")),
+            "got: {:?}",
+            c.diagnostics
+        );
+    }
+
+    #[test]
+    fn two_screen_blocks_are_a_diagnostic() {
+        let c = compile(
+            "screen { mode = Classic128 }
+             screen { mode = Extended240 }
+             function draw() cls(0) end",
+        );
+        assert!(!c.ok());
+        assert!(c
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("duplicate")));
+    }
+
+    #[test]
+    fn pal_rewrites_a_palette_entry() {
+        let mut c = load(
+            "function draw()
+               pal(7, 255, 0, 77)
+               cls(7)
+             end",
+        );
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.palette[7], (255, 0, 77));
+        // …and the change reaches the pixels the host sees.
+        assert_eq!(&c.framebuffer_rgba()[0..4], &[255, 0, 77, 0xff]);
+    }
+
+    /// Fading is the motivating case: one loop over the palette dims the whole
+    /// screen without touching a single pixel.
+    #[test]
+    fn pal_can_fade_the_whole_screen_without_redrawing() {
+        let mut c = load(
+            "local t = 0
+             function update() t = t + 1 end
+             function draw()
+               cls(7)
+               if t > 1 then
+                 for i = 0, 15 do pal(i, 0, 0, 0) end
+               end
+             end",
+        );
+        c.run_frame(0);
+        assert_ne!(&c.framebuffer_rgba()[0..3], &[0, 0, 0]);
+        c.run_frame(0);
+        c.run_frame(0);
+        assert_eq!(&c.framebuffer_rgba()[0..3], &[0, 0, 0], "faded to black");
+    }
+
+    #[test]
+    fn pal_reaches_the_high_indices() {
+        let mut c = load("function draw() pal(200, 1, 2, 3)  cls(200) end");
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.palette[200], (1, 2, 3));
+        assert_eq!(&c.framebuffer_rgba()[0..4], &[1, 2, 3, 0xff]);
+    }
+
+    /// One sprite, two colour schemes — the reason banks exist.
+    #[test]
+    fn sprbank_recolours_the_same_sprite() {
+        let mut c = load(
+            "sprite dot {
+               5.......
+               ........
+               ........
+               ........
+               ........
+               ........
+               ........
+               ........
+             }
+             function draw()
+               cls(0)
+               sprbank(0)  spr(dot, 0, 0, 0)
+               sprbank(2)  spr(dot, 8, 0, 0)
+             end",
+        );
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!(fb[0], 5, "bank 0 is the identity");
+        assert_eq!(fb[8], 0x25, "bank 2 shifts the nibble to 2*16 + 5");
     }
 }

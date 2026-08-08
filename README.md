@@ -95,6 +95,7 @@ kessel run games/2048.lua      # arrows slide tiles, A starts a new game
 kessel run games/tetris.lua    # L/R move, A rotates, Down soft-drops
 kessel run games/platform.lua  # arrows move, A jumps and wall-jumps
 kessel run games/outrun.lua    # pseudo-3D road racer
+kessel run games/spectrum.lua  # 240x240, the 256-colour palette, sprite banks
 ```
 
 Arrows or WASD for the d-pad, `Z`/`X` for A/B, Return for START, Shift for
@@ -154,6 +155,30 @@ An editor, cloud upload, and an in-app LLM coding loop are later releases. The
 FFI is scoped to the play surface for now (`crates/ffi`), so those are additions
 rather than a rewrite — and because the portable layer is a C ABI with a header,
 an iOS app is a build-system problem rather than a second port.
+
+### Screens and colour
+
+The console is an 8-bit palette-index framebuffer over a 256-entry palette, in
+one of two square sizes:
+
+```lua
+screen { mode = Extended240 }   -- 240×240; omit for the 128×128 default
+```
+
+Only the size differs between modes — same ports, same 4bpp sprites, same
+palette. Colour is always a palette index; only `pal` deals in RGB:
+
+```lua
+pal(7, 255, 0, 77)   -- rewrite entry 7; the framebuffer is untouched
+sprbank(3)           -- draw sprites through bank 3: nibble n -> 3*16 + n
+```
+
+Because `pal` recolours without redrawing, a fade, a damage flash, a day/night
+cycle, or palette cycling is one loop over the palette. Because sprites stay
+4bpp with a bank offset, one tile can wear sixteen colour schemes and every
+existing sprite keeps working unchanged. The default palette fills all 256
+entries: the PICO-8 16 at `0–15`, a 6×6×6 colour cube at `16–231`, and a grey
+ramp at `232–255`. `games/spectrum.lua` demonstrates all of it.
 
 The `games/` directory doubles as worked luax examples covering the whole
 language — sprite declarations, tilemaps and `solid()` collision, entity pools,
