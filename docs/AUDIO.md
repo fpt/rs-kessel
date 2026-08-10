@@ -322,6 +322,9 @@ only as part of a game source file, the synth app has to link the compiler.
 4. `kessel render-audio` and `vm_render_audio` — the whole loop is observable
    before any device is opened. *(Done.)*
 5. cpal in `kessel run`. This is where latency and underrun get tuned.
+   *(Done — the tuning decision was to keep the device's default buffer: at
+   5–11 ms it is already under one 60 Hz frame, and forcing it smaller trades a
+   real underrun risk for inaudible latency.)*
 6. Chorus, reverb, sends.
 7. Sequencer, `track` blocks, `music`/`music_stop` on the audio clock.
 8. FFI + Android `AudioTrack`.
