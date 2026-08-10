@@ -1,0 +1,12 @@
+[package]
+name = "kessel-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The kessel console's synth: oscillators, envelopes, voices and effects. Host-free — turns an event log into samples and never opens an audio device."
+
+# Deliberately dependency-free. This crate is the one a standalone instrument
+# links on its own, so it must not drag in the VM, and it runs on an audio
+# callback thread, so it must not drag in anything that allocates or blocks.
+[dependencies]

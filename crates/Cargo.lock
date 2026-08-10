@@ -600,6 +600,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kessel-audio"
+version = "0.1.0"
+
+[[package]]
 name = "kessel-ffi"
 version = "0.1.0"
 dependencies = [
