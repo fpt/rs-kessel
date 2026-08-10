@@ -84,7 +84,6 @@ impl AttachClient {
             shutdown: shutdown.clone(),
         };
 
-        let frame_bytes = hello.frame_bytes();
         std::thread::spawn(move || {
             let mut next = std::time::Instant::now();
             while !shutdown.load(Ordering::Relaxed) {
@@ -98,7 +97,7 @@ impl AttachClient {
                 }
                 // Blocks for as long as the agent holds the console. That is
                 // fine here and fatal on the UI thread — hence this thread.
-                match Frame::read(&mut reader, frame_bytes) {
+                match Frame::read(&mut reader) {
                     Ok(f) => *latest.lock() = Some(f),
                     Err(_) => break,
                 }
@@ -120,8 +119,17 @@ impl AttachClient {
         Ok(client)
     }
 
+    /// Screen edge length of the most recent frame, falling back to the size
+    /// HELLO advertised before one has arrived.
+    ///
+    /// Reads the *frame* rather than a value latched at connect time: the agent
+    /// can load a ROM with another `screen` mode while someone is attached, and
+    /// the window has to follow it.
     pub fn screen_dim(&self) -> u32 {
-        self.dim
+        match self.latest.lock().as_ref() {
+            Some(f) if f.dim > 0 => f.dim as u32,
+            _ => self.dim,
+        }
     }
 
     /// Record the buttons to send with the next tick. Cheap: the UI thread only
@@ -203,6 +211,7 @@ mod tests {
             has_rom: false,
             paused: false,
             halted: false,
+            dim: 2,
             rgba: vec![0; 16],
         })));
         let client = AttachClient {
@@ -219,6 +228,7 @@ mod tests {
             has_rom: true,
             paused: true,
             halted: false,
+            dim: 2,
             rgba: vec![9; 16],
         });
         assert_eq!(client.framebuffer_rgba(), Some(vec![9; 16]));

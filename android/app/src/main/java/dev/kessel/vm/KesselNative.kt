@@ -31,8 +31,11 @@ internal object KesselNative {
     /** Advance one frame with [buttons] held. No-op until a ROM is loaded. */
     external fun playerTick(handle: Long, buttons: Int)
 
-    /** Screen edge length in pixels. Constant for the machine. */
-    external fun screenDim(): Int
+    /**
+     * Screen edge length in pixels — valid only after [playerLoad], since the
+     * ROM's `screen { … }` block chooses it. Reports the 128 default before.
+     */
+    external fun playerScreenDim(handle: Long): Int
 
     /**
      * Write the current frame into [dst] as packed RGBA.

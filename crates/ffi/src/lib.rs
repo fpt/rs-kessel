@@ -107,16 +107,20 @@ pub extern "C" fn kessel_player_tick(p: *mut KesselPlayer, buttons: u8) {
 }
 
 /// Screen edge length in pixels; the framebuffer is `dim * dim * 4` bytes.
-/// Constant for the machine, so a host may call it once.
+///
+/// **Read this after [`kessel_player_load`], not before.** The resolution comes
+/// from the ROM's `screen { … }` block, so a host that sizes its frame buffer
+/// at start-up gets the 128 default and will tear a 240×240 game across it.
+/// Without a ROM this reports the default.
 #[no_mangle]
-pub extern "C" fn kessel_screen_dim() -> u32 {
-    kessel_vm::device::SCREEN_DIM as u32
+pub extern "C" fn kessel_player_screen_dim(p: *mut KesselPlayer) -> u32 {
+    player!(p, kessel_vm::device::CLASSIC_DIM as u32).screen_dim()
 }
 
 /// Write the current frame as packed RGBA into `dst`.
 ///
 /// Returns true if a frame was written. False means no ROM is loaded or `dst` is
-/// smaller than `kessel_screen_dim()^2 * 4` — in both cases `dst` is untouched,
+/// smaller than `kessel_player_screen_dim(p)^2 * 4` — in both cases `dst` is untouched,
 /// so a host can keep showing the last good frame.
 ///
 /// This is the 60 Hz path, which is why it fills a caller-owned buffer rather
@@ -206,7 +210,10 @@ unsafe fn borrow_str<'a>(s: *const c_char) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kessel_vm::device::{BTN_RIGHT, SCREEN_PIXELS};
+    use kessel_vm::device::{BTN_RIGHT, CLASSIC_DIM};
+
+    /// The default screen, which every test here but the mode one uses.
+    const SCREEN_PIXELS: usize = CLASSIC_DIM * CLASSIC_DIM;
 
     const MOVER: &str = r#"
         local x = 32
@@ -244,14 +251,14 @@ mod tests {
             assert_eq!(load(p, MOVER, "mover.lua"), "");
             assert!(kessel_player_has_rom(p));
 
-            let n = (kessel_screen_dim() * kessel_screen_dim() * 4) as usize;
+            let n = (kessel_player_screen_dim(p) * kessel_player_screen_dim(p) * 4) as usize;
             assert_eq!(n, SCREEN_PIXELS * 4);
             let mut fb = vec![0u8; n];
 
             kessel_player_tick(p, 0);
             assert!(kessel_player_framebuffer(p, fb.as_mut_ptr(), fb.len()));
             // (32,60) drawn in colour 7 — opaque.
-            let idx = (60 * kessel_screen_dim() as usize + 32) * 4;
+            let idx = (60 * kessel_player_screen_dim(p) as usize + 32) * 4;
             assert_eq!(fb[idx + 3], 0xff);
 
             // Holding RIGHT moves the pixel, so successive frames differ.

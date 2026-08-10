@@ -37,7 +37,7 @@ pub use tools::{Shared, VmToolSet};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-use device::SCREEN_DIM;
+use device::VideoMode;
 use vm::{RunOutcome, Vm};
 
 /// The whole console: the machine plus the authoring workspace (sources, built
@@ -60,6 +60,10 @@ pub struct VmConsole {
     roms: HashMap<String, Vec<u8>>,
     /// Control-layout metadata, keyed by source path (see [`luax::Controls`]).
     controls: HashMap<String, luax::Controls>,
+    /// The screen each assembled ROM asked for, keyed the same way.
+    modes: HashMap<String, VideoMode>,
+    /// The loaded ROM's screen. Drives `screen_dim` and the framebuffer size.
+    active_mode: VideoMode,
     /// Control metadata of the currently loaded ROM (default until a load).
     active_controls: luax::Controls,
     /// Host-play pause state (managed by [`play_tick`](Self::play_tick)).
@@ -90,11 +94,13 @@ impl VmConsole {
             vm: Vm::new(),
             rom_loaded: false,
             frame: 0,
-            prev_fb: vec![0u8; device::SCREEN_PIXELS],
+            prev_fb: vec![0u8; VideoMode::default().pixels()],
             root: None,
             sources: HashMap::new(),
             roms: HashMap::new(),
             controls: HashMap::new(),
+            modes: HashMap::new(),
+            active_mode: VideoMode::default(),
             active_controls: luax::Controls::default(),
             paused: false,
             prev_pause_down: false,
@@ -111,6 +117,7 @@ impl VmConsole {
         self.sources.clear();
         self.roms.clear();
         self.controls.clear();
+        self.modes.clear();
     }
 
     /// The active working directory, if disk-backed.
@@ -193,7 +200,7 @@ impl VmConsole {
         // luax (Lua-ish) dialect: compile to assembler first. Compiler
         // diagnostics are returned in an otherwise-empty `Assembled`. The
         // control-layout metadata rides along and is cached for `load_rom`.
-        let (built, controls) = if is_lua(path) {
+        let (built, controls, mode) = if is_lua(path) {
             let compiled = luax::compile(src);
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
@@ -202,15 +209,25 @@ impl VmConsole {
                     labels: Default::default(),
                 });
             }
-            (assembler::assemble(&compiled.asm), compiled.controls)
+            (
+                assembler::assemble(&compiled.asm),
+                compiled.controls,
+                compiled.mode,
+            )
         } else {
-            // Raw assembly has no `controls` block; use the default layout.
-            (assembler::assemble(src), luax::Controls::default())
+            // Raw assembly has no `controls` or `screen` block; it gets the
+            // default layout on the original console.
+            (
+                assembler::assemble(src),
+                luax::Controls::default(),
+                VideoMode::default(),
+            )
         };
 
         if built.ok() {
             self.roms.insert(path.to_string(), built.rom.clone());
             self.controls.insert(path.to_string(), controls);
+            self.modes.insert(path.to_string(), mode);
         }
         Ok(built)
     }
@@ -222,7 +239,8 @@ impl VmConsole {
             .get(path)
             .ok_or_else(|| format!("no assembled ROM for '{path}' — call vm_assemble first"))?
             .clone();
-        let outcome = self.vm.load_rom(&rom);
+        self.active_mode = self.modes.get(path).copied().unwrap_or_default();
+        let outcome = self.vm.load_rom(&rom, self.active_mode);
         self.rom_loaded = true;
         self.frame = 0;
         self.prev_fb = self.vm.devices.framebuffer.clone();
@@ -273,7 +291,7 @@ impl VmConsole {
 
     fn observe(&self, buttons: u8, outcome: RunOutcome) -> Observation {
         let fb = &self.vm.devices.framebuffer;
-        let bbox = changed_bbox(&self.prev_fb, fb);
+        let bbox = changed_bbox(&self.prev_fb, fb, self.vm.devices.dim());
         let fault = match outcome {
             RunOutcome::CapExceeded => Some(format!("frame cycle cap ({}) exceeded", vm::cap())),
             _ => self.vm.fault.clone(),
@@ -309,13 +327,19 @@ impl VmConsole {
     /// Screen edge length in pixels (square). Mirrors [`VmPlayer::screen_dim`],
     /// for hosts that drive a console directly.
     pub fn screen_dim(&self) -> u32 {
-        SCREEN_DIM as u32
+        self.vm.devices.dim() as u32
+    }
+
+    /// The loaded ROM's screen mode.
+    pub fn video_mode(&self) -> VideoMode {
+        self.active_mode
     }
 
     /// Encode the current framebuffer as a base64 PNG.
     pub fn framebuffer_png_base64(&self) -> String {
         let rgba = self.framebuffer_rgba();
-        let png = png::encode_rgba(SCREEN_DIM as u32, SCREEN_DIM as u32, &rgba);
+        let dim = self.screen_dim();
+        let png = png::encode_rgba(dim, dim, &rgba);
         png::base64_encode(&png)
     }
 
@@ -352,11 +376,13 @@ impl VmConsole {
         let keep_sources = std::mem::take(&mut self.sources);
         let keep_roms = std::mem::take(&mut self.roms);
         let keep_controls = std::mem::take(&mut self.controls);
+        let keep_modes = std::mem::take(&mut self.modes);
         *self = VmConsole::new();
         self.root = keep_root;
         self.sources = keep_sources;
         self.roms = keep_roms;
         self.controls = keep_controls;
+        self.modes = keep_modes;
     }
 }
 
@@ -453,14 +479,14 @@ fn fnv1a(data: &[u8]) -> String {
 
 /// Bounding box (x0,y0,x1,y1 inclusive) of pixels that differ between two
 /// framebuffers, or `None` if identical.
-fn changed_bbox(prev: &[u8], cur: &[u8]) -> Option<[u16; 4]> {
+fn changed_bbox(prev: &[u8], cur: &[u8], dim: usize) -> Option<[u16; 4]> {
     let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
     let mut any = false;
     for (i, (&a, &b)) in prev.iter().zip(cur.iter()).enumerate() {
         if a != b {
             any = true;
-            let x = (i % SCREEN_DIM) as u16;
-            let y = (i / SCREEN_DIM) as u16;
+            let x = (i % dim) as u16;
+            let y = (i / dim) as u16;
             x0 = x0.min(x);
             y0 = y0.min(y);
             x1 = x1.max(x);
