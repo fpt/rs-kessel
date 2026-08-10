@@ -1610,10 +1610,15 @@ impl Compiler {
                     ));
                     continue;
                 }
-                let id = self.bank.add_sfx(name.clone(), def);
-                if self.sfx_ids.insert(name.clone(), id).is_some() {
+                // Check before adding, as with instruments above: adding first
+                // leaves the bank holding two definitions while the name
+                // resolves to the second.
+                if self.sfx_ids.contains_key(name) {
                     d.push(err(*line, format!("duplicate sfx '{name}'")));
+                    continue;
                 }
+                let id = self.bank.add_sfx(name.clone(), def);
+                self.sfx_ids.insert(name.clone(), id);
             }
         }
 

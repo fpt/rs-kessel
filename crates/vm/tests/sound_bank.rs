@@ -215,31 +215,53 @@ fn both_front_ends_resolve_a_forward_reference() {
     assert_eq!(bank_via_luax(src), standalone);
 }
 
-#[test]
-fn a_duplicate_declaration_leaves_one_entry_on_both_sides() {
-    // Adding before diagnosing would leave the bank holding two patches while
-    // the name resolved to the second: the metadata and the emitted ids would
-    // describe different instruments.
-    let src = "instrument a { wave = sine }
-instrument a { wave = saw }";
+/// Both paths applied to one source that is expected to fail, with the banks
+/// compared anyway.
+///
+/// The banks still have to match when there are diagnostics. A build that fails
+/// keeps nothing, but "it errored" is not the property under test — what a
+/// half-built bank *contains* is, because that is where the two sides diverged.
+fn banks_from_bad_source(src: &str) -> (kessel_audio::SoundBank, Vec<String>) {
     let (standalone, errors) = kessel_audio::bank::parse(src);
-    assert_eq!(standalone.instruments.len(), 1);
-    assert!(errors[0].message.contains("duplicate instrument 'a'"));
-
     // Compile directly rather than through `assemble`, which throws the bank
-    // away when there are diagnostics. What matters here is the bank's
-    // *contents*, not that the build failed.
+    // away as soon as there are diagnostics.
     let compiled = kessel_vm::luax::compile(&format!(
         "{src}\nfunction update() end\nfunction draw() cls(0) end\n"
     ));
-    assert!(!compiled.ok());
-    assert!(format!("{:?}", compiled.diagnostics).contains("duplicate instrument 'a'"));
+    assert!(!compiled.ok(), "expected diagnostics from luax");
     assert_eq!(
-        compiled.bank.instruments.len(),
-        1,
-        "the bank kept both patches while the name resolved to one of them"
+        compiled.bank, standalone,
+        "the two front-ends built different banks from the same source"
     );
-    assert_eq!(compiled.bank, standalone);
+    let mut messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
+    messages.extend(compiled.diagnostics.iter().map(|d| format!("{d:?}")));
+    (standalone, messages)
+}
+
+#[test]
+fn a_duplicate_instrument_leaves_one_entry_on_both_sides() {
+    // Adding before diagnosing leaves the bank holding two patches while the
+    // name resolves to the second: the ids in the metadata and the ids in the
+    // emitted code describe different instruments.
+    let (bank, messages) =
+        banks_from_bad_source("instrument a { wave = sine }\ninstrument a { wave = saw }");
+    assert_eq!(bank.instruments.len(), 1, "the bank kept both patches");
+    assert_eq!(bank.instrument_names, ["a"]);
+    assert!(messages
+        .iter()
+        .all(|m| m.contains("duplicate instrument 'a'")));
+}
+
+#[test]
+fn a_duplicate_sfx_leaves_one_entry_on_both_sides() {
+    // The same rule for effects. Checking instruments and trusting effects to
+    // match is how this got through review the first time.
+    let (bank, messages) = banks_from_bad_source(
+        "instrument i { wave = sine }\nsfx hit { inst = i }\nsfx hit { inst = i }",
+    );
+    assert_eq!(bank.sfx.len(), 1, "the bank kept both definitions");
+    assert_eq!(bank.sfx_names, ["hit"]);
+    assert!(messages.iter().all(|m| m.contains("duplicate sfx 'hit'")));
 }
 
 #[test]
