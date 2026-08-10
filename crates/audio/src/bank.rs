@@ -367,6 +367,14 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
     let mut errors = Vec::new();
     let mut lex = Lexer::new(src);
 
+    // Collect every block first, then apply instruments before effects.
+    //
+    // Two passes rather than one because `sfx { inst = kick }` must work
+    // wherever `kick` is declared — resolving as we go would make a patch file
+    // order-sensitive when the same text in a game source is not, and "the
+    // grammar means the same thing on both sides" is the entire reason this
+    // module exists.
+    let mut blocks: Vec<Block> = Vec::new();
     loop {
         let (word, line) = match lex.next_top() {
             Some(Ok(w)) => w,
@@ -381,7 +389,6 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
         };
         match word.as_str() {
             "instrument" | "sfx" => {
-                let is_inst = word == "instrument";
                 let Some(Ok((name, _))) = lex.next_top() else {
                     errors.push(BankError {
                         line,
@@ -389,74 +396,98 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
                     });
                     break;
                 };
-                let fields = match lex.block(line, &mut errors) {
-                    Some(f) => f,
-                    None => break,
+                let Some(fields) = lex.block(line, &mut errors) else {
+                    break;
                 };
-                if is_inst {
-                    let mut patch = Patch::default();
-                    for (key, value, kline) in &fields {
-                        let v = value.as_field();
-                        if let Err(message) = set_instrument_field(&mut patch, key, v) {
-                            errors.push(BankError {
-                                line: *kline,
-                                message,
-                            });
-                        }
-                    }
-                    if bank.instruments.len() >= MAX_INSTRUMENTS {
-                        errors.push(BankError {
-                            line,
-                            message: format!("too many instruments (limit {MAX_INSTRUMENTS})"),
-                        });
-                    } else if bank.instrument_id(&name).is_some() {
-                        errors.push(BankError {
-                            line,
-                            message: format!("duplicate instrument '{name}'"),
-                        });
-                    } else {
-                        bank.add_instrument(name, patch);
-                    }
-                } else {
-                    let mut def = SfxDef::default();
-                    let names = bank.instrument_names.clone();
-                    let resolve = |n: &str| names.iter().position(|x| x == n).map(|i| i as u8);
-                    for (key, value, kline) in &fields {
-                        let v = value.as_field();
-                        if let Err(message) = set_sfx_field(&mut def, key, v, &resolve) {
-                            errors.push(BankError {
-                                line: *kline,
-                                message,
-                            });
-                        }
-                    }
-                    if bank.sfx.len() >= MAX_SFX {
-                        errors.push(BankError {
-                            line,
-                            message: format!("too many sound effects (limit {MAX_SFX})"),
-                        });
-                    } else if bank.sfx_id(&name).is_some() {
-                        errors.push(BankError {
-                            line,
-                            message: format!("duplicate sfx '{name}'"),
-                        });
-                    } else {
-                        bank.add_sfx(name, def);
-                    }
-                }
+                blocks.push(Block {
+                    is_instrument: word == "instrument",
+                    name,
+                    fields,
+                    line,
+                });
             }
             other => {
                 errors.push(BankError {
                     line,
                     message: format!("expected 'instrument' or 'sfx', found '{other}'"),
                 });
-                // Skip to the end of whatever this was, so one stray word does
-                // not turn into an error per remaining token.
+                // Skip whatever this was, so one stray word does not turn into
+                // an error per remaining token.
                 lex.skip_block();
             }
         }
     }
+
+    for Block {
+        name, fields, line, ..
+    } in blocks.iter().filter(|b| b.is_instrument)
+    {
+        let mut patch = Patch::default();
+        for (key, value, kline) in fields {
+            if let Err(message) = set_instrument_field(&mut patch, key, value.as_field()) {
+                errors.push(BankError {
+                    line: *kline,
+                    message,
+                });
+            }
+        }
+        if bank.instruments.len() >= MAX_INSTRUMENTS {
+            errors.push(BankError {
+                line: *line,
+                message: format!("too many instruments (limit {MAX_INSTRUMENTS})"),
+            });
+        } else if bank.instrument_id(name).is_some() {
+            errors.push(BankError {
+                line: *line,
+                message: format!("duplicate instrument '{name}'"),
+            });
+        } else {
+            bank.add_instrument(name.clone(), patch);
+        }
+    }
+
+    let names = bank.instrument_names.clone();
+    let resolve = |n: &str| names.iter().position(|x| x == n).map(|i| i as u8);
+    for Block {
+        name, fields, line, ..
+    } in blocks.iter().filter(|b| !b.is_instrument)
+    {
+        let mut def = SfxDef::default();
+        for (key, value, kline) in fields {
+            if let Err(message) = set_sfx_field(&mut def, key, value.as_field(), &resolve) {
+                errors.push(BankError {
+                    line: *kline,
+                    message,
+                });
+            }
+        }
+        if bank.sfx.len() >= MAX_SFX {
+            errors.push(BankError {
+                line: *line,
+                message: format!("too many sound effects (limit {MAX_SFX})"),
+            });
+        } else if bank.sfx_id(name).is_some() {
+            errors.push(BankError {
+                line: *line,
+                message: format!("duplicate sfx '{name}'"),
+            });
+        } else {
+            bank.add_sfx(name.clone(), def);
+        }
+    }
+
     (bank, errors)
+}
+
+/// One `instrument`/`sfx` block, parsed but not yet applied.
+///
+/// [`parse`] collects these before interpreting any of them, so an `sfx` can
+/// name an instrument declared below it.
+struct Block {
+    is_instrument: bool,
+    name: String,
+    fields: Vec<(String, OwnedValue, usize)>,
+    line: usize,
 }
 
 /// A [`FieldValue`] that owns its text.
@@ -824,10 +855,34 @@ sfx boom {
     }
 
     #[test]
+    fn an_sfx_may_name_an_instrument_declared_below_it() {
+        // Declaration order fixes ids; it does not constrain resolution. The
+        // luax front-end has always worked this way (records, functions, and
+        // sprites all resolve across the whole file), and the two have to
+        // agree.
+        let (bank, errors) = parse(
+            r#"
+            sfx s { inst = later }
+            instrument first { wave = sine }
+            instrument later { wave = saw }
+            "#,
+        );
+        assert_eq!(errors, vec![]);
+        assert_eq!(bank.instrument_id("later"), Some(1));
+        assert_eq!(bank.sfx[0].inst, 1, "forward reference resolved wrongly");
+    }
+
+    #[test]
     fn duplicate_names_are_rejected() {
         let (bank, errors) = parse("instrument a {} instrument a {}");
+        // One entry, so the id the name resolves to is the one the bank holds.
         assert_eq!(bank.instruments.len(), 1);
+        assert_eq!(bank.instrument_names, ["a"]);
         assert!(errors[0].message.contains("duplicate instrument 'a'"));
+
+        let (bank, errors) = parse("instrument i {} sfx s { inst = i } sfx s { inst = i }");
+        assert_eq!(bank.sfx.len(), 1);
+        assert!(errors[0].message.contains("duplicate sfx 's'"));
     }
 
     #[test]

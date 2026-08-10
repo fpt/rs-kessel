@@ -1581,10 +1581,16 @@ impl Compiler {
                     ));
                     continue;
                 }
-                let id = self.bank.add_instrument(name.clone(), patch) as u16;
-                if self.instrument_ids.insert(name.clone(), id).is_some() {
+                // Check *before* adding. Adding first would leave the bank
+                // holding two patches while the name resolved to the second,
+                // so the ids in the metadata and the ids in the code would
+                // describe different instruments.
+                if self.instrument_ids.contains_key(name) {
                     d.push(err(*line, format!("duplicate instrument '{name}'")));
+                    continue;
                 }
+                let id = self.bank.add_instrument(name.clone(), patch) as u16;
+                self.instrument_ids.insert(name.clone(), id);
             }
         }
         for decl in decls {

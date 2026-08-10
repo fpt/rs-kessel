@@ -147,6 +147,101 @@ fn the_ids_a_game_emits_render_through_the_engine() {
     assert!(loud(frame(19)) > 0.0, "coin never played");
 }
 
+/// The declarations from [`GAME`], on their own — what a standalone patch file
+/// would contain.
+const PATCH_ONLY: &str = r#"
+instrument kick {
+  wave = sine
+  attack = 0  decay = 90  sustain = 0
+  pitch_env = 36  pitch_decay = 60
+  volume = 255
+}
+
+instrument blip {
+  wave = square
+  attack = 0  decay = 40  sustain = 0
+  pan = -60
+}
+
+sfx boom {
+  inst = kick
+  speed = 3
+  notes = "40 - 36"
+}
+
+sfx coin {
+  inst = blip
+  speed = 2
+  notes = "84 91"
+}
+"#;
+
+/// Compile `bank_src` as a game and return the bank the compiler produced.
+fn bank_via_luax(bank_src: &str) -> kessel_audio::SoundBank {
+    let src = format!(
+        "{bank_src}
+function update() end
+function draw() cls(0) end
+"
+    );
+    let compiled = kessel_vm::luax::compile(&src);
+    assert!(compiled.ok(), "diagnostics: {:?}", compiled.diagnostics);
+    compiled.bank
+}
+
+#[test]
+fn both_front_ends_read_the_same_text_the_same_way() {
+    // The guard on the whole design: one definition of what a key means, two
+    // tokenizers. If those two ever disagree — about a key, a range, a
+    // default, or when a name may be resolved — this is what says so.
+    let (standalone, errors) = kessel_audio::bank::parse(PATCH_ONLY);
+    assert_eq!(errors, vec![]);
+    assert_eq!(bank_via_luax(PATCH_ONLY), standalone);
+}
+
+#[test]
+fn both_front_ends_resolve_a_forward_reference() {
+    // Declaration order fixes ids; it does not constrain resolution. luax has
+    // always worked this way for records, functions, and sprites, so a patch
+    // file must too.
+    let src = r#"
+        sfx late { inst = below  speed = 1  notes = "60" }
+        instrument above { wave = sine }
+        instrument below { wave = saw }
+    "#;
+    let (standalone, errors) = kessel_audio::bank::parse(src);
+    assert_eq!(errors, vec![], "standalone rejected a forward reference");
+    assert_eq!(standalone.sfx[0].inst, 1);
+    assert_eq!(bank_via_luax(src), standalone);
+}
+
+#[test]
+fn a_duplicate_declaration_leaves_one_entry_on_both_sides() {
+    // Adding before diagnosing would leave the bank holding two patches while
+    // the name resolved to the second: the metadata and the emitted ids would
+    // describe different instruments.
+    let src = "instrument a { wave = sine }
+instrument a { wave = saw }";
+    let (standalone, errors) = kessel_audio::bank::parse(src);
+    assert_eq!(standalone.instruments.len(), 1);
+    assert!(errors[0].message.contains("duplicate instrument 'a'"));
+
+    // Compile directly rather than through `assemble`, which throws the bank
+    // away when there are diagnostics. What matters here is the bank's
+    // *contents*, not that the build failed.
+    let compiled = kessel_vm::luax::compile(&format!(
+        "{src}\nfunction update() end\nfunction draw() cls(0) end\n"
+    ));
+    assert!(!compiled.ok());
+    assert!(format!("{:?}", compiled.diagnostics).contains("duplicate instrument 'a'"));
+    assert_eq!(
+        compiled.bank.instruments.len(),
+        1,
+        "the bank kept both patches while the name resolved to one of them"
+    );
+    assert_eq!(compiled.bank, standalone);
+}
+
 #[test]
 fn a_rom_without_sound_declarations_has_an_empty_bank() {
     let mut c = VmConsole::new();
