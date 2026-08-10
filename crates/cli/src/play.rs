@@ -70,6 +70,7 @@ impl Source {
     }
 
     /// The loaded ROM's sound bank, or an empty one when attached.
+    #[cfg(feature = "audio")]
     fn sound_bank(&self) -> kessel_audio::SoundBank {
         match self {
             Source::Local { player, .. } => player.sound_bank(),
@@ -78,6 +79,7 @@ impl Source {
     }
 
     /// See `VmConsole::audio_epoch` — changes when the timeline jumps.
+    #[cfg(feature = "audio")]
     fn audio_epoch(&self) -> u64 {
         match self {
             Source::Local { player, .. } => player.audio_epoch(),
@@ -152,6 +154,7 @@ fn run_window(source: Source) -> Result<(), String> {
         shown_title: String::new(),
         #[cfg(feature = "audio")]
         audio: start_audio(&source),
+        #[cfg(feature = "audio")]
         audio_epoch: source.audio_epoch(),
         source,
     };
@@ -200,6 +203,7 @@ struct App {
     /// Last epoch seen from the console. A change means the timeline jumped
     /// (reload/reset), and the synth has to be told before the old timeline's
     /// notes ring over the new one.
+    #[cfg(feature = "audio")]
     audio_epoch: u64,
     buttons: u8,
     window: Option<std::sync::Arc<Window>>,

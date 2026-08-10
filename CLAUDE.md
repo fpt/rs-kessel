@@ -318,9 +318,10 @@ with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bu
 - **stdout is the MCP channel.** Every diagnostic in `kessel mcp` goes to stderr.
 - **The `play` and `audio` features are default-on but removable.**
   `--no-default-features` drops winit/softbuffer/cpal for a headless
-  `kessel mcp`. They are *separate* features because they fail independently: a
-  machine can have a screen and no sound card, and `kessel render-audio` needs
-  neither.
+  `kessel mcp`. `audio` **implies `play`** — the window is the only thing that
+  plays sound — but stays a separate feature because the reverse is a real
+  machine: a screen with no sound card wants `play` alone, and
+  `kessel render-audio` needs neither.
 - Prefer `vm_run_frames` over looping `vm_run_frame`: an MCP round trip per frame
   is pure overhead. It stops at the first fault/halt and caps at 1800 frames.
 

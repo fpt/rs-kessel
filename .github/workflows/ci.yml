@@ -24,14 +24,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # The play window (winit + softbuffer) needs X11/Wayland headers to build
-      # on Linux. Nothing in kessel-vm does — see the `headless` job.
-      - name: Install window-system headers
+      # The two default-on features are the only things here that need system
+      # libraries: `play` (winit + softbuffer) wants X11/Wayland headers, and
+      # `audio` (cpal) wants ALSA. Nothing in kessel-vm or kessel-audio needs
+      # either — see the `headless` job.
+      - name: Install window-system and audio headers
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev \
-                                  libxcb1-dev libxrandr-dev libxi-dev pkg-config
+                                  libxcb1-dev libxrandr-dev libxi-dev pkg-config \
+                                  libasound2-dev
 
       - uses: actions/cache@v4
         with:
@@ -45,6 +48,17 @@ jobs:
       - name: Test
         working-directory: crates
         run: cargo test
+
+      # A screen with no sound card is a real machine, so the player has to
+      # build without the audio backend — easy to break by reaching for
+      # `crate::audio` outside its cfg. (The reverse is not a configuration:
+      # `audio` implies `play`, because the window is the only thing that plays
+      # sound.) Linux only, since it is the platform where the two features
+      # pull in different system libraries.
+      - name: The player builds without sound
+        if: runner.os == 'Linux'
+        working-directory: crates
+        run: cargo build -p kessel --no-default-features --features play
 
   # `kessel mcp` must build and pass with no window system at all — that is the
   # configuration it runs in on a server or in a container, and it is easy to
