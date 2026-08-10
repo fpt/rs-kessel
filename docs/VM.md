@@ -140,8 +140,8 @@ sprite syntax for no extra reach.
 
 `vm_write_source(path, source)` → `vm_assemble(path)` → `vm_load_rom(path)` →
 `vm_run_frame(buttons)` / `vm_run_frames(script)` / `vm_run_cycles(n)` →
-`vm_inspect_memory`, `vm_inspect_stacks`, `vm_get_framebuffer` (PNG) →
-`vm_snapshot`/`vm_restore`, `vm_reset`.
+`vm_inspect_memory`, `vm_inspect_stacks`, `vm_get_framebuffer` (PNG),
+`vm_render_audio` (WAV + report) → `vm_snapshot`/`vm_restore`, `vm_reset`.
 
 **Sources are actual files on disk.** `kessel mcp` roots the console at `--root`
 (default: the cwd), so `vm_write_source` writes `game.lua` there and
@@ -151,6 +151,32 @@ tweak, edit `game.lua` directly and just call `vm_assemble`; for a first draft
 or rewrite, use `vm_write_source`. Model-supplied paths are confined to the root
 (no `..`/absolute escapes). `VmPlayer` (`kessel run`) and the test suites set no
 root and keep sources in memory, unchanged.
+
+**Sound is checked by reading, not listening.** `vm_render_audio` runs the game
+(same input-script shape as `vm_run_frames`, and it advances the machine the
+same way) and returns a report: every trigger with the frame it fired on, peak
+and RMS, voices started and stolen, and a warning for each specific way audio
+goes wrong — an `sfx` id with no declaration, an instrument the bank lacks, notes
+dropped because too many were in flight, or triggers that fired into silence.
+With a working directory set it also writes a `.wav` for a human. The same
+render is available headless from the shell:
+
+```bash
+kessel render-audio games/shooter.lua --frames 200 --buttons A -o shooter.wav
+```
+
+```text
+rendered 200 frames (3.83s at 48000 Hz)
+level: peak 0.359, rms 0.067
+voices: 25 started, 0 stolen
+25 triggers:
+  frame 1     sfx shoot
+  frame 9     sfx shoot
+  ...
+```
+
+`music()` triggers are traced but silent until the sequencer lands; the report
+says so rather than leaving you to wonder.
 
 **Prefer `vm_run_frames` over a loop of `vm_run_frame`.** One call plays a whole
 scenario from an input script and returns the final observation plus a summary

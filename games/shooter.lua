@@ -4,6 +4,34 @@
 --
 --   kessel --play games/shooter.lua
 
+-- Sound. Instruments are synth patches and each `sfx` is a short line of notes
+-- on one of them: a note number starts a note, `-` holds it, `.` rests, and
+-- `speed` is frames per row. Check what a game actually plays with
+-- `kessel render-audio games/shooter.lua --buttons A`.
+instrument zap {
+  wave = saw
+  attack = 0  decay = 90  sustain = 0
+  pitch_env = 30  pitch_decay = 60   -- the downward sweep that makes it a laser
+  filter = lpf  cutoff = 200
+  volume = 150
+}
+
+instrument boom {
+  wave = noise
+  attack = 0  decay = 220  sustain = 0
+  pitch_env = -18  pitch_decay = 120 -- pitch falling = something big broke
+  filter = lpf  cutoff = 140
+  volume = 200
+}
+
+sfx shoot   { inst = zap   speed = 1  notes = "84" }
+sfx explode { inst = boom  speed = 3  notes = "48 - -" }
+sfx gameover {
+  inst = zap
+  speed = 6
+  notes = "60 55 51 46 - -"          -- a falling arpeggio, not a chord
+}
+
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {
   dpad = true       -- arrows move
@@ -74,6 +102,7 @@ function fire()
       bullets[i].x = px
       bullets[i].y = 111
       bullets[i].alive = 1
+      sfx(shoot)
       return
     end
   end
@@ -131,6 +160,7 @@ function update()
   for i = 0, len(foes) - 1 do
     if foes[i].alive == 1 and rect_overlap(px + 1, 113, 6, 6, foes[i].x, foes[i].y, 8, 8) then
       dead = 1
+      sfx(gameover)
       return
     end
   end
@@ -143,6 +173,7 @@ function update()
           foes[j].alive = 0
           bullets[i].alive = 0
           score = score + 1
+          sfx(explode)
           break                 -- this bullet is spent: don't let it kill more foes
         end
       end

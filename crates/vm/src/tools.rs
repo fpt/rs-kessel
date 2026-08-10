@@ -62,7 +62,8 @@ pub fn vm_tool_handlers_on(console: Shared) -> Vec<Box<dyn VmTool>> {
         Box::new(GetFramebuffer(console.clone())),
         Box::new(Snapshot(console.clone())),
         Box::new(Restore(console.clone())),
-        Box::new(Reset(console)),
+        Box::new(Reset(console.clone())),
+        Box::new(RenderAudio(console)),
     ]
 }
 
@@ -149,7 +150,7 @@ luax essentials (a '.lua' file):
 - State: top-level `local x = 60` is a persistent global. `record Name { a, b: byte }` (fields default to `word`); `local es: array(8, Name)`.
 - Sprites are DECLARATIONS, not table literals: `sprite hero { <8 rows of 8 chars, '.'=transparent else palette nibble 0-9a-f> }`. `hero` is then a tile id; draw with `spr(hero, x, y, flags)`.
 - Builtins: `cls(c)` (colour REQUIRED), `pset(x,y,c)`, `spr(id,x,y,flags)`, `sprn(id,x,y,w,h,flags)` (w×h block of contiguous tiles, e.g. 16×16 = 2,2), `btn(LEFT|RIGHT|UP|DOWN|A|B)` (held), `btnp`/`btnr` (pressed/released THIS frame — use for jumps/menus), `frame_count()` (frames since start), `len(arr)` (array length), `clear(rec_or_arr)` (zero a record/array in place, e.g. reset a bullet pool), `text("LITERAL",x,y,color)` / `number(n,x,y,color)` (on-screen font: scores/titles/GAME OVER; `text` needs a string LITERAL), `sfx(id)` / `music(id)` / `music_stop()` (sound triggers), `entity(x,y,tag)` (report for observation), `rnd(n)`, `map/mget/mset/fset/solid` (tilemap).
-- Sound is DECLARED like sprites, and the name is the id: `instrument kick { wave = sine  attack = 0  decay = 90  sustain = 0  pitch_env = 36  pitch_decay = 60 }` then `sfx boom { inst = kick  speed = 3  notes = "40 - 36" }`, played with `sfx(boom)`. instrument keys: wave (sine|triangle|saw|square|noise), attack/decay/release/pitch_decay (ms), sustain/cutoff/resonance/distortion/volume (0-255), pitch_env/pan (-127..127), filter (off|lpf|hpf). sfx keys: inst, speed (frames per row), vel, notes (a string of note numbers, `-` = hold the previous note, `.` = rest). A note plus holds is ONE long note; a repeated number retriggers. Drums come from noise or sine + pitch_env, not a drum machine.
+- Sound is DECLARED like sprites, and the name is the id: `instrument kick { wave = sine  attack = 0  decay = 90  sustain = 0  pitch_env = 36  pitch_decay = 60 }` then `sfx boom { inst = kick  speed = 3  notes = "40 - 36" }`, played with `sfx(boom)`. instrument keys: wave (sine|triangle|saw|square|noise), attack/decay/release/pitch_decay (ms), sustain/cutoff/resonance/distortion/volume (0-255), pitch_env/pan (-127..127), filter (off|lpf|hpf). sfx keys: inst, speed (frames per row), vel, notes (a string of note numbers, `-` = hold the previous note, `.` = rest). A note plus holds is ONE long note; a repeated number retriggers. Drums come from noise or sine + pitch_env, not a drum machine. You cannot hear the result, so check it with vm_render_audio: it reports every trigger with its frame, and warns when an id has no declaration or a sound fired but was silent.
 - Collision (need a `tilemap`): `map_rect_overlap(x,y,w,h,flag)` (rect hits a flagged tile?); `collide_x(x,y,w,h,dx,flag)`/`collide_y(...,dy,flag)` MOVE a box by dx/dy and return the new coord snapped out of solid tiles — resolve X then Y each frame; `touching_left|right|floor|ceiling(x,y,w,h,flag)` (is a flagged tile against that edge?). Prefer these over hand-writing collision.
 
 Canonical example:
@@ -376,6 +377,40 @@ impl VmTool for RunFrame {
 /// bounds the work done while the console mutex is held.
 const MAX_BATCH_FRAMES: u64 = 1800;
 
+/// Read the `script` / `frames` + `buttons` input shape shared by
+/// `vm_run_frames` and `vm_render_audio`.
+///
+/// One reader rather than two: a render whose inputs behaved differently from a
+/// run would make "it sounded wrong" mean "you pressed something else".
+fn script_segments(args: &Value, default_frames: u64) -> Vec<(u8, u64)> {
+    let held = |v: Option<&Value>| -> u8 {
+        let names: Vec<String> = v
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        buttons_from_names(&names)
+    };
+    match args.get("script").and_then(|v| v.as_array()) {
+        Some(items) => items
+            .iter()
+            .map(|seg| {
+                (
+                    held(seg.get("buttons")),
+                    seg.get("frames").and_then(|v| v.as_u64()).unwrap_or(1),
+                )
+            })
+            .collect(),
+        None => vec![(
+            held(args.get("buttons")),
+            u64_arg(args, "frames", default_frames),
+        )],
+    }
+}
+
 struct RunFrames(Shared);
 impl VmTool for RunFrames {
     fn name(&self) -> &str {
@@ -427,40 +462,7 @@ impl VmTool for RunFrames {
         })
     }
     fn call(&self, args: Value) -> Result<ToolResult, VmToolError> {
-        // Either an explicit script, or the `frames`/`buttons` shorthand as a
-        // single segment.
-        let segments: Vec<(u8, u64)> = match args.get("script").and_then(|v| v.as_array()) {
-            Some(items) => items
-                .iter()
-                .map(|seg| {
-                    let names: Vec<String> = seg
-                        .get("buttons")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    (
-                        buttons_from_names(&names),
-                        seg.get("frames").and_then(|v| v.as_u64()).unwrap_or(1),
-                    )
-                })
-                .collect(),
-            None => {
-                let names: Vec<String> = args
-                    .get("buttons")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                vec![(buttons_from_names(&names), u64_arg(&args, "frames", 60))]
-            }
-        };
+        let segments = script_segments(&args, 60);
 
         let mut c = self.0.lock();
         if !c.rom_loaded {
@@ -685,6 +687,108 @@ impl VmTool for Restore {
     }
 }
 
+// ---- vm_render_audio ----
+
+struct RenderAudio(Shared);
+impl VmTool for RenderAudio {
+    fn name(&self) -> &str {
+        "vm_render_audio"
+    }
+    fn description(&self) -> &str {
+        "Run the game forward and render its SOUND, returning a report you can \
+         read: every trigger with the frame it fired on, peak/RMS level, voices \
+         started and stolen, and a warning for each specific way audio goes \
+         wrong (an sfx id with no declaration, an instrument that isn't there, \
+         too many sounds at once, or triggers that fired but produced silence). \
+         With a working directory set it also writes a .wav you or a human can \
+         play. THIS ADVANCES THE MACHINE exactly like vm_run_frames — snapshot \
+         first if you want the state back. Use it to check that a sound you \
+         added actually fires; you cannot hear the WAV, but the report says \
+         what happened."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "script": {
+                    "type": "array",
+                    "description": "Input segments played in order, same shape as vm_run_frames — a sound behind a button needs the button pressed.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "buttons": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Buttons held for this segment (LEFT, RIGHT, UP, DOWN, A, B, START, SELECT)"
+                            },
+                            "frames": {"type": "integer", "description": "Frames to hold them for (default 1)"}
+                        }
+                    }
+                },
+                "frames": {
+                    "type": "integer",
+                    "description": "Shorthand for a single segment: render this many frames (default 180 = 3 seconds). Ignored when `script` is given."
+                },
+                "buttons": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Buttons held for the whole render. Ignored when `script` is given."
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Where to write the .wav, relative to the working directory (default 'render.wav'). Ignored when no working directory is set."
+                }
+            }
+        })
+    }
+    fn call(&self, args: Value) -> Result<ToolResult, VmToolError> {
+        let segments = script_segments(&args, 180);
+        let mut c = self.0.lock();
+        if !c.rom_loaded {
+            return Ok(ToolResult::text(
+                "no ROM loaded — call vm_load_rom first".into(),
+            ));
+        }
+        let render = match c.render_audio(&segments) {
+            Ok(r) => r,
+            Err(e) => return Ok(ToolResult::text(e)),
+        };
+
+        let mut text = render.summary.report();
+        // The WAV is for a human (or a later listening test); the report above
+        // is what the agent actually reads. Failing to write it is worth
+        // saying, but it does not make the render a failure.
+        match c.root() {
+            Some(root) => {
+                let rel = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("render.wav");
+                match crate::resolve_in_root(root, rel) {
+                    Ok(full) => {
+                        let bytes = render.to_wav();
+                        let len = bytes.len();
+                        match std::fs::write(&full, bytes) {
+                            Ok(()) => text.push_str(&format!(
+                                "wrote {} ({} bytes)\n",
+                                full.display(),
+                                len
+                            )),
+                            Err(e) => text.push_str(&format!("could not write {rel}: {e}\n")),
+                        }
+                    }
+                    Err(e) => text.push_str(&format!("bad path '{rel}': {e}\n")),
+                }
+            }
+            None => text.push_str(
+                "no working directory set, so no .wav was written — the report above \
+                 is the whole result.\n",
+            ),
+        }
+        Ok(ToolResult::text(text))
+    }
+}
+
 // ---- vm_reset ----
 
 struct Reset(Shared);
@@ -729,9 +833,114 @@ mod tests {
             "vm_snapshot",
             "vm_restore",
             "vm_reset",
+            "vm_render_audio",
         ] {
             assert!(names.contains(&expected.to_string()), "missing {expected}");
         }
+    }
+
+    const SOUND_GAME: &str = r#"
+instrument blip {
+  wave = square
+  attack = 0  decay = 60  sustain = 0
+}
+sfx ping { inst = blip  speed = 2  notes = "72 79" }
+local t: word
+function update() t = t + 1  if t == 3 then sfx(ping) end end
+function draw() cls(0) end
+"#;
+
+    fn loaded_sound_game(r: &VmToolSet) {
+        r.call(
+            "vm_write_source",
+            json!({"path": "g.lua", "source": SOUND_GAME}),
+        )
+        .unwrap();
+        r.call("vm_assemble", json!({"path": "g.lua"})).unwrap();
+        r.call("vm_load_rom", json!({"path": "g.lua"})).unwrap();
+    }
+
+    #[test]
+    fn render_audio_reports_what_fired() {
+        let r = shared_registry();
+        loaded_sound_game(&r);
+        let out = r.call("vm_render_audio", json!({"frames": 30})).unwrap();
+        let text = out.text;
+        // The whole point: an agent that cannot listen can still tell that the
+        // sound it added fired, and when.
+        assert!(text.contains("frame 3"), "{text}");
+        assert!(text.contains("ping"), "{text}");
+        assert!(text.contains("2 started"), "{text}");
+        assert!(!text.contains("WARNING"), "{text}");
+        // No root in this registry, so it says so rather than silently not
+        // writing a file.
+        assert!(text.contains("no working directory set"), "{text}");
+    }
+
+    #[test]
+    fn render_audio_names_the_reason_for_silence() {
+        let r = shared_registry();
+        r.call(
+            "vm_write_source",
+            json!({"path": "q.lua", "source": "function update() end\nfunction draw() cls(0) end"}),
+        )
+        .unwrap();
+        r.call("vm_assemble", json!({"path": "q.lua"})).unwrap();
+        r.call("vm_load_rom", json!({"path": "q.lua"})).unwrap();
+        let out = r.call("vm_render_audio", json!({"frames": 10})).unwrap();
+        assert!(out.text.contains("never called sfx()"), "{}", out.text);
+    }
+
+    #[test]
+    fn render_audio_needs_a_rom() {
+        let r = shared_registry();
+        let out = r.call("vm_render_audio", json!({"frames": 10})).unwrap();
+        assert!(out.text.contains("no ROM loaded"), "{}", out.text);
+    }
+
+    #[test]
+    fn render_audio_follows_the_same_input_script_as_run_frames() {
+        // Both tools read the script the same way, so "it sounded wrong" can
+        // never mean "you pressed something else".
+        let src = r#"
+            instrument i { wave = square  attack = 0  decay = 40  sustain = 0 }
+            sfx shoot { inst = i  notes = "72" }
+            function update() if btnp(A) then sfx(shoot) end end
+            function draw() cls(0) end
+        "#;
+        let r = shared_registry();
+        r.call("vm_write_source", json!({"path": "s.lua", "source": src}))
+            .unwrap();
+        r.call("vm_assemble", json!({"path": "s.lua"})).unwrap();
+        r.call("vm_load_rom", json!({"path": "s.lua"})).unwrap();
+
+        let script = json!({"script": [
+            {"buttons": [], "frames": 3},
+            {"buttons": ["A"], "frames": 3},
+            {"buttons": [], "frames": 10},
+        ]});
+        let audio = r.call("vm_render_audio", script.clone()).unwrap();
+        assert!(audio.text.contains("shoot"), "{}", audio.text);
+
+        r.call("vm_reset", json!({})).unwrap();
+        r.call("vm_load_rom", json!({"path": "s.lua"})).unwrap();
+        let run = r.call("vm_run_frames", script).unwrap();
+        // Both tools name the same frame for the same trigger.
+        assert!(run.text.contains("\"frame\":4"), "{}", run.text);
+        assert!(audio.text.contains("frame 4"), "{}", audio.text);
+    }
+
+    #[test]
+    fn reset_keeps_the_sound_bank_with_the_rom() {
+        // vm_reset preserves sources and built ROMs; the bank is cached beside
+        // them and has to survive too, or a reset silently mutes the game.
+        let r = shared_registry();
+        loaded_sound_game(&r);
+        r.call("vm_reset", json!({})).unwrap();
+        r.call("vm_load_rom", json!({"path": "g.lua"})).unwrap();
+        let out = r.call("vm_render_audio", json!({"frames": 30})).unwrap();
+        assert!(out.text.contains("ping"), "{}", out.text);
+        assert!(!out.text.contains("WARNING"), "{}", out.text);
     }
 
     #[test]

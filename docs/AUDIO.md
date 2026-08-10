@@ -320,7 +320,7 @@ only as part of a game source file, the synth app has to link the compiler.
    — a grammar for songs with no sequencer to play them would be surface
    nothing calls, so it lands with step 7.)*
 4. `kessel render-audio` and `vm_render_audio` — the whole loop is observable
-   before any device is opened.
+   before any device is opened. *(Done.)*
 5. cpal in `kessel run`. This is where latency and underrun get tuned.
 6. Chorus, reverb, sends.
 7. Sequencer, `track` blocks, `music`/`music_stop` on the audio clock.

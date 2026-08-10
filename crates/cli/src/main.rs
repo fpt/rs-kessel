@@ -4,6 +4,7 @@
 //! kessel mcp [--root <dir>]     # serve the vm_* tools to an agent over MCP
 //! kessel run <file.lua|.asm>    # open a window and play a game yourself
 //! kessel attach [workdir]        # join a running mcp session and play its VM
+//! kessel render-audio <file>    # render a game's sound to a .wav, headless
 //! ```
 //!
 //! Both drive the same [`kessel_vm`] console; they differ only in who is at the
@@ -15,6 +16,7 @@ mod attach;
 mod mcp;
 #[cfg(feature = "play")]
 mod play;
+mod render_audio;
 
 use std::path::PathBuf;
 
@@ -28,12 +30,20 @@ USAGE:
     kessel mcp [--root <dir>]     Serve the VM to an agent as an MCP stdio server
     kessel run <file.lua|.asm>    Open a window and play a game on its own VM
     kessel attach [workdir]       Join a running `kessel mcp` and play ITS VM
+    kessel render-audio <file>    Render a game's sound to a .wav (no window,
+                                  no audio device — works headless and over ssh)
 
 OPTIONS:
     --root <dir>    For `mcp`: the working directory holding the game sources the
                     VM compiles (default: the current directory). Sources are read
                     from and written to real files here, so an agent's own
                     file-editing tools and the VM see the same game.
+
+    For `render-audio`:
+    --frames, -n <n>   How many frames to run (default 180 = 3 seconds)
+    --out, -o <file>   Where to write the .wav (default: <name>.wav here)
+    --buttons <list>   Buttons held for the whole run, e.g. A,RIGHT — a sound
+                       behind a button needs the button pressed
 
 RUN vs ATTACH:
     `kessel run` plays a file on a VM of its own — nothing else can see or
@@ -83,6 +93,7 @@ fn run() -> Result<(), String> {
         }
         Some("run") => run_play(parse_run(&args[1..])?),
         Some("attach") => run_attach(parse_attach(&args[1..])?),
+        Some("render-audio") => render_audio::run(render_audio::parse(&args[1..])?),
         // `play` was split into `run` and `attach`; name both rather than
         // leaving someone with muscle memory at a bare "unknown command".
         Some("play") => Err(
@@ -94,7 +105,8 @@ fn run() -> Result<(), String> {
         // A bare path is almost certainly a run attempt; say so rather than
         // dumping the whole usage block on someone who nearly had it right.
         Some(other) => Err(format!(
-            "unknown command '{other}' — expected `mcp`, `run`, or `attach`\n\n\
+            "unknown command '{other}' — expected `mcp`, `run`, `attach`, or \
+             `render-audio`\n\n\
              Did you mean: kessel run {other}"
         )),
     }

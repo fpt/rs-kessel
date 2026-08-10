@@ -104,6 +104,9 @@ pub struct SynthStats {
     pub stolen: u64,
     /// Events dropped because they named an instrument the bank doesn't have.
     pub dropped: u64,
+    /// Stereo frames the master limiter turned down. Zero means nothing in the
+    /// render was ever too loud, which `peak` alone cannot tell you.
+    pub limited: u64,
 }
 
 /// The instrument: voices, and (later) filters and effects.
@@ -154,7 +157,10 @@ impl Synth {
     }
 
     pub fn stats(&self) -> SynthStats {
-        self.stats
+        SynthStats {
+            limited: self.limiter.engaged(),
+            ..self.stats
+        }
     }
 
     /// Voices currently sounding, release tails included.
