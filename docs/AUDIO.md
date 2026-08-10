@@ -134,6 +134,11 @@ game last wrote there. Metadata keeps the VM ignorant of DSP and hands the
 audio engine a finished `SoundBank` at load time.
 
 ```lua
+fx {                        -- one chorus and one reverb for the whole mix
+  reverb_size = 190  reverb_damping = 90
+  chorus_rate = 50   chorus_depth = 140
+}
+
 instrument lead {
   wave = "square"          -- sine | triangle | saw | square | noise
   attack = 0  decay = 8  sustain = 100  release = 4   -- ms, ms, 0..255, ms
@@ -325,7 +330,9 @@ only as part of a game source file, the synth app has to link the compiler.
    *(Done — the tuning decision was to keep the device's default buffer: at
    5–11 ms it is already under one 60 Hz frame, and forcing it smaller trades a
    real underrun risk for inaudible latency.)*
-6. Chorus, reverb, sends.
+6. Chorus, reverb, sends. *(Done. The reverb needed an input gain the sketch
+   did not mention — four parallel combs sum, so an un-scaled network returns
+   ~200× at the largest room.)*
 7. Sequencer, `track` blocks, `music`/`music_stop` on the audio clock.
 8. FFI + Android `AudioTrack`.
 9. Device ports 3–9 and the luax `play` / `note_on` / `note_off` builtins.

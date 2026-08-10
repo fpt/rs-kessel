@@ -123,9 +123,9 @@ assembler, and a sprite blitter. When the event type has to be shared,
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
 Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, the offline
-render (`vm_render_audio`, `kessel render-audio`), and **sound on `kessel run`**
-through cpal. No sequencer (`music`), no send effects, and no audio on Android
-or when attached.
+render (`vm_render_audio`, `kessel render-audio`), **sound on `kessel run`**
+through cpal, and the shared chorus and reverb. No sequencer (`music`), and no
+audio on Android or when attached.
 
 | File | Purpose |
 |------|---------|
@@ -137,6 +137,7 @@ or when attached.
 | `src/engine.rs` | `AudioEngine` — bank + a timestamped queue over `Synth`. Splits each render block at pending event times. |
 | `src/filter.rs` | 2-pole biquad LPF/HPF and the byte→Hz mapping. Games write `cutoff = 160`, never a frequency. |
 | `src/master.rs` | `soft_clip` (a per-voice *distortion*, 6.8% down at 0.5 — not a safety net) and the master `Limiter`. |
+| `src/fx.rs` | The two shared send effects: a Freeverb-shaped `Reverb` (4 combs → 2 all-passes) and a `Chorus` (one modulated delay, the two sides a quarter cycle apart). |
 | `src/wav.rs` | Dependency-free 16-bit PCM WAV, for offline render and previews. |
 | `examples/preview.rs` | Renders the waveforms and a kick/snare/laser/coin to WAV. The tests check frequency and lifetime; only an ear checks whether a kick sounds like one. |
 
@@ -155,10 +156,31 @@ decay finishes rather than waiting for a release that a fire-and-forget note
 never sends; and the master applies **no** soft clip, because a saturator on the
 master bus colours every quiet mix to catch peaks the limiter already caught.
 
+**Chorus and reverb are shared sends, never per voice.** A patch says how much
+of itself to send (`reverb = 40`); one unit of each processes the summed bus and
+returns it to the mix. Sixteen reverbs would cost sixteen times as much for an
+effect nobody can localize — a room is a property of the room. The `fx { }`
+block sets what those two units sound like, and there is exactly one of it.
+
+`Reverb` scales its input by `INPUT_GAIN` (0.06). That is load-bearing, not
+taste: four combs run in *parallel* and sum, so an un-scaled network has a gain
+of about `4 / (1 - feedback)` — two hundred at the largest room — and a send
+returning a hundred times what went in would duck the whole game through the
+master limiter. The test that caught this measures the return against the input
+rather than checking for `NaN`.
+
 The voice chain is oscillator → filter → drive → envelope → pan. The envelope
 sits after the filter so resonant ringing fades with the note, and the drive
 sits before it so how dirty a patch sounds doesn't depend on how hard it was
-played.
+played. A voice writes into the dry mix and both send buses in **one pass** —
+rendering to a scratch and scaling it into each bus afterwards is the obvious
+shape and costs two extra passes for a multiply the loop already has the value
+for.
+
+`Synth::render` walks the caller's block in fixed `CHUNK_FRAMES` pieces so the
+send buses can be sized once. The effects are stateful, so splitting changes
+nothing — which is also what keeps the output independent of the device's buffer
+size.
 
 **The grammar's *meaning* lives in `bank.rs`; its tokenization does not.** A
 patch file and a game source say the same thing because both call

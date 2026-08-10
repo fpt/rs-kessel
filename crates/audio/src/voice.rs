@@ -169,17 +169,24 @@ impl Voice {
         self.hold = None;
     }
 
-    /// Add this voice into an interleaved stereo buffer.
+    /// Add this voice into the dry mix and, scaled by its sends, into the two
+    /// effect buses.
     ///
     /// The chain is oscillator → filter → drive → envelope → pan. The envelope
     /// sits *after* the filter so a resonant filter's ringing fades with the
     /// note instead of outliving it, and the drive sits before the envelope so
     /// how dirty a patch sounds doesn't depend on how hard it was played.
-    pub fn render_add(&mut self, out: &mut [f32]) {
+    ///
+    /// All three buffers are written in one pass. Rendering the voice to a
+    /// scratch buffer and scaling it into each bus afterwards would be the
+    /// obvious shape and would cost a scratch buffer and two extra passes over
+    /// it, for a multiply this loop already has the value in a register for.
+    pub fn render_add(&mut self, dry: &mut [f32], chorus: &mut [f32], reverb: &mut [f32]) {
         if self.stage == Stage::Idle {
             return;
         }
-        for frame in out.chunks_exact_mut(2) {
+        let (cs, rs) = (self.params.chorus_send, self.params.reverb_send);
+        for (i, frame) in dry.chunks_exact_mut(2).enumerate() {
             if !self.advance_env() {
                 break;
             }
@@ -191,8 +198,17 @@ impl Voice {
                 s = soft_clip(s * self.params.drive) * self.params.drive_comp;
             }
             s *= self.env * self.gain;
-            frame[0] += s * self.params.gain_l;
-            frame[1] += s * self.params.gain_r;
+            let (l, r) = (s * self.params.gain_l, s * self.params.gain_r);
+            frame[0] += l;
+            frame[1] += r;
+            if cs > 0.0 {
+                chorus[i * 2] += l * cs;
+                chorus[i * 2 + 1] += r * cs;
+            }
+            if rs > 0.0 {
+                reverb[i * 2] += l * rs;
+                reverb[i * 2 + 1] += r * rs;
+            }
         }
     }
 
@@ -290,11 +306,19 @@ mod tests {
         p.compile(48_000)
     }
 
+    /// Render a voice with the send buses discarded — most of these tests are
+    /// about the voice itself, not where its output goes.
+    fn render_dry(v: &mut Voice, out: &mut [f32]) {
+        let mut sends = vec![0.0; out.len() * 2];
+        let (chorus, reverb) = sends.split_at_mut(out.len());
+        v.render_add(out, chorus, reverb);
+    }
+
     fn play(p: Patch, note: u8, samples: usize) -> Vec<f32> {
         let mut v = Voice::new(1);
         v.start(params(p), note, 255, None, None, Priority::Sfx, 0, 48_000);
         let mut buf = vec![0.0; samples * 2];
-        v.render_add(&mut buf);
+        render_dry(&mut v, &mut buf);
         buf
     }
 
@@ -352,7 +376,7 @@ mod tests {
             sr,
         );
         let mut buf = vec![0.0; sr as usize * 2];
-        v.render_add(&mut buf);
+        render_dry(&mut v, &mut buf);
         let mut crossings: i32 = 0;
         for w in buf.chunks_exact(2).collect::<Vec<_>>().windows(2) {
             if w[0][0] <= 0.0 && w[1][0] > 0.0 {
@@ -386,7 +410,7 @@ mod tests {
             48_000,
         );
         let mut buf = vec![0.0; 48_000 * 2 / 10]; // 100 ms
-        v.render_add(&mut buf);
+        render_dry(&mut v, &mut buf);
         assert!(v.is_idle());
     }
 
@@ -408,11 +432,11 @@ mod tests {
             48_000,
         );
         let mut buf = vec![0.0; 48_000 * 2]; // a full second
-        v.render_add(&mut buf);
+        render_dry(&mut v, &mut buf);
         assert!(!v.is_idle(), "a held note released itself");
         v.release();
         let mut tail = vec![0.0; 48_000 * 2 / 10];
-        v.render_add(&mut tail);
+        render_dry(&mut v, &mut tail);
         assert!(v.is_idle(), "release never finished");
     }
 
@@ -435,7 +459,7 @@ mod tests {
             48_000,
         );
         let mut buf = vec![0.0; 48_000 * 2 / 2]; // 500 ms, well past hold+release
-        v.render_add(&mut buf);
+        render_dry(&mut v, &mut buf);
         assert!(v.is_idle(), "a timed note outlived its duration");
     }
 
@@ -463,7 +487,7 @@ mod tests {
             sr as u32,
         );
         let mut buf = vec![0.0; sr * 2 * 3 / 2]; // 1.5 s
-        v.render_add(&mut buf);
+        render_dry(&mut v, &mut buf);
         let count = |s: &[f32]| {
             s.chunks_exact(2)
                 .collect::<Vec<_>>()

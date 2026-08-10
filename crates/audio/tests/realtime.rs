@@ -76,9 +76,14 @@ fn count_allocs(f: impl FnOnce()) -> usize {
 }
 
 /// A bank that exercises every per-sample branch in the render path: a filter,
-/// resonance, drive, panning, a pitch envelope, and noise.
+/// resonance, drive, panning, a pitch envelope, noise, and both effect sends.
+///
+/// The sends matter here specifically: they are what makes `render` walk its
+/// buses and run the delay lines, which is the part most likely to be "fixed"
+/// one day by allocating a buffer to fit the caller's block.
 fn loaded_synth() -> Synth {
     let mut synth = Synth::new(SynthConfig::default());
+    synth.set_fx(kessel_audio::bank::FxSettings::default());
     synth.set_instruments(&[
         Patch {
             wave: Waveform::Saw,
@@ -88,6 +93,8 @@ fn loaded_synth() -> Synth {
             distortion: 90,
             pan: -80,
             sustain: 180,
+            reverb: 200,
+            chorus: 120,
             ..Patch::default()
         },
         Patch {
@@ -99,11 +106,13 @@ fn loaded_synth() -> Synth {
             filter: FilterMode::Hpf,
             cutoff: 60,
             pan: 90,
+            reverb: 90,
             ..Patch::default()
         },
         Patch {
             wave: Waveform::Square,
             sustain: 200,
+            chorus: 255,
             ..Patch::default()
         },
     ]);
