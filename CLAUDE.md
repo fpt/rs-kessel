@@ -15,8 +15,8 @@ Kessel does no LLM inference and hosts no agent. It used to be a macOS/Windows
 voice assistant that embedded the VM; that frontend and its ACP client were
 removed, leaving only the console.
 
-- **Rust**: workspace in `crates/`, three members — `vm` (`kessel-vm`),
-  `cli` (`kessel`), and `ffi` (`kessel-ffi`)
+- **Rust**: workspace in `crates/`, four members — `vm` (`kessel-vm`),
+  `audio` (`kessel-audio`), `cli` (`kessel`), and `ffi` (`kessel-ffi`)
 - **Platforms**: macOS, Windows, Linux, Android. `kessel mcp` is headless-safe.
 
 ## Architecture
@@ -106,6 +106,40 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. Each TICK response carries its own `dim`. |
 | `src/attach/server.rs` | Loopback listener inside `kessel mcp`; each TICK locks the shared console. |
 | `src/attach/client.rs` | `AttachClient` — background tick thread, latest-frame slot. |
+
+### `crates/audio` — `kessel-audio`
+
+The synth. Host-free in the same sense as `kessel-vm` — it opens no audio
+device, spawns no thread, does no I/O, and **depends on nothing**, the VM
+included. cpal, `AudioTrack`, and `AVAudioSourceNode` live in the hosts.
+
+The zero-dependency rule is what makes the crate reusable as a standalone
+instrument: a synth app links `Synth` without carrying a stack machine, an
+assembler, and a sprite blitter. When the event type has to be shared,
+`kessel-vm` depends on *this* crate, never the reverse.
+
+`docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
+Today: voices, oscillators, envelopes. No bank, no sequencer, no effects, and
+no host — nothing calls this crate yet.
+
+| File | Purpose |
+|------|---------|
+| `src/lib.rs` | `Synth` — the voice pool, event handling, and voice stealing. `SynthStats` counts what a render did, since "nothing played" is hard to hear. |
+| `src/event.rs` | `AudioEvent` — the wire between a frame clock and a sample clock. Plain `Copy` data, because it crosses a lock-free queue, the observation record, and the C ABI. |
+| `src/patch.rs` | `Patch` (authored: `u8`/`u16`, the VM's byte world) and `VoiceParams` (compiled: float rates at a known sample rate). The conversion happens at load time, never in `render`. |
+| `src/voice.rs` | One voice: oscillator, ADSR, pitch envelope, seeded xorshift noise. |
+| `src/wav.rs` | Dependency-free 16-bit PCM WAV, for offline render and previews. |
+| `examples/preview.rs` | Renders the waveforms and a kick/snare/laser/coin to WAV. The tests check frequency and lifetime; only an ear checks whether a kick sounds like one. |
+
+`Synth::render` runs on an audio callback thread: **no allocation, no locks, no
+syscalls, no panics**. `set_instruments` is the only call in the crate that
+allocates, and it is load-time.
+
+Two details in `voice.rs` that look like oversights and are not: a voice does
+**not** reset its noise RNG on `start` (restarting it makes repeated hits
+identical, which is the machine-gun artifact), and a patch that sustains at zero
+goes idle when its decay finishes rather than waiting for a release that a
+fire-and-forget note never sends.
 
 ### `crates/ffi` — `kessel-ffi`
 
@@ -237,6 +271,8 @@ cd crates && cargo build --release --no-default-features   # headless
 
 ./crates/target/release/kessel mcp --root /path/to/project
 ./crates/target/release/kessel run games/tetris.lua
+
+cd crates && cargo run -p kessel-audio --example preview   # → target/audio-preview/*.wav
 ```
 
 `make install` builds release and copies `kessel` into `$PREFIX/bin` (default
@@ -247,9 +283,11 @@ cd crates && cargo build --release --no-default-features   # headless
 ```
 kessel/
 ├── crates/vm/          kessel-vm: the console (host-free)
+├── crates/audio/       kessel-audio: the synth (host-free, VM-free)
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
-└── docs/VM.md          machine, ISA, devices, luax, agent loop
+├── docs/VM.md          machine, ISA, devices, luax, agent loop
+└── docs/AUDIO.md       synth architecture, event surface, build order
 ```
 
 ## Testing notes
