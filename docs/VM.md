@@ -538,6 +538,22 @@ opens a window with `winit`, and on a 60 Hz tick calls `tick(buttons)` +
 the ROM asked for) scaled up with nearest-neighbour into a `softbuffer` CPU
 surface (`crates/cli/src/play.rs`).
 
+**Sound** comes out of the same tick: each frame's `sfx()` triggers go through a
+lock-free queue to a `cpal` output stream, where `kessel-audio` renders them
+(`crates/cli/src/audio.rs`). The audio thread never blocks on the game and never
+allocates, so a slow frame drops a frame rather than clicking; a full queue drops
+the sound and says how many on exit. Pressing `R` restarts the stream, because
+the reloaded game may declare different instruments.
+
+The realtime path applies an event at the start of the callback block that finds
+it, which costs one device buffer of latency (5–11 ms, under one frame) and
+avoids the drift you would get by mapping the game's frame counter onto the audio
+clock. `kessel render-audio` is the sample-accurate, reproducible path — use that
+one when you need to *check* a sound rather than hear it.
+
+There is no sound when **attached**: `kessel attach` drives the agent's console,
+and its sound events belong to that process.
+
 There is deliberately **no GPU** in the path. The console rasterizes into its own
 palette-indexed framebuffer, so presentation is a plain upscale-and-blit; keeping
 it on the CPU means the pixels you see are exactly the buffer an agent gets back

@@ -58,13 +58,30 @@ impl Source {
         }
     }
 
-    /// Advance one frame. For `Attached` this only *records* the buttons — the
-    /// client's worker thread owns the round trip, so the event loop never
-    /// blocks on the agent.
-    fn tick(&self, buttons: u8) {
+    /// Advance one frame, handing any sound it asked for to `sink`. For
+    /// `Attached` this only *records* the buttons — the client's worker thread
+    /// owns the round trip, so the event loop never blocks on the agent, and
+    /// the sound belongs to the agent's console rather than this process.
+    fn tick(&self, buttons: u8, sink: &mut dyn FnMut(kessel_audio::AudioEvent)) {
         match self {
-            Source::Local { player, .. } => player.tick(buttons),
+            Source::Local { player, .. } => player.tick_collecting(buttons, sink),
             Source::Attached(c) => c.set_buttons(buttons),
+        }
+    }
+
+    /// The loaded ROM's sound bank, or an empty one when attached.
+    fn sound_bank(&self) -> kessel_audio::SoundBank {
+        match self {
+            Source::Local { player, .. } => player.sound_bank(),
+            Source::Attached(_) => kessel_audio::SoundBank::default(),
+        }
+    }
+
+    /// See `VmConsole::audio_epoch` — changes when the timeline jumps.
+    fn audio_epoch(&self) -> u64 {
+        match self {
+            Source::Local { player, .. } => player.audio_epoch(),
+            Source::Attached(_) => 0,
         }
     }
 
@@ -127,21 +144,63 @@ fn run_window(source: Source) -> Result<(), String> {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = App {
-        source,
         buttons: 0,
         window: None,
         surface: None,
         next_frame: Instant::now(),
         dim: 0,
         shown_title: String::new(),
+        #[cfg(feature = "audio")]
+        audio: start_audio(&source),
+        audio_epoch: source.audio_epoch(),
+        source,
     };
-    event_loop
+    let result = event_loop
         .run_app(&mut app)
-        .map_err(|e| format!("event loop: {e}"))
+        .map_err(|e| format!("event loop: {e}"));
+
+    #[cfg(feature = "audio")]
+    if let Some(a) = &app.audio {
+        // Worth one line: a game that fires more sounds than the queue can hold
+        // is losing them, and nothing else would ever say so.
+        let lost = a.dropped();
+        if lost > 0 {
+            eprintln!("kessel run: dropped {lost} sound event(s) — the audio queue was full");
+        }
+    }
+    result
+}
+
+/// Open the audio device, or explain why there is no sound and carry on.
+///
+/// Sound is never a reason not to show the game: a machine with no sound card,
+/// a busy device, or a format we don't handle all end up here.
+#[cfg(feature = "audio")]
+fn start_audio(source: &Source) -> Option<crate::audio::AudioHost> {
+    match crate::audio::start(source.sound_bank()) {
+        Ok(host) => {
+            // Say what came up. Otherwise "no sound" and "sound at a rate your
+            // speakers dislike" look identical from the outside.
+            eprintln!("kessel run: audio at {} Hz", host.sample_rate());
+            Some(host)
+        }
+        Err(e) => {
+            eprintln!("kessel run: no sound ({e})");
+            None
+        }
+    }
 }
 
 struct App {
     source: Source,
+    /// The output stream, when there is one. `None` means the game plays in
+    /// silence — a missing sound card is not a reason to refuse to run.
+    #[cfg(feature = "audio")]
+    audio: Option<crate::audio::AudioHost>,
+    /// Last epoch seen from the console. A change means the timeline jumped
+    /// (reload/reset), and the synth has to be told before the old timeline's
+    /// notes ring over the new one.
+    audio_epoch: u64,
     buttons: u8,
     window: Option<std::sync::Arc<Window>>,
     surface: Option<softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>>,
@@ -174,6 +233,32 @@ impl App {
             eprintln!("kessel run: reloaded {}", path.display());
         } else {
             eprintln!("kessel run: reload failed:\n{err}");
+        }
+        // The reloaded game may declare different instruments, and the stream
+        // holds the bank it was built with. Restarting it is the whole fix:
+        // swapping a bank under a live callback would need a lock in exactly
+        // the place that must not have one, to handle a keypress.
+        #[cfg(feature = "audio")]
+        {
+            self.audio = start_audio(&self.source);
+            self.audio_epoch = self.source.audio_epoch();
+        }
+    }
+
+    /// Tell the synth when the timeline jumps.
+    ///
+    /// After a reload the previous game's voices and release tails are still
+    /// sounding over a game that never made them, so a discontinuity has to
+    /// reach the audio side as a `Panic`. The VM signals with a counter rather
+    /// than emitting the event itself — it does not know a synth exists.
+    #[cfg(feature = "audio")]
+    fn check_audio_epoch(&mut self) {
+        let epoch = self.source.audio_epoch();
+        if epoch != self.audio_epoch {
+            self.audio_epoch = epoch;
+            if let Some(a) = &self.audio {
+                a.send(kessel_audio::AudioEvent::Panic);
+            }
         }
     }
 
@@ -292,7 +377,22 @@ impl ApplicationHandler for App {
         }
         self.next_frame = now + FRAME_TIME;
 
-        self.source.tick(self.buttons);
+        // Forward this frame's sound to the device. The closure runs on the
+        // game thread and only pushes into a lock-free queue, so a busy audio
+        // callback can never stall the tick (or the window).
+        #[cfg(feature = "audio")]
+        {
+            let audio = self.audio.as_ref();
+            self.source.tick(self.buttons, &mut |ev| {
+                if let Some(a) = audio {
+                    a.send(ev);
+                }
+            });
+            self.check_audio_epoch();
+        }
+        #[cfg(not(feature = "audio"))]
+        self.source.tick(self.buttons, &mut |_| {});
+
         self.sync_title();
         if let Some(window) = &self.window {
             window.request_redraw();

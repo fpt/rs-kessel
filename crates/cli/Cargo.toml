@@ -14,11 +14,16 @@ path = "src/main.rs"
 # The player is on by default, but `--no-default-features` yields a pure
 # headless binary — `kessel mcp` on a server or in a container has no business
 # linking a window system.
-default = ["play"]
+default = ["play", "audio"]
 play = ["dep:winit", "dep:softbuffer"]
+# Sound for `kessel run`. Separate from `play` because they fail independently:
+# a machine can have a screen and no sound card, and `kessel render-audio`
+# needs neither — it renders to a file with no device at all.
+audio = ["dep:cpal"]
 
 [dependencies]
 kessel-vm = { path = "../vm" }
+kessel-audio = { path = "../audio" }
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,6 +33,12 @@ serde_json.workspace = true
 # and nothing here can affect what the VM computes.
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
+
+# The audio device, and the first thing in this workspace that talks to one.
+# It lives here rather than in kessel-audio for the same reason winit does not
+# live in kessel-vm: the synth is a function from events to samples, and who
+# plays those samples is the host's business.
+cpal = { version = "0.15", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

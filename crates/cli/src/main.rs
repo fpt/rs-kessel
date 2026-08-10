@@ -13,6 +13,8 @@
 //! machine computes, which is what keeps agent runs reproducible.
 
 mod attach;
+#[cfg(feature = "audio")]
+mod audio;
 mod mcp;
 #[cfg(feature = "play")]
 mod play;

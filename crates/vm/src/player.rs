@@ -88,10 +88,48 @@ impl VmPlayer {
     /// metadata, default START) freezes and resumes the game — see
     /// [`is_paused`](Self::is_paused).
     pub fn tick(&self, buttons: u8) {
+        self.tick_collecting(buttons, &mut |_| {});
+    }
+
+    /// Advance one frame and hand each sound it asked for to `sink`.
+    ///
+    /// The sink is a callback rather than a returned `Vec` because a host calls
+    /// this sixty times a second and usually forwards straight into a fixed
+    /// queue; allocating a vector per frame to carry zero or one event would be
+    /// pure waste.
+    ///
+    /// Nothing is emitted for a frame that did not run — while paused the
+    /// device's log still holds the *last* frame's triggers, and replaying them
+    /// every frame would turn a pause into a stuck note.
+    pub fn tick_collecting(&self, buttons: u8, sink: &mut dyn FnMut(kessel_audio::AudioEvent)) {
         let mut c = self.inner.lock();
-        if c.rom_loaded {
-            c.play_tick(buttons);
+        if !c.rom_loaded {
+            return;
         }
+        let before = c.frame;
+        c.play_tick(buttons);
+        if c.frame == before {
+            return; // paused
+        }
+        for s in &c.vm.devices.sound {
+            sink(match s.kind {
+                crate::device::SoundKind::Sfx => kessel_audio::AudioEvent::PlaySfx { id: s.id },
+                crate::device::SoundKind::Music => kessel_audio::AudioEvent::PlayMusic { id: s.id },
+                crate::device::SoundKind::MusicStop => kessel_audio::AudioEvent::StopMusic,
+            });
+        }
+    }
+
+    /// The loaded ROM's instruments and sound effects, for a host to hand to
+    /// `kessel-audio`.
+    pub fn sound_bank(&self) -> kessel_audio::SoundBank {
+        self.inner.lock().sound_bank().clone()
+    }
+
+    /// See [`VmConsole::audio_epoch`]. A host with a live synth panics it when
+    /// this changes.
+    pub fn audio_epoch(&self) -> u64 {
+        self.inner.lock().audio_epoch()
     }
 
     /// Whether the game is currently paused (the pause button was pressed). The

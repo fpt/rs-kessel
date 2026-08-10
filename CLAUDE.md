@@ -103,6 +103,7 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
 | `src/render_audio.rs` | `kessel render-audio` — headless WAV render plus the report. No window, no audio device, so it works under `--no-default-features` and over ssh. |
+| `src/audio.rs` | The cpal output stream for `kessel run`, and the lock-free queue the game thread feeds it. `render_block` is the callback body, factored out so it is testable without a sound card. |
 | `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). `Source` picks local vs. attached. |
 | `src/attach/session.rs` | Session files in the cache dir: publish, list, discover. Directory is a parameter, never read from env inside logic — the tests run in parallel. |
 | `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. Each TICK response carries its own `dim`. |
@@ -121,10 +122,10 @@ assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, and the
-offline render (`vm_render_audio`, `kessel render-audio`). No sequencer
-(`music`), no send effects, and **no audio device on any host** — sound is
-rendered to a file, never played.
+Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, the offline
+render (`vm_render_audio`, `kessel render-audio`), and **sound on `kessel run`**
+through cpal. No sequencer (`music`), no send effects, and no audio on Android
+or when attached.
 
 | File | Purpose |
 |------|---------|
@@ -181,6 +182,17 @@ numbering schemes for one event is how "it sounded wrong" becomes an hour.
 `VmConsole::audio_epoch()` changes on reset, restore, and ROM load. A host with
 a live synth turns a change into `AudioEvent::Panic`; the VM signals rather than
 emits because it does not know a synth exists and is not going to start.
+`kessel run` checks it each tick, which is what keeps a reload from leaving the
+previous game's notes ringing over the new one.
+
+**Realtime places events at the callback block that finds them**, not at a sample
+derived from the game's frame counter — the two clocks drift, and a game running
+slightly slow would accumulate a growing offset. So `kessel run` trades
+sample-accurate placement for a fixed one-buffer latency, while
+`kessel render-audio` keeps it, which is what makes the offline render
+reproducible. The realtime path also **reloads by restarting the stream**:
+swapping a bank under a live callback would need a lock in the one place that
+must not have one, to handle a keypress.
 
 `AudioEngine::submit` expands a `PlaySfx` into one queued `Play` per note at
 trigger time rather than walking a cursor each frame; `Panic` then cancels the
@@ -304,8 +316,11 @@ with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bu
   own file-editing tools and the VM never diverge. In-memory sources exist only
   for `VmPlayer` and tests.
 - **stdout is the MCP channel.** Every diagnostic in `kessel mcp` goes to stderr.
-- **The `play` feature is default-on but removable.** `--no-default-features`
-  drops winit/softbuffer for a headless `kessel mcp`.
+- **The `play` and `audio` features are default-on but removable.**
+  `--no-default-features` drops winit/softbuffer/cpal for a headless
+  `kessel mcp`. They are *separate* features because they fail independently: a
+  machine can have a screen and no sound card, and `kessel render-audio` needs
+  neither.
 - Prefer `vm_run_frames` over looping `vm_run_frame`: an MCP round trip per frame
   is pure overhead. It stops at the first fault/halt and caps at 1800 frames.
 
