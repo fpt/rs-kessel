@@ -144,8 +144,12 @@ instrument lead {
   chorus = 15  reverb = 40  distortion = 0             -- sends, 0..255
 }
 
-sfx boom  { inst = lead, notes = "48 -4 -8 36",  speed = 3 }  -- rows, frames/row
-track intro { tempo = 6, rows = { ... } }                     -- tracker patterns
+sfx boom  { inst = lead  speed = 3  notes = "48 - 43 . 36" }
+-- note number, `-` holds the previous note, `.` rests; `speed` is frames/row.
+-- A note plus holds is one long note; a repeated number retriggers. That is
+-- the difference between a drone and a machine gun, and games want both.
+
+track intro { tempo = 6, rows = { ... } }   -- not yet; lands with the sequencer
 ```
 
 Every parameter is a `u8`/`u16` — the byte world the VM already lives in, and
@@ -312,7 +316,9 @@ only as part of a game source file, the synth app has to link the compiler.
    envelope, voice allocator. Test: render to WAV, eyeball a scope. *(Done.)*
 2. Biquad filter, pan, per-voice drive, master limiter. Allocation-free render
    test. *(Done — the master lost its soft clip; see above.)*
-3. `SoundBank` + patch grammar + `sfx`/`Play` handling.
+3. `SoundBank` + patch grammar + `sfx`/`Play` handling. *(Done, except `track`
+   — a grammar for songs with no sequencer to play them would be surface
+   nothing calls, so it lands with step 7.)*
 4. `kessel render-audio` and `vm_render_audio` — the whole loop is observable
    before any device is opened.
 5. cpal in `kessel run`. This is where latency and underrun get tuned.

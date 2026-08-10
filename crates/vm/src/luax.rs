@@ -35,6 +35,11 @@
 
 use std::collections::HashMap;
 
+use kessel_audio::bank::{
+    set_instrument_field, set_sfx_field, OwnedValue, SfxDef, SoundBank, MAX_INSTRUMENTS, MAX_SFX,
+};
+use kessel_audio::Patch;
+
 use super::assembler::Diagnostic;
 use super::device::VideoMode;
 
@@ -46,6 +51,11 @@ pub struct Compiled {
     pub controls: Controls,
     /// The screen the ROM asked for via `screen { … }`; Classic128 by default.
     pub mode: VideoMode,
+    /// Instruments and sound effects declared by `instrument`/`sfx` blocks.
+    ///
+    /// Metadata beside the ROM, like `controls` and `mode` — not bytes in the
+    /// 64 KiB space. The host hands it to the audio engine at load time.
+    pub bank: SoundBank,
 }
 
 impl Compiled {
@@ -130,14 +140,17 @@ pub fn compile(src: &str) -> Compiled {
             diagnostics,
             controls,
             mode,
+            bank: SoundBank::default(),
         };
     }
-    let asm = Compiler::new().compile(&decls, &mut diagnostics);
+    let mut compiler = Compiler::new();
+    let asm = compiler.compile(&decls, &mut diagnostics);
     Compiled {
         asm,
         diagnostics,
         controls,
         mode,
+        bank: std::mem::take(&mut compiler.bank),
     }
 }
 
@@ -522,6 +535,19 @@ enum Decl {
         mode: VideoMode,
         line: usize,
     },
+    /// `instrument NAME { key = value … }` — a synth patch. Emits no code; it
+    /// rides along as bank metadata. The name is a constant equal to its id.
+    Instrument {
+        name: String,
+        fields: Vec<(String, OwnedValue, usize)>,
+        line: usize,
+    },
+    /// `sfx NAME { inst = … notes = "…" }` — a sound effect, same deal.
+    Sfx {
+        name: String,
+        fields: Vec<(String, OwnedValue, usize)>,
+        line: usize,
+    },
 }
 
 // ======================================================================
@@ -608,10 +634,15 @@ impl Parser {
                 decls.push(self.parse_controls(d));
             } else if self.is_kw("screen") {
                 decls.push(self.parse_screen(d));
+            } else if self.is_kw("instrument") {
+                decls.push(self.parse_sound_decl("instrument", d));
+            } else if self.is_kw("sfx") {
+                decls.push(self.parse_sound_decl("sfx", d));
             } else {
                 d.push(err(
                     self.line(),
-                    "expected 'record', 'function', 'local', 'sprite', 'tilemap', or 'controls'",
+                    "expected 'record', 'function', 'local', 'sprite', 'tilemap', 'controls', \
+                     'instrument', or 'sfx'",
                 ));
                 self.advance();
             }
@@ -724,6 +755,63 @@ impl Parser {
         }
         self.expect_sym("}", d);
         Decl::Screen { mode, line }
+    }
+
+    /// `instrument NAME { … }` / `sfx NAME { … }`.
+    ///
+    /// The keys are *not* interpreted here. This collects `key = value` pairs
+    /// and the compiler pass hands each to `kessel-audio`, which owns what they
+    /// mean — so a patch says the same thing in a game source and in a
+    /// standalone patch file, and a synth app needs no part of this compiler to
+    /// read one.
+    fn parse_sound_decl(&mut self, kw: &'static str, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw(kw);
+        let name = self.ident(d);
+        self.expect_sym("{", d);
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            let key_line = self.line();
+            let key = self.ident(d);
+            self.expect_sym("=", d);
+            match self.parse_sound_value(d) {
+                Some(v) => fields.push((key, v, key_line)),
+                None => {
+                    // The value token is already consumed by the reporter; keep
+                    // going so one typo doesn't cascade.
+                }
+            }
+            self.eat_sym(",");
+        }
+        self.expect_sym("}", d);
+        if kw == "instrument" {
+            Decl::Instrument { name, fields, line }
+        } else {
+            Decl::Sfx { name, fields, line }
+        }
+    }
+
+    /// A value in an `instrument`/`sfx` block: a number (optionally negative),
+    /// a bare name, or a `"…"` string.
+    fn parse_sound_value(&mut self, d: &mut Vec<Diagnostic>) -> Option<OwnedValue> {
+        let line = self.line();
+        // The lexer splits `-12` into a symbol and a number, so a negative
+        // `pitch_env` or `pan` arrives in two tokens.
+        let neg = if matches!(self.peek(), Tok::Sym("-")) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        match self.advance() {
+            Tok::Num(n) => Some(OwnedValue::Int(if neg { -n } else { n })),
+            Tok::Ident(s) if !neg => Some(OwnedValue::Word(s)),
+            Tok::Str(s) if !neg => Some(OwnedValue::Text(s)),
+            _ => {
+                d.push(err(line, "expected a number, a name, or a \"…\" string"));
+                None
+            }
+        }
     }
 
     fn parse_controls(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
@@ -1229,6 +1317,12 @@ struct Compiler {
     /// Declared sprites in id order (name, rows); each `NAME` is a constant = its id.
     sprites: Vec<(String, Vec<String>)>,
     sprite_ids: HashMap<String, u16>,
+    /// Declared instruments and sound effects. Like sprites, each `NAME` is a
+    /// constant equal to its id, so `sfx(boom)` survives someone inserting a
+    /// declaration above it.
+    bank: SoundBank,
+    instrument_ids: HashMap<String, u16>,
+    sfx_ids: HashMap<String, u16>,
     /// The single declared tilemap: (label, width, height). `mget`/`mset`/`map`/
     /// `solid` need it.
     tilemap: Option<(String, u16, u16)>,
@@ -1367,6 +1461,9 @@ impl Compiler {
             locals: HashMap::new(),
             sprites: Vec::new(),
             sprite_ids: HashMap::new(),
+            bank: SoundBank::default(),
+            instrument_ids: HashMap::new(),
+            sfx_ids: HashMap::new(),
             tilemap: None,
             data: Vec::new(),
             label_ctr: 0,
@@ -1417,6 +1514,18 @@ impl Compiler {
         }
     }
 
+    /// An `sfx` or `instrument` name, as its id.
+    ///
+    /// Effects are checked first: `sfx(boom)` is the common case, and a game
+    /// that names an instrument and an effect the same thing has bigger
+    /// problems than which one wins.
+    fn sound_id(&self, name: &str) -> Option<u16> {
+        self.sfx_ids
+            .get(name)
+            .or_else(|| self.instrument_ids.get(name))
+            .copied()
+    }
+
     fn compile(&mut self, decls: &[Decl], d: &mut Vec<Diagnostic>) -> String {
         // Pass 1: record layouts.
         for decl in decls {
@@ -1453,6 +1562,66 @@ impl Compiler {
                 self.sprites.push((name.clone(), rows.clone()));
             }
         }
+        // Pass 1.55: instruments, then sound effects — ids in declaration
+        // order, names bound as constants. Instruments go first because an
+        // `sfx` block names one, and `kessel-audio` resolves that name against
+        // what has been declared so far.
+        for decl in decls {
+            if let Decl::Instrument { name, fields, line } = decl {
+                let mut patch = Patch::default();
+                for (key, value, kline) in fields {
+                    if let Err(message) = set_instrument_field(&mut patch, key, value.as_field()) {
+                        d.push(err(*kline, message));
+                    }
+                }
+                if self.bank.instruments.len() >= MAX_INSTRUMENTS {
+                    d.push(err(
+                        *line,
+                        format!("too many instruments (limit {MAX_INSTRUMENTS})"),
+                    ));
+                    continue;
+                }
+                // Check *before* adding. Adding first would leave the bank
+                // holding two patches while the name resolved to the second,
+                // so the ids in the metadata and the ids in the code would
+                // describe different instruments.
+                if self.instrument_ids.contains_key(name) {
+                    d.push(err(*line, format!("duplicate instrument '{name}'")));
+                    continue;
+                }
+                let id = self.bank.add_instrument(name.clone(), patch) as u16;
+                self.instrument_ids.insert(name.clone(), id);
+            }
+        }
+        for decl in decls {
+            if let Decl::Sfx { name, fields, line } = decl {
+                let mut def = SfxDef::default();
+                let known = &self.instrument_ids;
+                let resolve = |n: &str| known.get(n).map(|id| *id as u8);
+                for (key, value, kline) in fields {
+                    if let Err(message) = set_sfx_field(&mut def, key, value.as_field(), &resolve) {
+                        d.push(err(*kline, message));
+                    }
+                }
+                if self.bank.sfx.len() >= MAX_SFX {
+                    d.push(err(
+                        *line,
+                        format!("too many sound effects (limit {MAX_SFX})"),
+                    ));
+                    continue;
+                }
+                // Check before adding, as with instruments above: adding first
+                // leaves the bank holding two definitions while the name
+                // resolves to the second.
+                if self.sfx_ids.contains_key(name) {
+                    d.push(err(*line, format!("duplicate sfx '{name}'")));
+                    continue;
+                }
+                let id = self.bank.add_sfx(name.clone(), def);
+                self.sfx_ids.insert(name.clone(), id);
+            }
+        }
+
         // Pass 1.6: the tilemap (single) — reserve its tile-id grid.
         for decl in decls {
             if let Decl::Tilemap { name, w, h, line } = decl {
@@ -1919,6 +2088,10 @@ impl Compiler {
                     out.push(id.to_string()); // sprite name -> its tile id
                     return true;
                 }
+                if let Some(id) = self.sound_id(name) {
+                    out.push(id.to_string()); // instrument/sfx name -> its id
+                    return true;
+                }
                 // A place: scalar -> load; aggregate -> its address (reference).
                 let ty = match self.gen_place_addr(e, out, d) {
                     Some(t) => t,
@@ -2343,6 +2516,9 @@ impl Compiler {
                 }
                 if let Some(id) = self.sprite_ids.get(name) {
                     return Some(*id as i64);
+                }
+                if let Some(id) = self.sound_id(name) {
+                    return Some(id as i64);
                 }
                 if seen.contains(name) {
                     return None;

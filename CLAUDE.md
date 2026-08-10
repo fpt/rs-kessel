@@ -119,8 +119,9 @@ assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Today: voices, oscillators, envelopes, filter, pan, drive, master limiter. No
-bank, no sequencer, no send effects, and no host — nothing calls this crate yet.
+Today: voices, filter, pan, drive, master limiter, the bank, and `sfx`. No
+sequencer (`music`), no send effects, and no audio device on any host — the VM
+now *carries* a bank, but nothing plays it outside tests.
 
 | File | Purpose |
 |------|---------|
@@ -128,6 +129,8 @@ bank, no sequencer, no send effects, and no host — nothing calls this crate ye
 | `src/event.rs` | `AudioEvent` — the wire between a frame clock and a sample clock. Plain `Copy` data, because it crosses a lock-free queue, the observation record, and the C ABI. |
 | `src/patch.rs` | `Patch` (authored: `u8`/`u16`, the VM's byte world) and `VoiceParams` (compiled: float rates at a known sample rate). The conversion happens at load time, never in `render`. |
 | `src/voice.rs` | One voice: oscillator, ADSR, pitch envelope, seeded xorshift noise, filter, drive, pan. |
+| `src/bank.rs` | `SoundBank`, the `instrument`/`sfx` grammar, and the field setters both front-ends call. |
+| `src/engine.rs` | `AudioEngine` — bank + a timestamped queue over `Synth`. Splits each render block at pending event times. |
 | `src/filter.rs` | 2-pole biquad LPF/HPF and the byte→Hz mapping. Games write `cutoff = 160`, never a frequency. |
 | `src/master.rs` | `soft_clip` (a per-voice *distortion*, 6.8% down at 0.5 — not a safety net) and the master `Limiter`. |
 | `src/wav.rs` | Dependency-free 16-bit PCM WAV, for offline render and previews. |
@@ -152,6 +155,20 @@ The voice chain is oscillator → filter → drive → envelope → pan. The env
 sits after the filter so resonant ringing fades with the note, and the drive
 sits before it so how dirty a patch sounds doesn't depend on how hard it was
 played.
+
+**The grammar's *meaning* lives in `bank.rs`; its tokenization does not.** A
+patch file and a game source say the same thing because both call
+`set_instrument_field`/`set_sfx_field`. `luax` lexes the blocks with its own
+lexer because the luax lexer carries no byte spans, and adding them so `parse`
+could be handed a block's text would touch every rule in the compiler. Two
+tokenizers over one definition of meaning is the cheaper half of that trade —
+but the setters are the part that must never be duplicated.
+
+`AudioEngine::submit` expands a `PlaySfx` into one queued `Play` per note at
+trigger time rather than walking a cursor each frame; `Panic` then cancels the
+rest of an effect for free. It cancels **from its own timestamp forward** — a
+panic scheduled for frame 10 must not delete the sounds of frames 0–9 that are
+still queued.
 
 ### `crates/ffi` — `kessel-ffi`
 

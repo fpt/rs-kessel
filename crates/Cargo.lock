@@ -615,6 +615,7 @@ dependencies = [
 name = "kessel-vm"
 version = "0.1.0"
 dependencies = [
+ "kessel-audio",
  "parking_lot",
  "serde",
  "serde_json",
