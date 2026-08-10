@@ -60,12 +60,15 @@ pub struct VmConsole {
     roms: HashMap<String, Vec<u8>>,
     /// Control-layout metadata, keyed by source path (see [`luax::Controls`]).
     controls: HashMap<String, luax::Controls>,
+    /// Sound banks per source path, and the one the loaded ROM declared.
+    banks: HashMap<String, kessel_audio::SoundBank>,
     /// The screen each assembled ROM asked for, keyed the same way.
     modes: HashMap<String, VideoMode>,
     /// The loaded ROM's screen. Drives `screen_dim` and the framebuffer size.
     active_mode: VideoMode,
     /// Control metadata of the currently loaded ROM (default until a load).
     active_controls: luax::Controls,
+    active_bank: kessel_audio::SoundBank,
     /// Host-play pause state (managed by [`play_tick`](Self::play_tick)).
     paused: bool,
     prev_pause_down: bool,
@@ -99,9 +102,11 @@ impl VmConsole {
             sources: HashMap::new(),
             roms: HashMap::new(),
             controls: HashMap::new(),
+            banks: HashMap::new(),
             modes: HashMap::new(),
             active_mode: VideoMode::default(),
             active_controls: luax::Controls::default(),
+            active_bank: kessel_audio::SoundBank::default(),
             paused: false,
             prev_pause_down: false,
             snapshots: HashMap::new(),
@@ -117,6 +122,7 @@ impl VmConsole {
         self.sources.clear();
         self.roms.clear();
         self.controls.clear();
+        self.banks.clear();
         self.modes.clear();
     }
 
@@ -200,7 +206,7 @@ impl VmConsole {
         // luax (Lua-ish) dialect: compile to assembler first. Compiler
         // diagnostics are returned in an otherwise-empty `Assembled`. The
         // control-layout metadata rides along and is cached for `load_rom`.
-        let (built, controls, mode) = if is_lua(path) {
+        let (built, controls, mode, bank) = if is_lua(path) {
             let compiled = luax::compile(src);
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
@@ -213,20 +219,23 @@ impl VmConsole {
                 assembler::assemble(&compiled.asm),
                 compiled.controls,
                 compiled.mode,
+                compiled.bank,
             )
         } else {
-            // Raw assembly has no `controls` or `screen` block; it gets the
-            // default layout on the original console.
+            // Raw assembly has no `controls`, `screen`, or `instrument` block;
+            // it gets the default layout on the original console, and silence.
             (
                 assembler::assemble(src),
                 luax::Controls::default(),
                 VideoMode::default(),
+                kessel_audio::SoundBank::default(),
             )
         };
 
         if built.ok() {
             self.roms.insert(path.to_string(), built.rom.clone());
             self.controls.insert(path.to_string(), controls);
+            self.banks.insert(path.to_string(), bank);
             self.modes.insert(path.to_string(), mode);
         }
         Ok(built)
@@ -245,6 +254,7 @@ impl VmConsole {
         self.frame = 0;
         self.prev_fb = self.vm.devices.framebuffer.clone();
         self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
+        self.active_bank = self.banks.get(path).cloned().unwrap_or_default();
         self.paused = false;
         self.prev_pause_down = false;
         Ok(outcome)
@@ -253,6 +263,16 @@ impl VmConsole {
     /// The control-layout metadata of the currently loaded ROM.
     pub fn controls(&self) -> &luax::Controls {
         &self.active_controls
+    }
+
+    /// The loaded ROM's instruments and sound effects.
+    ///
+    /// The VM itself never reads this — it emits `sfx(id)` and stays silent.
+    /// It is here so a host can hand the bank to `kessel-audio` at load time,
+    /// the same way it reads [`controls`](Self::controls) for its button
+    /// layout.
+    pub fn sound_bank(&self) -> &kessel_audio::SoundBank {
+        &self.active_bank
     }
 
     /// Whether host play is currently paused (see [`play_tick`](Self::play_tick)).

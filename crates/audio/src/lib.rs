@@ -36,6 +36,8 @@
 //! synth, and the only allocation in the crate is [`Synth::set_instruments`],
 //! which is a load-time call.
 
+pub mod bank;
+pub mod engine;
 pub mod event;
 pub mod filter;
 pub mod master;
@@ -43,6 +45,8 @@ pub mod patch;
 pub mod voice;
 pub mod wav;
 
+pub use bank::{SfxDef, SoundBank};
+pub use engine::AudioEngine;
 pub use event::AudioEvent;
 pub use filter::{cutoff_hz, resonance_q, FilterMode};
 pub use patch::{Patch, VoiceParams, Waveform};

@@ -185,7 +185,72 @@ fn main() {
     }
     write(&dir, "polyphony", &[chord], &events, 180);
 
+    // The standalone path, end to end and with no VM in sight: parse a patch
+    // file, trigger effects by name, render. This is what a synth app does.
+    write_bank(&dir);
+
     println!("previews are in {}", dir.display());
+}
+
+const PATCH_FILE: &str = r#"
+instrument kick {
+  wave = sine
+  attack = 0  decay = 90  sustain = 0
+  pitch_env = 36  pitch_decay = 60
+  volume = 255
+}
+
+instrument zap {
+  wave = saw
+  attack = 0  decay = 200  sustain = 0
+  pitch_env = 48  pitch_decay = 130
+  filter = lpf  cutoff = 190  resonance = 120
+}
+
+sfx beat  { inst = kick  speed = 8  notes = "36 . 36 ." }
+sfx laser { inst = zap   speed = 2  notes = "72 - - -" }
+sfx arp   { inst = zap   speed = 3  notes = "60 64 67 72 67 64" }
+"#;
+
+fn write_bank(dir: &std::path::Path) {
+    let (bank, errors) = kessel_audio::bank::parse(PATCH_FILE);
+    assert!(errors.is_empty(), "patch file did not parse: {errors:#?}");
+
+    let cfg = SynthConfig::default();
+    let mut engine = kessel_audio::AudioEngine::new(cfg);
+    let plan: Vec<(u64, u16)> = [("beat", 0), ("laser", 20), ("arp", 45), ("beat", 70)]
+        .iter()
+        .map(|(name, frame)| {
+            let id = bank.sfx_id(name).expect("sfx declared above");
+            (*frame as u64, id)
+        })
+        .collect();
+    engine.set_bank(bank);
+
+    let spf = samples_per_frame(cfg.sample_rate) as usize;
+    let mut block = vec![0.0f32; spf * 2];
+    let mut all = Vec::new();
+    for frame in 0..120u64 {
+        for (at, id) in &plan {
+            if *at == frame {
+                engine.submit(AudioEvent::PlaySfx { id: *id }, engine.frame_at(frame));
+            }
+        }
+        engine.render(&mut block);
+        all.extend_from_slice(&block);
+    }
+
+    let path = dir.join("bank.wav");
+    std::fs::write(&path, wav::encode_pcm16(cfg.sample_rate, 2, &all)).expect("write wav");
+    let peak = all.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+    println!(
+        "{:10} peak {:.2}  started {}  stolen {}  → {}",
+        "bank",
+        peak,
+        engine.synth_stats().started,
+        engine.synth_stats().stolen,
+        path.display()
+    );
 }
 
 fn play(inst: u8, note: u8, vel: u8, frames: u16) -> AudioEvent {
