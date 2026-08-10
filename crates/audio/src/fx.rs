@@ -55,6 +55,13 @@ impl Delay {
 
     fn clear(&mut self) {
         self.buf.fill(0.0);
+        // The head too, not just the samples. Every read here is *relative* to
+        // `pos`, so leaving it put happens to produce identical audio today —
+        // but "cleared" meaning "half cleared" is the kind of state that makes
+        // a later change (an absolute index, a second read head) quietly
+        // non-deterministic across a `Panic`, and the failure would show up as
+        // a replay that does not match.
+        self.pos = 0;
     }
 
     #[inline]
@@ -438,6 +445,37 @@ mod tests {
             assert!(bus.iter().all(|s| s.is_finite()));
         }
         assert!(worst < 20.0, "reverb ran away to {worst}");
+    }
+
+    #[test]
+    fn clearing_is_the_same_as_starting_over() {
+        // The invariant `Panic` needs: after a clear, each unit behaves exactly
+        // as a newly built one. Stronger than "the tail is gone", and it is
+        // what keeps a rewound timeline reproducible — two runs that panic at
+        // different moments must sound the same afterwards.
+        let probe = |used: Option<usize>| {
+            let mut r = Reverb::new(SR);
+            let mut c = Chorus::new(SR);
+            if let Some(frames) = used {
+                let mut pre = burst(frames, frames);
+                r.process(&mut pre);
+                c.process(&mut pre);
+                r.clear();
+                c.clear();
+            }
+            let mut a = vec![0.0f32; 8000 * 2];
+            a[0] = 1.0;
+            a[1] = 1.0;
+            let mut b = a.clone();
+            r.process(&mut a);
+            c.process(&mut b);
+            (a, b)
+        };
+        let fresh = probe(None);
+        // Two different amounts of prior use, so a leftover head position would
+        // land somewhere different in each.
+        assert!(probe(Some(1000)) == fresh, "clear left reverb/chorus state behind");
+        assert!(probe(Some(1731)) == fresh, "clear left reverb/chorus state behind");
     }
 
     #[test]
