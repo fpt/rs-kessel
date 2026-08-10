@@ -119,27 +119,39 @@ assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Today: voices, oscillators, envelopes. No bank, no sequencer, no effects, and
-no host — nothing calls this crate yet.
+Today: voices, oscillators, envelopes, filter, pan, drive, master limiter. No
+bank, no sequencer, no send effects, and no host — nothing calls this crate yet.
 
 | File | Purpose |
 |------|---------|
 | `src/lib.rs` | `Synth` — the voice pool, event handling, and voice stealing. `SynthStats` counts what a render did, since "nothing played" is hard to hear. |
 | `src/event.rs` | `AudioEvent` — the wire between a frame clock and a sample clock. Plain `Copy` data, because it crosses a lock-free queue, the observation record, and the C ABI. |
 | `src/patch.rs` | `Patch` (authored: `u8`/`u16`, the VM's byte world) and `VoiceParams` (compiled: float rates at a known sample rate). The conversion happens at load time, never in `render`. |
-| `src/voice.rs` | One voice: oscillator, ADSR, pitch envelope, seeded xorshift noise. |
+| `src/voice.rs` | One voice: oscillator, ADSR, pitch envelope, seeded xorshift noise, filter, drive, pan. |
+| `src/filter.rs` | 2-pole biquad LPF/HPF and the byte→Hz mapping. Games write `cutoff = 160`, never a frequency. |
+| `src/master.rs` | `soft_clip` (a per-voice *distortion*, 6.8% down at 0.5 — not a safety net) and the master `Limiter`. |
 | `src/wav.rs` | Dependency-free 16-bit PCM WAV, for offline render and previews. |
 | `examples/preview.rs` | Renders the waveforms and a kick/snare/laser/coin to WAV. The tests check frequency and lifetime; only an ear checks whether a kick sounds like one. |
 
 `Synth::render` runs on an audio callback thread: **no allocation, no locks, no
 syscalls, no panics**. `set_instruments` is the only call in the crate that
-allocates, and it is load-time.
+allocates, and it is load-time. `tests/realtime.rs` enforces this with a
+counting global allocator; it lives in an integration test so the allocator
+applies to its own binary, and its counter is thread-*local* because the harness
+runs tests concurrently and a shared counter charges one test's allocations to
+another.
 
-Two details in `voice.rs` that look like oversights and are not: a voice does
-**not** reset its noise RNG on `start` (restarting it makes repeated hits
-identical, which is the machine-gun artifact), and a patch that sustains at zero
-goes idle when its decay finishes rather than waiting for a release that a
-fire-and-forget note never sends.
+Three details that look like oversights and are not: a voice does **not** reset
+its noise RNG on `start` (restarting it makes repeated hits identical, which is
+the machine-gun artifact); a patch that sustains at zero goes idle when its
+decay finishes rather than waiting for a release that a fire-and-forget note
+never sends; and the master applies **no** soft clip, because a saturator on the
+master bus colours every quiet mix to catch peaks the limiter already caught.
+
+The voice chain is oscillator → filter → drive → envelope → pan. The envelope
+sits after the filter so resonant ringing fades with the note, and the drive
+sits before it so how dirty a patch sounds doesn't depend on how hard it was
+played.
 
 ### `crates/ffi` — `kessel-ffi`
 

@@ -4,6 +4,8 @@
 //! struct that lives in the synth's array for the life of the process, so
 //! `render_add` can run on an audio callback thread.
 
+use crate::filter::Biquad;
+use crate::master::soft_clip;
 use crate::patch::{VoiceParams, Waveform};
 
 /// Below this level a decaying envelope is finished. `-80 dB`: far under
@@ -71,6 +73,8 @@ pub struct Voice {
     /// Held sample for [`Waveform::Noise`], refreshed when the phase wraps.
     noise: f32,
     rng: Rng,
+    /// Per-voice filter memory. The coefficients live in `params`.
+    filter: Biquad,
 
     /// Envelope level, `0..=1`.
     env: f32,
@@ -96,6 +100,7 @@ impl Voice {
             pitch_off: 0.0,
             noise: 0.0,
             rng: Rng::new(seed),
+            filter: Biquad::default(),
             env: 0.0,
             gain: 0.0,
             hold: None,
@@ -136,6 +141,7 @@ impl Voice {
         self.phase = 0.0;
         self.base_inc = note_hz(note) / sample_rate as f32;
         self.pitch_off = params.pitch_env;
+        self.filter.reset();
         self.env = 0.0;
         self.gain = (vel as f32 / 255.0) * params.volume;
         self.hold = hold;
@@ -165,8 +171,10 @@ impl Voice {
 
     /// Add this voice into an interleaved stereo buffer.
     ///
-    /// Panning lands with the filter and master stage; for now a voice sits in
-    /// the middle of the image.
+    /// The chain is oscillator → filter → drive → envelope → pan. The envelope
+    /// sits *after* the filter so a resonant filter's ringing fades with the
+    /// note instead of outliving it, and the drive sits before the envelope so
+    /// how dirty a patch sounds doesn't depend on how hard it was played.
     pub fn render_add(&mut self, out: &mut [f32]) {
         if self.stage == Stage::Idle {
             return;
@@ -175,9 +183,16 @@ impl Voice {
             if !self.advance_env() {
                 break;
             }
-            let s = self.next_sample() * self.env * self.gain;
-            frame[0] += s;
-            frame[1] += s;
+            let mut s = self.next_sample();
+            if let Some(coefs) = &self.params.filter {
+                s = self.filter.process(coefs, s);
+            }
+            if self.params.drive > 1.0 {
+                s = soft_clip(s * self.params.drive) * self.params.drive_comp;
+            }
+            s *= self.env * self.gain;
+            frame[0] += s * self.params.gain_l;
+            frame[1] += s * self.params.gain_r;
         }
     }
 

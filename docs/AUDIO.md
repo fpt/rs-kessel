@@ -151,7 +151,10 @@ track intro { tempo = 6, rows = { ... } }                     -- tracker pattern
 Every parameter is a `u8`/`u16` — the byte world the VM already lives in, and
 the range an LLM writes correctly without a units table. Conversion to Hz, Q,
 and seconds happens once at bank-compile time into a float `VoiceParams`.
-`cutoff` maps exponentially: `0 → 80 Hz`, `128 → ~1 kHz`, `255 → 18 kHz`.
+`cutoff` maps exponentially: `0 → 80 Hz`, `128 → ~1.2 kHz`, `255 → 18 kHz`.
+`resonance` maps to Q from Butterworth-flat to a strong peak, and `pan` is
+constant-power normalized so that centre is unity — otherwise adding pan would
+have quietly dropped every existing sound by 3 dB.
 
 The same block syntax, parsed by the same code, is the standalone synth's patch
 file format. That is free only if the parser lives in `kessel-audio` and luax
@@ -170,7 +173,7 @@ Voice × 16
   ├─ chorus send ─► Chorus (1 shared) ──────┤
   └─ reverb send ─► Reverb (1 shared) ──────┤
                                             ▼
-                              Master: soft clip → limiter
+                              Master: limiter → clamp
 ```
 
 - **16 voices**, fixed array, no allocation. BGM wants 6–8, SFX 2–4, and
@@ -181,9 +184,16 @@ Voice × 16
   `room_size / damping / wet`. Not convolution. Not a parameter more.
 - **Chorus** is one modulated short delay line, `rate / depth / wet`, with the
   L/R LFOs phase-offset. That is where the width comes from.
-- **Distortion** is soft clip with a drive term, per voice; the master gets a
-  final soft clip plus a limiter so a chord of sixteen voices cannot ship a
-  square wave to the speaker.
+- **Distortion** is soft clip with a drive term, per voice, with an output gain
+  that keeps the level fixed as the drive rises — so `distortion` adds crunch
+  rather than volume.
+- **The master is a limiter and nothing else.** The sketch above said soft clip
+  *plus* limiter; measuring the saturator says otherwise — it is 6.8% down at
+  0.5 and 19% down at 0.9, so on the master bus it would attenuate and colour
+  every quiet mix to catch peaks the limiter has already caught. The limiter
+  has instant attack and a 150 ms release, so nothing reaches the final clamp
+  and a mix that never approaches the ceiling comes out bit-unchanged. Voices
+  keep the soft clip, where that curve is the point.
 - **Pitch envelope before LFO** in the priority order. Kick, laser, jump, coin,
   and explosion all come from noise/saw + pitch envelope + ADSR; an LFO adds
   vibrato and wobble but is not what makes game sounds work.
@@ -299,8 +309,9 @@ only as part of a game source file, the synth app has to link the compiler.
 ## Build order
 
 1. `crates/audio` skeleton: `AudioEvent`, `Synth`, oscillators, ADSR, pitch
-   envelope, voice allocator. Test: render to WAV, eyeball a scope.
-2. Biquad filter, pan, master soft clip + limiter. Allocation-free render test.
+   envelope, voice allocator. Test: render to WAV, eyeball a scope. *(Done.)*
+2. Biquad filter, pan, per-voice drive, master limiter. Allocation-free render
+   test. *(Done — the master lost its soft clip; see above.)*
 3. `SoundBank` + patch grammar + `sfx`/`Play` handling.
 4. `kessel render-audio` and `vm_render_audio` — the whole loop is observable
    before any device is opened.

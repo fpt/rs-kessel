@@ -37,14 +37,18 @@
 //! which is a load-time call.
 
 pub mod event;
+pub mod filter;
+pub mod master;
 pub mod patch;
 pub mod voice;
 pub mod wav;
 
 pub use event::AudioEvent;
+pub use filter::{cutoff_hz, resonance_q, FilterMode};
 pub use patch::{Patch, VoiceParams, Waveform};
 pub use voice::{note_hz, Priority};
 
+use master::Limiter;
 use voice::Voice;
 
 /// How many notes can sound at once.
@@ -109,8 +113,12 @@ pub struct Synth {
     instruments: Vec<VoiceParams>,
     /// Monotonic allocation counter, so "oldest" is well defined.
     next_age: u64,
+    limiter: Limiter,
     stats: SynthStats,
 }
+
+/// How long the master limiter takes to come back up after a peak.
+const LIMITER_RELEASE_MS: u16 = 150;
 
 impl Synth {
     pub fn new(cfg: SynthConfig) -> Self {
@@ -123,6 +131,7 @@ impl Synth {
             }),
             instruments: Vec::new(),
             next_age: 0,
+            limiter: Limiter::new(cfg.sample_rate, LIMITER_RELEASE_MS),
             stats: SynthStats::default(),
         }
     }
@@ -177,6 +186,9 @@ impl Synth {
                 for v in &mut self.voices {
                     v.kill();
                 }
+                // Including the master: a limiter still ducked from the old
+                // timeline would fade the new one in.
+                self.limiter.reset();
             }
             // The bank and the sequencer land with the steps that build them;
             // until then these are recorded by the VM and silent here.
@@ -192,12 +204,7 @@ impl Synth {
         for v in &mut self.voices {
             v.render_add(out);
         }
-        // A hard ceiling until the master stage (soft clip + limiter) lands:
-        // sixteen voices can sum well past unity, and a wrapped sample is a
-        // much worse noise than a clipped one.
-        for s in out.iter_mut() {
-            *s = s.clamp(-1.0, 1.0);
-        }
+        self.limiter.process(out);
     }
 
     fn start(
@@ -501,6 +508,201 @@ mod tests {
         assert_eq!(s.active_voices(), 0);
         let after = render(&mut s, 2);
         assert_eq!(peak(&after), 0.0, "a tail survived Panic");
+    }
+
+    /// Render one note of `patch` and return the buffer.
+    fn one_note(patch: Patch, note: u8, vel: u8, frames: usize) -> Vec<f32> {
+        let mut s = Synth::new(SynthConfig::default());
+        s.set_instruments(&[patch]);
+        s.handle(AudioEvent::Play {
+            inst: 0,
+            note,
+            vel,
+            frames: frames as u16,
+        });
+        render(&mut s, frames)
+    }
+
+    fn rms(buf: &[f32]) -> f32 {
+        (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt()
+    }
+
+    /// Magnitude of one frequency in the left channel — a single DFT bin by
+    /// correlation.
+    ///
+    /// A cheaper proxy (mean sample-to-sample change) is not good enough here:
+    /// a 130 Hz saw and its own filtered fundamental have almost the same mean
+    /// slew, so that measure calls a working filter broken. Ask about the
+    /// harmonic directly instead.
+    fn magnitude_at(buf: &[f32], hz: f32, sample_rate: u32) -> f32 {
+        let left: Vec<f32> = buf.chunks_exact(2).map(|f| f[0]).collect();
+        let w = std::f32::consts::TAU * hz / sample_rate as f32;
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (i, s) in left.iter().enumerate() {
+            let (sin, cos) = (w * i as f32).sin_cos();
+            re += s * cos;
+            im += s * sin;
+        }
+        2.0 * (re * re + im * im).sqrt() / left.len() as f32
+    }
+
+    #[test]
+    fn pan_places_a_voice_in_the_stereo_image() {
+        let base = Patch {
+            wave: Waveform::Square,
+            sustain: 200,
+            ..Patch::default()
+        };
+        let energy = |buf: &[f32]| {
+            buf.chunks_exact(2).fold((0.0f32, 0.0f32), |(l, r), f| {
+                (l + f[0].abs(), r + f[1].abs())
+            })
+        };
+
+        let (l, r) = energy(&one_note(base, 60, 200, 20));
+        assert!(
+            (l - r).abs() < l * 0.01,
+            "centre was not centred: {l} vs {r}"
+        );
+
+        let (l, r) = energy(&one_note(Patch { pan: -127, ..base }, 60, 200, 20));
+        assert!(r < l * 0.01, "hard left leaked right: {l} vs {r}");
+
+        let (l, r) = energy(&one_note(Patch { pan: 127, ..base }, 60, 200, 20));
+        assert!(l < r * 0.01, "hard right leaked left: {l} vs {r}");
+    }
+
+    #[test]
+    fn a_lowpass_takes_the_edge_off_a_saw() {
+        let base = Patch {
+            wave: Waveform::Saw,
+            attack_ms: 0,
+            decay_ms: 0,
+            sustain: 255,
+            ..Patch::default()
+        };
+        // Note 48 is ~130.8 Hz; a corner at byte 60 is ~290 Hz, so the
+        // fundamental survives and the harmonics do not.
+        let f0 = note_hz(48);
+        let open = one_note(base, 48, 150, 20);
+        let closed = one_note(
+            Patch {
+                filter: FilterMode::Lpf,
+                cutoff: 60,
+                ..base
+            },
+            48,
+            150,
+            20,
+        );
+        let sr = DEFAULT_SAMPLE_RATE;
+        let (h_open, h_closed) = (
+            magnitude_at(&open, f0 * 8.0, sr),
+            magnitude_at(&closed, f0 * 8.0, sr),
+        );
+        assert!(
+            h_closed < h_open * 0.2,
+            "8th harmonic survived the lowpass: {h_open} → {h_closed}"
+        );
+        let (f_open, f_closed) = (magnitude_at(&open, f0, sr), magnitude_at(&closed, f0, sr));
+        assert!(
+            f_closed > f_open * 0.7,
+            "lowpass ate the fundamental: {f_open} → {f_closed}"
+        );
+    }
+
+    #[test]
+    fn a_highpass_takes_the_body_out() {
+        let base = Patch {
+            wave: Waveform::Saw,
+            attack_ms: 0,
+            decay_ms: 0,
+            sustain: 255,
+            ..Patch::default()
+        };
+        // A corner at byte 150 is ~2.6 kHz: well above the fundamental and
+        // well below the 20th harmonic.
+        let f0 = note_hz(48);
+        let sr = DEFAULT_SAMPLE_RATE;
+        let open = one_note(base, 48, 150, 20);
+        let thin = one_note(
+            Patch {
+                filter: FilterMode::Hpf,
+                cutoff: 150,
+                ..base
+            },
+            48,
+            150,
+            20,
+        );
+        assert!(
+            magnitude_at(&thin, f0, sr) < magnitude_at(&open, f0, sr) * 0.05,
+            "highpass kept the fundamental"
+        );
+        assert!(
+            magnitude_at(&thin, f0 * 20.0, sr) > magnitude_at(&open, f0 * 20.0, sr) * 0.7,
+            "highpass ate the harmonics too"
+        );
+    }
+
+    #[test]
+    fn distortion_adds_harmonics_rather_than_level() {
+        let base = Patch {
+            wave: Waveform::Sine,
+            attack_ms: 0,
+            decay_ms: 0,
+            sustain: 255,
+            ..Patch::default()
+        };
+        let clean = one_note(base, 57, 150, 20);
+        let dirty = one_note(
+            Patch {
+                distortion: 220,
+                ..base
+            },
+            57,
+            150,
+            20,
+        );
+        // A saturated sine is closer to a square: same peak, more energy.
+        let (pc, pd) = (
+            clean.iter().fold(0.0f32, |a, s| a.max(s.abs())),
+            dirty.iter().fold(0.0f32, |a, s| a.max(s.abs())),
+        );
+        assert!(
+            (pd - pc).abs() < pc * 0.25,
+            "drive changed the level: peak {pc} → {pd}"
+        );
+        assert!(
+            rms(&dirty) > rms(&clean) * 1.2,
+            "drive added no harmonics: rms {} → {}",
+            rms(&clean),
+            rms(&dirty)
+        );
+    }
+
+    #[test]
+    fn the_master_leaves_a_quiet_mix_alone() {
+        // One modest voice never reaches the ceiling, so the master must be a
+        // no-op on it — the limiter is for mixes, not a tone control.
+        let mut s = synth();
+        s.handle(AudioEvent::Play {
+            inst: 0,
+            note: 60,
+            vel: 80,
+            frames: 20,
+        });
+        let out = render(&mut s, 10);
+        assert!(peak(&out) < 0.95);
+        assert!(peak(&out) > 0.05);
+        // Nothing was scaled: the loudest sample is exactly what one voice at
+        // this velocity produces, not a limited version of it.
+        let expect = 80.0 / 255.0 * (200.0 / 255.0);
+        assert!(
+            peak(&out) <= expect + 1e-6,
+            "master boosted the mix: {} > {expect}",
+            peak(&out)
+        );
     }
 
     #[test]
