@@ -474,8 +474,14 @@ mod tests {
         let fresh = probe(None);
         // Two different amounts of prior use, so a leftover head position would
         // land somewhere different in each.
-        assert!(probe(Some(1000)) == fresh, "clear left reverb/chorus state behind");
-        assert!(probe(Some(1731)) == fresh, "clear left reverb/chorus state behind");
+        assert!(
+            probe(Some(1000)) == fresh,
+            "clear left reverb/chorus state behind"
+        );
+        assert!(
+            probe(Some(1731)) == fresh,
+            "clear left reverb/chorus state behind"
+        );
     }
 
     #[test]
