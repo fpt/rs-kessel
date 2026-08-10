@@ -9,6 +9,9 @@
 //!
 //! The conversion happens **once**, when a bank is loaded — never in `render`.
 
+use crate::filter::{Coefs, FilterMode};
+use crate::master::soft_clip;
+
 /// The oscillator a voice runs.
 ///
 /// Naive (un-bandlimited) shapes: `saw` and `square` alias at high notes, and
@@ -55,6 +58,21 @@ pub struct Patch {
 
     /// Instrument level, `0..=255`.
     pub volume: u8,
+    /// Stereo position: `-127` hard left, `0` centre, `127` hard right.
+    pub pan: i8,
+
+    pub filter: FilterMode,
+    /// Filter corner, exponentially mapped — see [`crate::filter::cutoff_hz`].
+    pub cutoff: u8,
+    /// Filter Q, from flat at `0` to a strong peak at `255`.
+    pub resonance: u8,
+
+    /// Overdrive into the voice's soft clip. `0` is clean.
+    ///
+    /// Per-voice because it is cheap and because a distorted bass under a
+    /// clean lead is a normal thing to want. Chorus and reverb are *not* per
+    /// voice, for the opposite reason.
+    pub distortion: u8,
 }
 
 impl Default for Patch {
@@ -70,6 +88,11 @@ impl Default for Patch {
             pitch_env: 0,
             pitch_decay_ms: 40,
             volume: 200,
+            pan: 0,
+            filter: FilterMode::Off,
+            cutoff: 255,
+            resonance: 0,
+            distortion: 0,
         }
     }
 }
@@ -88,6 +111,17 @@ pub struct VoiceParams {
     pub pitch_env: f32,
     pub pitch_coef: f32,
     pub volume: f32,
+    /// Constant-power pan gains, unity at centre.
+    pub gain_l: f32,
+    pub gain_r: f32,
+    /// `None` when the patch asked for no filter, so a clean voice pays
+    /// nothing per sample.
+    pub filter: Option<Coefs>,
+    /// Input gain into the soft clip; `1.0` is clean.
+    pub drive: f32,
+    /// Output gain that puts a full-scale input back at full scale, so raising
+    /// `distortion` adds crunch rather than volume.
+    pub drive_comp: f32,
 }
 
 impl Patch {
@@ -95,6 +129,8 @@ impl Patch {
     /// render loop.
     pub fn compile(&self, sample_rate: u32) -> VoiceParams {
         let sr = sample_rate as f32;
+        let (gain_l, gain_r) = pan_gains(self.pan);
+        let drive = drive_gain(self.distortion);
         VoiceParams {
             wave: self.wave,
             attack_rate: linear_rate(self.attack_ms, sr),
@@ -104,8 +140,37 @@ impl Patch {
             pitch_env: self.pitch_env as f32,
             pitch_coef: decay_coef(self.pitch_decay_ms, sr),
             volume: self.volume as f32 / 255.0,
+            gain_l,
+            gain_r,
+            filter: Coefs::design(self.filter, self.cutoff, self.resonance, sample_rate),
+            drive,
+            drive_comp: 1.0 / soft_clip(drive),
         }
     }
+}
+
+/// Constant-power pan gains, normalized so a centred voice is unity in both
+/// channels — otherwise adding pan support would quietly drop every existing
+/// sound by 3 dB.
+///
+/// A hard-panned voice reaches √2 in its channel, which the master limiter is
+/// there to catch.
+fn pan_gains(pan: i8) -> (f32, f32) {
+    // `-128` is folded onto `-127` so that `0` is exactly centre; an i8 cannot
+    // be symmetric otherwise.
+    let t = (pan.max(-127) as f32 + 127.0) / 254.0;
+    let angle = t * std::f32::consts::FRAC_PI_2;
+    let (sin, cos) = angle.sin_cos();
+    (
+        cos * std::f32::consts::SQRT_2,
+        sin * std::f32::consts::SQRT_2,
+    )
+}
+
+/// `distortion` byte → input gain into the soft clip, exponentially:
+/// `0 → 1×` (clean), `255 → 16×`.
+fn drive_gain(distortion: u8) -> f32 {
+    (distortion as f32 / 255.0 * 4.0).exp2()
 }
 
 /// Level gained per sample to cover the full range in `ms`. Zero time is

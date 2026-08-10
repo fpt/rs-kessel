@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use kessel_audio::{
-    samples_per_frame, wav, AudioEvent, Patch, Synth, SynthConfig, Waveform, MAX_VOICES,
+    samples_per_frame, wav, AudioEvent, FilterMode, Patch, Synth, SynthConfig, Waveform, MAX_VOICES,
 };
 
 fn main() {
@@ -107,13 +107,81 @@ fn main() {
         60,
     );
 
-    // Every voice at once: what stealing and the missing master stage sound
-    // like. Velocities are modest because sixteen voices sum well past unity
-    // and the limiter is not built yet.
+    // The filter, heard as a sweep: the same note through cutoffs from nearly
+    // shut to wide open, with enough resonance to hear the corner move.
+    let sweep: Vec<Patch> = (0..12)
+        .map(|i| Patch {
+            wave: Waveform::Saw,
+            attack_ms: 0,
+            decay_ms: 0,
+            sustain: 255,
+            release_ms: 60,
+            filter: FilterMode::Lpf,
+            cutoff: 30 + i * 20,
+            resonance: 170,
+            ..Patch::default()
+        })
+        .collect();
+    write(
+        &dir,
+        "filter-sweep",
+        &sweep,
+        &(0..12)
+            .map(|i| (i as u32 * 12, play(i, 45, 200, 10)))
+            .collect::<Vec<_>>(),
+        150,
+    );
+
+    // Drive, in four steps. The level should barely change while the tone
+    // does — that is what `drive_comp` is for.
+    let drives: Vec<Patch> = [0u8, 80, 160, 250]
+        .iter()
+        .map(|&d| Patch {
+            wave: Waveform::Sine,
+            attack_ms: 2,
+            decay_ms: 0,
+            sustain: 255,
+            release_ms: 60,
+            distortion: d,
+            ..Patch::default()
+        })
+        .collect();
+    write(
+        &dir,
+        "distortion",
+        &drives,
+        &(0..4)
+            .map(|i| (i as u32 * 25, play(i, 45, 200, 20)))
+            .collect::<Vec<_>>(),
+        120,
+    );
+
+    // Pan, walked across the image. Listen on headphones.
+    let panned: Vec<Patch> = [-127i8, -64, 0, 64, 127]
+        .iter()
+        .map(|&pan| Patch {
+            wave: Waveform::Triangle,
+            pan,
+            ..lead(Waveform::Triangle)
+        })
+        .collect();
+    write(
+        &dir,
+        "pan",
+        &panned,
+        &(0..5)
+            .map(|i| (i as u32 * 20, play(i, 67, 200, 12)))
+            .collect::<Vec<_>>(),
+        120,
+    );
+
+    // Every voice at once: what stealing and the master limiter sound like.
+    // Full velocity on purpose — twenty notes sum far past unity, and the
+    // limiter is what stands between that and a square wave.
     let chord = lead(Waveform::Triangle);
     let mut events = Vec::new();
     for i in 0..MAX_VOICES + 4 {
-        events.push((i as u32 * 3, play(0, 48 + (i as u8 * 3), 90, 90)));
+        events.push((i as u32 * 3, play(0, 48 + (i as u8 * 3), 220, 90)));
     }
     write(&dir, "polyphony", &[chord], &events, 180);
 
