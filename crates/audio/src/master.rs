@@ -46,6 +46,7 @@ pub fn soft_clip(x: f32) -> f32 {
 pub struct Limiter {
     gain: f32,
     release_coef: f32,
+    engaged: u64,
 }
 
 impl Limiter {
@@ -57,11 +58,22 @@ impl Limiter {
         Limiter {
             gain: 1.0,
             release_coef: (-1.0 / tau).exp(),
+            engaged: 0,
         }
     }
 
     pub fn reset(&mut self) {
         self.gain = 1.0;
+    }
+
+    /// Samples the limiter has pulled down since it was built.
+    ///
+    /// The number an offline render reports. A peak of 0.95 is what the
+    /// limiter produces *and* what a mix that merely happens to be loud
+    /// produces, so peak alone cannot tell a caller whether anything was
+    /// turned down; this can.
+    pub fn engaged(&self) -> u64 {
+        self.engaged
     }
 
     /// Process an interleaved stereo buffer in place.
@@ -80,6 +92,9 @@ impl Limiter {
                 self.gain = target; // instant attack: never overshoot
             } else {
                 self.gain += (target - self.gain) * (1.0 - self.release_coef);
+            }
+            if self.gain < 1.0 {
+                self.engaged += 1;
             }
             frame[0] = (frame[0] * self.gain).clamp(-1.0, 1.0);
             frame[1] = (frame[1] * self.gain).clamp(-1.0, 1.0);
@@ -130,6 +145,22 @@ mod tests {
         // Exactly unchanged, not approximately: anything the master does to a
         // mix that never reaches the ceiling is colour nobody asked for.
         assert_eq!(before, buf);
+    }
+
+    #[test]
+    fn engagement_counts_only_what_was_turned_down() {
+        let mut lim = Limiter::new(48_000, 150);
+        let mut quiet = vec![0.3f32; 2000];
+        lim.process(&mut quiet);
+        assert_eq!(lim.engaged(), 0, "a quiet mix was reported as limited");
+
+        let mut loud = vec![4.0f32; 2000];
+        lim.process(&mut loud);
+        assert_eq!(
+            lim.engaged(),
+            1000,
+            "every stereo frame should have counted"
+        );
     }
 
     #[test]

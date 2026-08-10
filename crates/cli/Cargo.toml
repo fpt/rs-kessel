@@ -28,3 +28,6 @@ serde_json.workspace = true
 # and nothing here can affect what the VM computes.
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

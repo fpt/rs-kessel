@@ -21,6 +21,7 @@
 //! write → run → observe → debug loop.
 
 pub mod assembler;
+pub mod audio;
 pub mod device;
 pub mod isa;
 pub mod luax;
@@ -62,6 +63,14 @@ pub struct VmConsole {
     controls: HashMap<String, luax::Controls>,
     /// Sound banks per source path, and the one the loaded ROM declared.
     banks: HashMap<String, kessel_audio::SoundBank>,
+    /// Bumped whenever the timeline jumps — reset, restore, or a ROM load.
+    ///
+    /// A host holding a live synth watches this and turns a change into
+    /// `AudioEvent::Panic`: after a rewind, the previous timeline's voices and
+    /// reverb tail are playing over a game that never made them. The VM cannot
+    /// emit the event itself without knowing about a synth, and it is not going
+    /// to start knowing about one.
+    audio_epoch: u64,
     /// The screen each assembled ROM asked for, keyed the same way.
     modes: HashMap<String, VideoMode>,
     /// The loaded ROM's screen. Drives `screen_dim` and the framebuffer size.
@@ -103,6 +112,7 @@ impl VmConsole {
             roms: HashMap::new(),
             controls: HashMap::new(),
             banks: HashMap::new(),
+            audio_epoch: 0,
             modes: HashMap::new(),
             active_mode: VideoMode::default(),
             active_controls: luax::Controls::default(),
@@ -255,6 +265,7 @@ impl VmConsole {
         self.prev_fb = self.vm.devices.framebuffer.clone();
         self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
         self.active_bank = self.banks.get(path).cloned().unwrap_or_default();
+        self.audio_epoch += 1;
         self.paused = false;
         self.prev_pause_down = false;
         Ok(outcome)
@@ -273,6 +284,15 @@ impl VmConsole {
     /// layout.
     pub fn sound_bank(&self) -> &kessel_audio::SoundBank {
         &self.active_bank
+    }
+
+    /// Counter that changes whenever the audio timeline is discontinuous.
+    ///
+    /// A host with a live synth should compare this each frame and, when it
+    /// differs, submit [`kessel_audio::AudioEvent::Panic`]. See the field's
+    /// documentation for why the VM signals rather than emits.
+    pub fn audio_epoch(&self) -> u64 {
+        self.audio_epoch
     }
 
     /// Whether host play is currently paused (see [`play_tick`](Self::play_tick)).
@@ -388,6 +408,7 @@ impl VmConsole {
         self.frame = snap.frame;
         self.prev_fb = snap.prev_fb;
         self.rom_loaded = snap.rom_loaded;
+        self.audio_epoch += 1;
         Ok(())
     }
 
@@ -396,13 +417,20 @@ impl VmConsole {
         let keep_sources = std::mem::take(&mut self.sources);
         let keep_roms = std::mem::take(&mut self.roms);
         let keep_controls = std::mem::take(&mut self.controls);
+        // Banks are cached per source exactly like controls and modes: a reset
+        // that kept the ROM but forgot its instruments would reload a game
+        // that had gone silent.
+        let keep_banks = std::mem::take(&mut self.banks);
         let keep_modes = std::mem::take(&mut self.modes);
+        let epoch = self.audio_epoch;
         *self = VmConsole::new();
         self.root = keep_root;
         self.sources = keep_sources;
         self.roms = keep_roms;
         self.controls = keep_controls;
+        self.banks = keep_banks;
         self.modes = keep_modes;
+        self.audio_epoch = epoch + 1;
     }
 }
 
@@ -464,7 +492,7 @@ fn is_lua(path: &str) -> bool {
 /// Resolve a model-supplied source path against the working directory, refusing
 /// anything that would escape it (absolute paths, `..`). Keeps `vm_write_source`
 /// from writing arbitrary files outside the game's directory.
-fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, String> {
     if rel.trim().is_empty() {
         return Err("path is empty".to_string());
     }

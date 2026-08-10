@@ -596,6 +596,7 @@ dependencies = [
  "serde",
  "serde_json",
  "softbuffer",
+ "tempfile",
  "winit",
 ]
 

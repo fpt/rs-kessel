@@ -83,6 +83,7 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | File | Purpose |
 |------|---------|
 | `src/lib.rs` | `VmConsole` — the machine plus the authoring workspace (sources, ROMs, snapshots) and the `Observation` record. Disk-backed when a root is set. |
+| `src/audio.rs` | Offline render: run the game, render its sound, and report what happened in numbers — the agent has no ears. |
 | `src/isa.rs` | The 34-opcode instruction set. |
 | `src/vm.rs` | The stack machine: memory, stacks, fetch/execute, frame runner. |
 | `src/device.rs` | Varvara-lite device layer — screen, gamepad, rng, storage, debug, console, sound (recorded only). |
@@ -101,6 +102,7 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/mcp/mod.rs` | The stdio read → dispatch → write loop. |
 | `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
+| `src/render_audio.rs` | `kessel render-audio` — headless WAV render plus the report. No window, no audio device, so it works under `--no-default-features` and over ssh. |
 | `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). `Source` picks local vs. attached. |
 | `src/attach/session.rs` | Session files in the cache dir: publish, list, discover. Directory is a parameter, never read from env inside logic — the tests run in parallel. |
 | `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. Each TICK response carries its own `dim`. |
@@ -119,9 +121,10 @@ assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Today: voices, filter, pan, drive, master limiter, the bank, and `sfx`. No
-sequencer (`music`), no send effects, and no audio device on any host — the VM
-now *carries* a bank, but nothing plays it outside tests.
+Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, and the
+offline render (`vm_render_audio`, `kessel render-audio`). No sequencer
+(`music`), no send effects, and **no audio device on any host** — sound is
+rendered to a file, never played.
 
 | File | Purpose |
 |------|---------|
@@ -163,6 +166,21 @@ lexer because the luax lexer carries no byte spans, and adding them so `parse`
 could be handed a block's text would touch every rule in the compiler. Two
 tokenizers over one definition of meaning is the cheaper half of that trade —
 but the setters are the part that must never be duplicated.
+
+**The offline render's report is the deliverable, not the WAV.** The agent
+cannot listen, so `AudioSummary::report` names each failure a person would
+otherwise diagnose by ear: no triggers at all, an id with no declaration, an
+instrument the bank lacks, notes dropped from a full queue, triggers that fired
+into silence, and a limiter that had to pull the mix down. A WAV alone would be
+an artefact nobody in the loop can read.
+
+`AudioTrace::frame` is the **console's** frame counter, the same number
+`vm_run_frames` prints for the same trigger — not the render's own offset. Two
+numbering schemes for one event is how "it sounded wrong" becomes an hour.
+
+`VmConsole::audio_epoch()` changes on reset, restore, and ROM load. A host with
+a live synth turns a change into `AudioEvent::Panic`; the VM signals rather than
+emits because it does not know a synth exists and is not going to start.
 
 `AudioEngine::submit` expands a `PlaySfx` into one queued `Play` per note at
 trigger time rather than walking a cursor each frame; `Panic` then cancels the
