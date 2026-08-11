@@ -1,7 +1,7 @@
 -- 2048.lua — slide matching numbered tiles together to reach 2048. Arrow keys
 -- move every tile once per press; A (Z key) starts a new game.
 --
---   kessel --play games/2048.lua
+--   kessel run games/2048.lua
 
 controls {
   dpad = true

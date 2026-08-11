@@ -2,7 +2,7 @@
 -- destroy the descending foes; each kill scores a point. Colliding with a foe
 -- ends the run; press A to restart.
 --
---   kessel --play games/shooter.lua
+--   kessel run games/shooter.lua
 
 -- Sound. Instruments are synth patches and each `sfx` is a short line of notes
 -- on one of them: a note number starts a note, `-` holds it, `.` rests, and

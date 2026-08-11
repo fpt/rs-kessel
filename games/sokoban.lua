@@ -3,7 +3,7 @@
 -- at once, so a box shoved into a corner is stuck. Grid movement, one tile per
 -- key press (btnp), so a held key doesn't skate across the board.
 --
---   kessel --play games/sokoban.lua
+--   kessel run games/sokoban.lua
 --
 -- Arrows move / push. Boxes turn green when parked on a goal; clear them all to
 -- advance through four stages. A/Z restarts a stage, or advances after a clear.
