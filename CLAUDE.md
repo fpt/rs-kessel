@@ -122,11 +122,15 @@ assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, `music`,
-the note-level API (`play` / `note_on` / `note_off`),
-the offline render (`vm_render_audio`, `kessel render-audio`), **sound on
-`kessel run`** through cpal, and the shared chorus and reverb. No audio on
-Android or when attached.
+Complete against `docs/AUDIO.md` and issue #64: voices, filter, pan, drive,
+master limiter, the shared chorus and reverb, the bank, `sfx`, `music`, the
+note-level API (`play` / `note_on` / `note_off`), the offline render
+(`vm_render_audio`, `kessel render-audio`), and sound on both hosts —
+`kessel run` through cpal and Android through `AudioTrack`.
+
+**No audio when attached**: `kessel attach` drives the agent's console, and
+those events belong to that process. No bitcrusher, FM, wavetables, delay, EQ or
+compressor — see the end of `docs/AUDIO.md` for what was left out and why.
 
 | File | Purpose |
 |------|---------|

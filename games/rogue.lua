@@ -3,7 +3,7 @@
 -- shuffle toward you and damage one of five hearts on contact. At 0 HP press A
 -- to restart.
 --
---   kessel --play games/rogue.lua
+--   kessel run games/rogue.lua
 --
 -- Sprite order sets the tile ids the tilemap draws: floor=0, wall=1 (hero=2 and
 -- orc=3 are drawn as free sprites, not tiles).

@@ -100,7 +100,9 @@ Port byte = `(device << 4) | register`.
 | `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
 | `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
-| `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop (recorded, no audio yet) |
+| `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop |
+| `0x93`–`0x96` | out | note: frames / velocity / note, then instrument commits a `play` |
+| `0x97` `0x98` `0x99` | out | held note: instrument, then channel commits a `note_on`; `0x99` is `note_off` |
 | `0x40` `0x41` `0x42` | out/in/out | storage addr / read / write (256 bytes) |
 | `0x50` `0x51` `0x52` | out | debug entity: x, y, commit(tag) — reported in the observation |
 | `0x60` | out | console: write a byte to the text buffer |
@@ -437,11 +439,14 @@ end
   size instead of a hand-written bound. `clear(x)` zeroes a record or whole array
   in place (`clear(bullets)` resets a pool; `clear(bullets[i])` one element) —
   cheaper and less error-prone than field-by-field reinitialization.
-- **Sound:** `sfx(id)`, `music(id)`, `music_stop()` fire sound triggers. The VM
-  is deterministic and headless, so nothing is synthesized yet — the triggers
-  are recorded and surfaced in the observation's `sound` array (so the agent
-  sees a sound "played"); host audio in the play windows is a follow-up. The
-  luax API is final.
+- **Sound:** `sfx(id)`, `music(id)`, `music_stop()` for what a game declares in
+  advance, and `play(inst, note, vel, frames)` / `note_on(chan, inst, note, vel)`
+  / `note_off(chan)` for a pitch it decides at runtime. The VM itself stays
+  deterministic and headless: it records what was asked for into the
+  observation's `sound` array, and a *host* renders it — `kessel run` through
+  cpal, the Android app through `AudioTrack`, and `vm_render_audio` /
+  `kessel render-audio` to a file. See **Sound** above for the declarations
+  (`instrument`, `sfx`, `track`, `fx`).
 - **On-screen text:** `text("LITERAL", x, y, color)` draws a compile-time string
   in a built-in 3×5 font (uppercase `A-Z`, `0-9`, space, `: ! . -`; lowercase
   folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,
@@ -620,8 +625,9 @@ usable graphics adapter. The player is behind a default-on `play` feature —
 `cargo build --no-default-features` yields a headless binary with `kessel mcp`
 only, for servers and containers.
 
-Sound is **silent by design**: the VM records sound *events* rather than
-synthesizing audio, so a game's `sfx()` calls appear in the observation stream
-(and in `vm_run_frames`' summary) but nothing is played. Audio synthesis, if it
-ever lands, belongs on this side of the boundary — never in the VM, which has to
-stay deterministic.
+The same boundary holds for **sound**, and for the same reason: the VM records
+what a game asked for and never produces a sample, so every host renders the one
+event log. That is what keeps `vm_snapshot` / `vm_restore` and frame-exact replay
+meaningful — a machine that synthesized audio itself could not be rewound. The
+synth lives in `kessel-audio`, which opens no device either; only `play.rs` here
+knows what a sound card is.

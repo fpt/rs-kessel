@@ -1,7 +1,7 @@
 -- snake.lua — classic snake on a 16x16 grid (8px cells). Arrows steer; eat the
 -- red food to grow; hitting a wall or yourself ends the run (press A to restart).
 --
---   kessel --play games/snake.lua
+--   kessel run games/snake.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

@@ -7,9 +7,10 @@
 //! build for a 128×128 image, and keeping pixels on the CPU means what you see
 //! is exactly the buffer an agent would get back from `vm_get_framebuffer`.
 //!
-//! Sound is silent by design — the VM records sound *events* rather than
-//! synthesizing audio, so a game's `sfx()` calls show up in the observation
-//! stream but nothing is played here yet.
+//! Sound follows the same shape: the VM records what a game asked for and
+//! synthesizes nothing, so this module hands each frame's events to
+//! [`crate::audio`], which renders them on a cpal stream. Nothing here decides
+//! what a sound *is* — only where it goes.
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;

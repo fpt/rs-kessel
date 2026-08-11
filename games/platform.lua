@@ -2,7 +2,7 @@
 -- stomp attacks, knockback, wall-jumps, and smooth movement.
 -- Arrows move, A (Z key) jumps or wall-jumps.
 --
---   kessel --play games/platform.lua
+--   kessel run games/platform.lua
 
 -- Sound. These calls used to be bare numbers, from when the console recorded
 -- triggers and played nothing; an id with no declaration is silent now, so the

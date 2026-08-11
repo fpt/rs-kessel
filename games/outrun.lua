@@ -4,7 +4,7 @@
 -- so far rows bend most) and the width shrinks with distance. Roadside trees are
 -- distance-scaled with spr_scaled, and a bobbing sun shows sin().
 --
---   kessel --play games/outrun.lua
+--   kessel run games/outrun.lua
 --
 -- Arrows steer / accelerate, A boosts, Down brakes. Drift too far off the
 -- tarmac and you scrub speed. There is no crash — it is an endless cruise.

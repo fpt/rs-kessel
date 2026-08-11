@@ -1,7 +1,7 @@
 -- bounce.lua — a self-animating demo (no input): a 3x3 block bouncing around.
 -- Good for verifying the play window renders and animates.
 --
---   kessel --play games/bounce.lua
+--   kessel run games/bounce.lua
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

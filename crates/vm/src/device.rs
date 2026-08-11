@@ -304,8 +304,11 @@ pub struct Devices {
     pub entities: Vec<Entity>,
     /// Bytes written to the console this frame (cleared each frame).
     pub console: Vec<u8>,
-    /// Sound the game asked for this frame (cleared each frame). Recorded only;
-    /// no audio is synthesized yet.
+    /// Sound the game asked for this frame (cleared each frame).
+    ///
+    /// Recorded, never rendered: the machine stays deterministic and a host
+    /// turns this log into samples. A frame that is snapshotted and replayed
+    /// therefore asks for exactly the same sound.
     pub sound: Vec<kessel_audio::AudioEvent>,
     /// Notes ignored because an argument was out of range. Cumulative, so a
     /// host can report the difference over a run rather than losing it with the
