@@ -63,6 +63,13 @@ pub struct VmConsole {
     controls: HashMap<String, luax::Controls>,
     /// Sound banks per source path, and the one the loaded ROM declared.
     banks: HashMap<String, kessel_audio::SoundBank>,
+    /// Sound the **reset vector** asked for, waiting for a host to collect it.
+    ///
+    /// `init()` runs at load, outside any frame, and the device's log is
+    /// cleared at the start of the next one — so a game that starts its music
+    /// in `init()` would have that trigger quietly dropped by every host. It is
+    /// parked here instead and belongs to whatever frame comes first.
+    reset_sound: Vec<device::SoundEvent>,
     /// Bumped whenever the timeline jumps — reset, restore, or a ROM load.
     ///
     /// A host holding a live synth watches this and turns a change into
@@ -112,6 +119,7 @@ impl VmConsole {
             roms: HashMap::new(),
             controls: HashMap::new(),
             banks: HashMap::new(),
+            reset_sound: Vec::new(),
             audio_epoch: 0,
             modes: HashMap::new(),
             active_mode: VideoMode::default(),
@@ -265,6 +273,7 @@ impl VmConsole {
         self.prev_fb = self.vm.devices.framebuffer.clone();
         self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
         self.active_bank = self.banks.get(path).cloned().unwrap_or_default();
+        self.reset_sound = self.vm.devices.sound.clone();
         self.audio_epoch += 1;
         self.paused = false;
         self.prev_pause_down = false;
@@ -284,6 +293,15 @@ impl VmConsole {
     /// layout.
     pub fn sound_bank(&self) -> &kessel_audio::SoundBank {
         &self.active_bank
+    }
+
+    /// Take the sound the reset vector asked for, if any.
+    ///
+    /// A host calls this once after loading and treats the result as belonging
+    /// to the first frame. See [`reset_sound`](Self::reset_sound) — without it,
+    /// `music()` in `init()` is silent everywhere.
+    pub fn take_reset_sound(&mut self) -> Vec<device::SoundEvent> {
+        std::mem::take(&mut self.reset_sound)
     }
 
     /// Counter that changes whenever the audio timeline is discontinuous.

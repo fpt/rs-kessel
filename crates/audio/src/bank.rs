@@ -100,6 +100,60 @@ impl SfxDef {
     }
 }
 
+/// One channel of a [`TrackDef`]: an instrument and the rows it plays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackChannel {
+    pub inst: u8,
+    pub rows: Vec<Row>,
+}
+
+/// A piece of music: a few channels of rows, played together.
+///
+/// The rows mean exactly what an [`SfxDef`]'s do — a note starts, `-` holds,
+/// `.` rests — so there is one thing to learn rather than two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackDef {
+    /// Frames per row. At 60 fps, `tempo = 8` is 7.5 rows a second.
+    pub tempo: u8,
+    /// Velocity every note in the track is played at.
+    ///
+    /// Defaults **below** full scale, unlike a sound effect's: several channels
+    /// sustaining at once is a much louder thing than one hit, and music that
+    /// arrives already fighting the master limiter leaves no room for the
+    /// explosion it is supposed to sit under.
+    pub vel: u8,
+    /// Whether it repeats when it runs out of rows. Music usually should.
+    pub looping: bool,
+    pub channels: Vec<TrackChannel>,
+}
+
+impl Default for TrackDef {
+    fn default() -> Self {
+        TrackDef {
+            tempo: 8,
+            vel: 170,
+            looping: true,
+            channels: Vec::new(),
+        }
+    }
+}
+
+impl TrackDef {
+    /// Rows in the longest channel — how long one pass through the track is.
+    pub fn rows(&self) -> usize {
+        self.channels
+            .iter()
+            .map(|c| c.rows.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Frames for one pass.
+    pub fn frames(&self) -> u32 {
+        self.rows() as u32 * self.tempo.max(1) as u32
+    }
+}
+
 /// The shared effects' character.
 ///
 /// Not levels: *who* reaches the chorus and reverb is decided per instrument,
@@ -166,15 +220,17 @@ pub struct SoundBank {
     pub sfx: Vec<SfxDef>,
     /// Declaration-order names, for `bank.instrument_id("kick")` and for a
     /// host UI that wants to list what a ROM can play.
+    pub tracks: Vec<TrackDef>,
     pub instrument_names: Vec<String>,
     pub sfx_names: Vec<String>,
+    pub track_names: Vec<String>,
     /// What the shared chorus and reverb sound like.
     pub fx: FxSettings,
 }
 
 impl SoundBank {
     pub fn is_empty(&self) -> bool {
-        self.instruments.is_empty() && self.sfx.is_empty()
+        self.instruments.is_empty() && self.sfx.is_empty() && self.tracks.is_empty()
     }
 
     pub fn instrument_id(&self, name: &str) -> Option<u8> {
@@ -208,6 +264,22 @@ impl SoundBank {
         self.sfx_names.push(name.into());
         id
     }
+
+    pub fn track_id(&self, name: &str) -> Option<u16> {
+        self.track_names
+            .iter()
+            .position(|n| n == name)?
+            .try_into()
+            .ok()
+    }
+
+    /// Append a track, returning its id.
+    pub fn add_track(&mut self, name: impl Into<String>, def: TrackDef) -> u16 {
+        let id = self.tracks.len() as u16;
+        self.tracks.push(def);
+        self.track_names.push(name.into());
+        id
+    }
 }
 
 /// The most instruments and effects a bank can hold.
@@ -218,6 +290,8 @@ pub const MAX_INSTRUMENTS: usize = 256;
 /// Effects are addressed by `u16`, but a limit this side of absurd keeps a
 /// runaway generator from producing a bank nothing can load.
 pub const MAX_SFX: usize = 1024;
+/// The same, for tracks.
+pub const MAX_TRACKS: usize = 256;
 /// Rows in one effect. Long enough for a two-second arpeggio at speed 1.
 pub const MAX_SFX_ROWS: usize = 128;
 
@@ -347,6 +421,65 @@ pub fn set_instrument_field(p: &mut Patch, key: &str, v: FieldValue) -> Result<(
 /// Every key an `sfx` block accepts.
 pub const SFX_KEYS: &[&str] = &["inst", "speed", "vel", "notes"];
 
+/// The keys a `track` block reserves. Anything else in one is read as an
+/// instrument name naming a channel.
+pub const TRACK_KEYS: &[&str] = &["tempo", "vel", "loop"];
+
+/// The most channels one track can have.
+///
+/// Sixteen voices in total, and a track that used all of them would leave
+/// nothing for sound effects — this is a limit that says so early rather than
+/// letting the music eat every explosion.
+pub const MAX_TRACK_CHANNELS: usize = 8;
+
+/// Apply one `key = value` pair to a track.
+///
+/// Any key that is not [reserved](TRACK_KEYS) is an **instrument name**, and
+/// its value is that instrument's row string:
+///
+/// ```text
+/// track intro {
+///   tempo = 8
+///   bass = "36 - - - 43 - - -"
+///   lead = "60 . 64 67 . 72 - -"
+/// }
+/// ```
+///
+/// One channel per instrument, which is the cost of not needing a nested block
+/// for a channel. A second line on the same sound means declaring a second
+/// instrument, and that is cheap.
+pub fn set_track_field(
+    t: &mut TrackDef,
+    key: &str,
+    v: FieldValue,
+    instrument: &dyn Fn(&str) -> Option<u8>,
+) -> Result<(), String> {
+    match key {
+        "tempo" => t.tempo = v.ranged(key, 1, 255)? as u8,
+        "vel" => t.vel = v.ranged(key, 0, 255)? as u8,
+        "loop" => t.looping = v.ranged(key, 0, 1)? != 0,
+        name => {
+            let Some(inst) = instrument(name) else {
+                return Err(format!(
+                    "'{name}' is not an instrument, and not one of {}",
+                    TRACK_KEYS.join(", ")
+                ));
+            };
+            if t.channels.iter().any(|c| c.inst == inst) {
+                return Err(format!("'{name}' already has a channel in this track"));
+            }
+            if t.channels.len() >= MAX_TRACK_CHANNELS {
+                return Err(format!("too many channels (limit {MAX_TRACK_CHANNELS})"));
+            }
+            t.channels.push(TrackChannel {
+                inst,
+                rows: parse_rows(v.word(name)?)?,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Apply one `key = value` pair to a sound effect.
 ///
 /// `instrument` resolves an instrument name to its id; it is a callback because
@@ -471,7 +604,7 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
                     }
                 }
             }
-            "instrument" | "sfx" => {
+            "instrument" | "sfx" | "track" => {
                 let Some(Ok((name, _))) = lex.next_top() else {
                     errors.push(BankError {
                         line,
@@ -483,7 +616,11 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
                     break;
                 };
                 blocks.push(Block {
-                    is_instrument: word == "instrument",
+                    kind: match word.as_str() {
+                        "instrument" => Kind::Instrument,
+                        "sfx" => Kind::Sfx,
+                        _ => Kind::Track,
+                    },
                     name,
                     fields,
                     line,
@@ -492,7 +629,9 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
             other => {
                 errors.push(BankError {
                     line,
-                    message: format!("expected 'instrument', 'sfx', or 'fx', found '{other}'"),
+                    message: format!(
+                        "expected 'instrument', 'sfx', 'track', or 'fx', found '{other}'"
+                    ),
                 });
                 // Skip whatever this was, so one stray word does not turn into
                 // an error per remaining token.
@@ -503,7 +642,7 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
 
     for Block {
         name, fields, line, ..
-    } in blocks.iter().filter(|b| b.is_instrument)
+    } in blocks.iter().filter(|b| b.kind == Kind::Instrument)
     {
         let mut patch = Patch::default();
         for (key, value, kline) in fields {
@@ -533,7 +672,7 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
     let resolve = |n: &str| names.iter().position(|x| x == n).map(|i| i as u8);
     for Block {
         name, fields, line, ..
-    } in blocks.iter().filter(|b| !b.is_instrument)
+    } in blocks.iter().filter(|b| b.kind == Kind::Sfx)
     {
         let mut def = SfxDef::default();
         for (key, value, kline) in fields {
@@ -559,6 +698,34 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
         }
     }
 
+    for Block {
+        name, fields, line, ..
+    } in blocks.iter().filter(|b| b.kind == Kind::Track)
+    {
+        let mut def = TrackDef::default();
+        for (key, value, kline) in fields {
+            if let Err(message) = set_track_field(&mut def, key, value.as_field(), &resolve) {
+                errors.push(BankError {
+                    line: *kline,
+                    message,
+                });
+            }
+        }
+        if bank.tracks.len() >= MAX_TRACKS {
+            errors.push(BankError {
+                line: *line,
+                message: format!("too many tracks (limit {MAX_TRACKS})"),
+            });
+        } else if bank.track_id(name).is_some() {
+            errors.push(BankError {
+                line: *line,
+                message: format!("duplicate track '{name}'"),
+            });
+        } else {
+            bank.add_track(name.clone(), def);
+        }
+    }
+
     (bank, errors)
 }
 
@@ -566,8 +733,16 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
 ///
 /// [`parse`] collects these before interpreting any of them, so an `sfx` can
 /// name an instrument declared below it.
+/// Which kind of declaration a [`Block`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Instrument,
+    Sfx,
+    Track,
+}
+
 struct Block {
-    is_instrument: bool,
+    kind: Kind,
     name: String,
     fields: Vec<(String, OwnedValue, usize)>,
     line: usize,
@@ -863,6 +1038,99 @@ sfx boom {
                 Row::Rest,
                 Row::Note(36)
             ]
+        );
+    }
+
+    #[test]
+    fn parses_a_track() {
+        let (bank, errors) = parse(
+            r#"
+            instrument bass { wave = triangle }
+            instrument lead { wave = square }
+            track intro {
+              tempo = 6
+              loop = 0
+              bass = "36 - - -"
+              lead = "60 64 . 67"
+            }
+            "#,
+        );
+        assert_eq!(errors, vec![]);
+        assert_eq!(bank.track_names, ["intro"]);
+        assert_eq!(bank.track_id("intro"), Some(0));
+
+        let t = &bank.tracks[0];
+        assert_eq!(t.tempo, 6);
+        assert!(!t.looping);
+        assert_eq!(t.channels.len(), 2);
+        // Channels are in the order written, each naming its instrument.
+        assert_eq!(t.channels[0].inst, 0);
+        assert_eq!(t.channels[1].inst, 1);
+        assert_eq!(t.channels[1].rows[2], Row::Rest);
+        assert_eq!(t.rows(), 4);
+        assert_eq!(t.frames(), 24);
+    }
+
+    #[test]
+    fn a_track_key_that_is_not_an_instrument_says_so() {
+        let (_, errors) = parse(r#"track t { tempoo = 6 }"#);
+        assert!(
+            errors[0].message.contains("'tempoo' is not an instrument"),
+            "{errors:?}"
+        );
+        // ...and names the reserved keys, so a typo is self-correcting.
+        assert!(errors[0].message.contains("tempo"), "{errors:?}");
+    }
+
+    #[test]
+    fn an_instrument_gets_one_channel_per_track() {
+        let (_, errors) = parse(
+            r#"
+            instrument i { wave = sine }
+            track t { i = "60" }
+            "#,
+        );
+        assert_eq!(errors, vec![]);
+        // The same instrument twice in one track is a mistake, not two lines:
+        // a second line means a second instrument.
+        let (_, errors) = parse(
+            r#"
+            instrument i { wave = sine }
+            track t { i = "60"  i = "64" }
+            "#,
+        );
+        assert!(
+            errors[0].message.contains("already has a channel"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_track_may_name_an_instrument_declared_below_it() {
+        let (bank, errors) = parse(
+            r#"
+            track t { late = "60" }
+            instrument early { wave = sine }
+            instrument late { wave = saw }
+            "#,
+        );
+        assert_eq!(errors, vec![]);
+        assert_eq!(bank.tracks[0].channels[0].inst, 1);
+    }
+
+    #[test]
+    fn duplicate_tracks_are_rejected() {
+        let (bank, errors) = parse(
+            r#"
+            instrument i { wave = sine }
+            track t { i = "60" }
+            track t { i = "64" }
+            "#,
+        );
+        assert_eq!(bank.tracks.len(), 1);
+        assert!(
+            errors[0].message.contains("duplicate track 't'"),
+            "{errors:?}"
         );
     }
 

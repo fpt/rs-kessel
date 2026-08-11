@@ -122,10 +122,10 @@ assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, the offline
-render (`vm_render_audio`, `kessel render-audio`), **sound on `kessel run`**
-through cpal, and the shared chorus and reverb. No sequencer (`music`), and no
-audio on Android or when attached.
+Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, `music`,
+the offline render (`vm_render_audio`, `kessel render-audio`), **sound on
+`kessel run`** through cpal, and the shared chorus and reverb. No audio on
+Android or when attached.
 
 | File | Purpose |
 |------|---------|
@@ -138,6 +138,7 @@ audio on Android or when attached.
 | `src/filter.rs` | 2-pole biquad LPF/HPF and the byte→Hz mapping. Games write `cutoff = 160`, never a frequency. |
 | `src/master.rs` | `soft_clip` (a per-voice *distortion*, 6.8% down at 0.5 — not a safety net) and the master `Limiter`. |
 | `src/fx.rs` | The two shared send effects: a Freeverb-shaped `Reverb` (4 combs → 2 all-passes) and a `Chorus` (one modulated delay, the two sides a quarter cycle apart). |
+| `src/sequencer.rs` | The music player. Decides which notes fall due and when the next row is; `AudioEngine` splits its render there and starts them. |
 | `src/wav.rs` | Dependency-free 16-bit PCM WAV, for offline render and previews. |
 | `examples/preview.rs` | Renders the waveforms and a kick/snare/laser/coin to WAV. The tests check frequency and lifetime; only an ear checks whether a kick sounds like one. |
 
@@ -155,6 +156,21 @@ the machine-gun artifact); a patch that sustains at zero goes idle when its
 decay finishes rather than waiting for a release that a fire-and-forget note
 never sends; and the master applies **no** soft clip, because a saturator on the
 master bus colours every quiet mix to catch peaks the limiter already caught.
+
+**The sequencer runs on the audio clock; sound effects run on the game's.** A
+row falls due after so many *samples*, so a dropped frame drops a frame instead
+of stuttering the music — while `sfx()` is the game's own timing and stays
+frame-timestamped. That split is the reason `AudioEngine::render` splits its
+block at *both* the next queued event and the next row.
+
+Music notes are allocated at `Priority::Music`, below sound effects, so an
+explosion can take a voice from the bassline rather than the other way round.
+`music_stop()` releases every music-priority voice and leaves effects alone.
+
+**`init()`'s sound has to be carried to frame 0.** The reset vector runs outside
+any frame and the device log is cleared at the start of the next one, so
+`music()` in `init()` — the obvious way to write it — was silently dropped by
+every host until `VmConsole::take_reset_sound` existed.
 
 **Chorus and reverb are shared sends, never per voice.** A patch says how much
 of itself to send (`reverb = 40`); one unit of each processes the summed bus and

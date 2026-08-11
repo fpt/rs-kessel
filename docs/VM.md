@@ -178,6 +178,26 @@ voices: 25 started, 0 stolen
 `music()` triggers are traced but silent until the sequencer lands; the report
 says so rather than leaving you to wonder.
 
+**Music is a `track`**: channels of rows, one channel per instrument, `tempo`
+frames per row, played with `music(name)` and stopped with `music_stop()`.
+
+```lua
+track drive {
+  tempo = 9
+  vel = 150                      -- music sits under the sound effects
+  thud  = "33 . 33 . 40 . 33 ."  -- a key that is not tempo/vel/loop names an
+  pulse = "57 60 64 60 57 60 63 60"  -- instrument: that is its channel
+}
+
+function init() music(drive) end -- loops until something stops it
+```
+
+Rows mean what an `sfx`'s do — a number starts a note, `-` holds it, `.` rests.
+A track **runs on the audio clock**, so a slow frame drops a frame rather than
+stuttering the tune; `sfx()` stays on the game's clock, because that timing is
+the game's. Music notes also yield their voices to sound effects, so an
+explosion is never eaten by a bassline.
+
 **Chorus and reverb are shared sends.** A patch says how much of itself to send
 (`reverb = 40`, `chorus = 15`, both `0`–`255`); there is one chorus and one
 reverb for the whole mix, and an `fx { }` block says what they sound like:

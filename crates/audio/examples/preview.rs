@@ -233,6 +233,13 @@ fx {
   chorus_rate = 50   chorus_depth = 140
 }
 
+track loop {
+  tempo = 7
+  vel = 150
+  kick = "36 . . . 36 . 36 ."
+  zap  = "72 . 79 . 76 . 72 ."
+}
+
 sfx beat  { inst = kick  speed = 8  notes = "36 . 36 ." }
 sfx laser { inst = zap   speed = 2  notes = "72 - - -" }
 sfx arp   { inst = zap   speed = 3  notes = "60 64 67 72 67 64" }
@@ -244,14 +251,17 @@ fn write_bank(dir: &std::path::Path) {
 
     let cfg = SynthConfig::default();
     let mut engine = kessel_audio::AudioEngine::new(cfg);
-    let plan: Vec<(u64, u16)> = [("beat", 0), ("laser", 20), ("arp", 45), ("beat", 70)]
+    let plan: Vec<(u64, u16)> = [("laser", 20), ("arp", 45), ("laser", 90)]
         .iter()
         .map(|(name, frame)| {
             let id = bank.sfx_id(name).expect("sfx declared above");
             (*frame as u64, id)
         })
         .collect();
+    // The track runs under the effects, on the audio clock.
+    let track = bank.track_id("loop").expect("track declared above");
     engine.set_bank(bank);
+    engine.submit(AudioEvent::PlayMusic { id: track }, 0);
 
     let spf = samples_per_frame(cfg.sample_rate) as usize;
     let mut block = vec![0.0f32; spf * 2];

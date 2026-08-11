@@ -43,10 +43,11 @@ pub mod filter;
 pub mod fx;
 pub mod master;
 pub mod patch;
+pub mod sequencer;
 pub mod voice;
 pub mod wav;
 
-pub use bank::{SfxDef, SoundBank};
+pub use bank::{SfxDef, SoundBank, TrackDef};
 pub use engine::AudioEngine;
 pub use event::AudioEvent;
 pub use filter::{cutoff_hz, resonance_q, FilterMode};
@@ -196,6 +197,30 @@ impl Synth {
         self.voices.iter().filter(|v| !v.is_idle()).count()
     }
 
+    /// Start a note directly, choosing its priority.
+    ///
+    /// The path the sequencer uses: music notes are allocated at
+    /// [`Priority::Music`] so a sound effect can take a voice from the
+    /// bassline rather than the other way round. A standalone instrument can
+    /// use it too — `handle(Play)` is the same call at [`Priority::Sfx`].
+    pub fn play_note(&mut self, inst: u8, note: u8, vel: u8, frames: u16, priority: Priority) {
+        let hold = frames as u32 * samples_per_frame(self.cfg.sample_rate);
+        self.start(inst, note, vel, Some(hold), None, priority);
+    }
+
+    /// Release every voice the music is using, leaving sound effects alone.
+    ///
+    /// What `music_stop()` means. Release rather than kill, so the last chord
+    /// fades instead of being cut off mid-cycle — a hard stop on a sustained
+    /// note is an audible click.
+    pub fn release_music(&mut self) {
+        for v in &mut self.voices {
+            if v.priority == Priority::Music {
+                v.release();
+            }
+        }
+    }
+
     /// Apply an event immediately.
     pub fn handle(&mut self, ev: AudioEvent) {
         match ev {
@@ -233,9 +258,10 @@ impl Synth {
                 self.reverb.clear();
                 self.chorus.clear();
             }
-            // The bank and the sequencer land with the steps that build them;
-            // until then these are recorded by the VM and silent here.
-            AudioEvent::PlaySfx { .. } | AudioEvent::PlayMusic { .. } | AudioEvent::StopMusic => {}
+            // `StopMusic` reaches the voices here; starting music needs the
+            // bank and the clock, so `AudioEngine` owns that half.
+            AudioEvent::StopMusic => self.release_music(),
+            AudioEvent::PlaySfx { .. } | AudioEvent::PlayMusic { .. } => {}
         }
     }
 
