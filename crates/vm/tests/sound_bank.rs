@@ -260,6 +260,53 @@ fn a_duplicate_sfx_leaves_one_entry_on_both_sides() {
 }
 
 #[test]
+fn a_name_may_only_mean_one_thing() {
+    // Sprites, instruments, effects and tracks share one constant namespace,
+    // and sprites resolve first — so `sprite coin` plus `sfx coin` made
+    // `sfx(coin)` compile to the sprite's id and trigger nothing at all. It
+    // assembled, it ran, and it was silent. `games/platform.lua` shipped that
+    // way until the corpus audio guard caught it.
+    let compiled = kessel_vm::luax::compile(
+        r#"
+        sprite coin {
+          ..2222..
+          .222222.
+          22222222
+          22222222
+          22222222
+          22222222
+          .222222.
+          ..2222..
+        }
+        instrument i { wave = sine }
+        sfx coin { inst = i  notes = "60" }
+        function update() end
+        function draw() cls(0) end
+        "#,
+    );
+    assert!(!compiled.ok(), "a name was allowed to mean two things");
+    let text = format!("{:?}", compiled.diagnostics);
+    assert!(text.contains("already a sprite"), "{text}");
+
+    // The same across the sound kinds themselves.
+    for (a, b) in [
+        (
+            "instrument x { wave = sine }",
+            "sfx x { inst = x  notes = \"60\" }",
+        ),
+        (
+            "instrument y { wave = sine }",
+            "track y { tempo = 4  y = \"60\" }",
+        ),
+    ] {
+        let compiled = kessel_vm::luax::compile(&format!(
+            "{a}\n{b}\nfunction update() end\nfunction draw() cls(0) end"
+        ));
+        assert!(!compiled.ok(), "{a} / {b} was allowed");
+    }
+}
+
+#[test]
 fn a_rom_without_sound_declarations_has_an_empty_bank() {
     let mut c = VmConsole::new();
     c.write_source(
