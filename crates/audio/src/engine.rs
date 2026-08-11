@@ -154,6 +154,7 @@ impl AudioEngine {
     /// Install a bank. Load-time only — this allocates.
     pub fn set_bank(&mut self, bank: SoundBank) {
         self.synth.set_instruments(&bank.instruments);
+        self.synth.set_fx(bank.fx);
         self.bank = bank;
     }
 

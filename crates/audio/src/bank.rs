@@ -100,6 +100,61 @@ impl SfxDef {
     }
 }
 
+/// The shared effects' character.
+///
+/// Not levels: *who* reaches the chorus and reverb is decided per instrument,
+/// by `chorus = …` and `reverb = …` sends. This is what the one chorus and the
+/// one reverb sound like when they get there — a game sets a small hall or a
+/// big one, not sixteen different rooms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FxSettings {
+    /// How long the reverb rings.
+    pub reverb_size: u8,
+    /// How fast its treble dies away. High values are a soft room, low a
+    /// bright one.
+    pub reverb_damping: u8,
+    pub chorus_rate: u8,
+    pub chorus_depth: u8,
+}
+
+impl Default for FxSettings {
+    /// A medium room and a gentle chorus — the settings that make a patch's
+    /// `reverb = 40` sound reasonable with no `fx` block written at all.
+    fn default() -> Self {
+        FxSettings {
+            reverb_size: 128,
+            reverb_damping: 128,
+            chorus_rate: 40,
+            chorus_depth: 80,
+        }
+    }
+}
+
+/// Every key an `fx` block accepts.
+pub const FX_KEYS: &[&str] = &[
+    "reverb_size",
+    "reverb_damping",
+    "chorus_rate",
+    "chorus_depth",
+];
+
+/// Apply one `key = value` pair to the shared effects.
+pub fn set_fx_field(f: &mut FxSettings, key: &str, v: FieldValue) -> Result<(), String> {
+    match key {
+        "reverb_size" => f.reverb_size = v.ranged(key, 0, 255)? as u8,
+        "reverb_damping" => f.reverb_damping = v.ranged(key, 0, 255)? as u8,
+        "chorus_rate" => f.chorus_rate = v.ranged(key, 0, 255)? as u8,
+        "chorus_depth" => f.chorus_depth = v.ranged(key, 0, 255)? as u8,
+        other => {
+            return Err(format!(
+                "unknown fx key '{other}' (expected {})",
+                FX_KEYS.join(", ")
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// Everything a ROM (or a patch file) says about sound.
 ///
 /// Carried as metadata beside the ROM, the way `controls` and `screen` are —
@@ -113,6 +168,8 @@ pub struct SoundBank {
     /// host UI that wants to list what a ROM can play.
     pub instrument_names: Vec<String>,
     pub sfx_names: Vec<String>,
+    /// What the shared chorus and reverb sound like.
+    pub fx: FxSettings,
 }
 
 impl SoundBank {
@@ -243,6 +300,8 @@ pub const INSTRUMENT_KEYS: &[&str] = &[
     "distortion",
     "volume",
     "pan",
+    "chorus",
+    "reverb",
 ];
 
 /// Apply one `key = value` pair to an instrument.
@@ -273,6 +332,8 @@ pub fn set_instrument_field(p: &mut Patch, key: &str, v: FieldValue) -> Result<(
         "distortion" => p.distortion = v.ranged(key, 0, 255)? as u8,
         "volume" => p.volume = v.ranged(key, 0, 255)? as u8,
         "pan" => p.pan = v.ranged(key, -127, 127)? as i8,
+        "chorus" => p.chorus = v.ranged(key, 0, 255)? as u8,
+        "reverb" => p.reverb = v.ranged(key, 0, 255)? as u8,
         other => {
             return Err(format!(
                 "unknown instrument key '{other}' (expected {})",
@@ -375,6 +436,7 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
     // grammar means the same thing on both sides" is the entire reason this
     // module exists.
     let mut blocks: Vec<Block> = Vec::new();
+    let mut fx_seen = false;
     loop {
         let (word, line) = match lex.next_top() {
             Some(Ok(w)) => w,
@@ -388,6 +450,27 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
             None => break,
         };
         match word.as_str() {
+            "fx" => {
+                let Some(fields) = lex.block(line, &mut errors) else {
+                    break;
+                };
+                if fx_seen {
+                    errors.push(BankError {
+                        line,
+                        message: "duplicate 'fx' block".to_string(),
+                    });
+                    continue;
+                }
+                fx_seen = true;
+                for (key, value, kline) in &fields {
+                    if let Err(message) = set_fx_field(&mut bank.fx, key, value.as_field()) {
+                        errors.push(BankError {
+                            line: *kline,
+                            message,
+                        });
+                    }
+                }
+            }
             "instrument" | "sfx" => {
                 let Some(Ok((name, _))) = lex.next_top() else {
                     errors.push(BankError {
@@ -409,7 +492,7 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
             other => {
                 errors.push(BankError {
                     line,
-                    message: format!("expected 'instrument' or 'sfx', found '{other}'"),
+                    message: format!("expected 'instrument', 'sfx', or 'fx', found '{other}'"),
                 });
                 // Skip whatever this was, so one stray word does not turn into
                 // an error per remaining token.
@@ -781,6 +864,53 @@ sfx boom {
                 Row::Note(36)
             ]
         );
+    }
+
+    #[test]
+    fn an_fx_block_sets_the_shared_effects() {
+        let (bank, errors) = parse(
+            r#"
+            fx {
+              reverb_size = 200  reverb_damping = 60
+              chorus_rate = 90   chorus_depth = 200
+            }
+            instrument pad { wave = saw  reverb = 120  chorus = 60 }
+            "#,
+        );
+        assert_eq!(errors, vec![]);
+        assert_eq!(bank.fx.reverb_size, 200);
+        assert_eq!(bank.fx.reverb_damping, 60);
+        assert_eq!(bank.fx.chorus_rate, 90);
+        assert_eq!(bank.fx.chorus_depth, 200);
+        // The sends live on the instrument: the block says what the room is
+        // like, the patch says who is in it.
+        assert_eq!(bank.instruments[0].reverb, 120);
+        assert_eq!(bank.instruments[0].chorus, 60);
+    }
+
+    #[test]
+    fn without_an_fx_block_the_effects_have_usable_defaults() {
+        let (bank, errors) = parse("instrument i { wave = sine  reverb = 40 }");
+        assert_eq!(errors, vec![]);
+        assert_eq!(bank.fx, FxSettings::default());
+    }
+
+    #[test]
+    fn a_second_fx_block_is_rejected() {
+        // Two rooms is not a thing this console has, and silently keeping the
+        // last one would hide the mistake.
+        let (_, errors) = parse("fx { reverb_size = 10 } fx { reverb_size = 200 }");
+        assert!(
+            errors[0].message.contains("duplicate 'fx' block"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_fx_key_names_the_ones_that_exist() {
+        let (_, errors) = parse("fx { reverb_wetness = 10 }");
+        assert!(errors[0].message.contains("unknown fx key"), "{errors:?}");
+        assert!(errors[0].message.contains("reverb_size"), "{errors:?}");
     }
 
     #[test]

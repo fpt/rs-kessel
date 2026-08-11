@@ -40,6 +40,7 @@ pub mod bank;
 pub mod engine;
 pub mod event;
 pub mod filter;
+pub mod fx;
 pub mod master;
 pub mod patch;
 pub mod voice;
@@ -52,6 +53,7 @@ pub use filter::{cutoff_hz, resonance_q, FilterMode};
 pub use patch::{Patch, VoiceParams, Waveform};
 pub use voice::{note_hz, Priority};
 
+use fx::{Chorus, Reverb};
 use master::Limiter;
 use voice::Voice;
 
@@ -121,11 +123,26 @@ pub struct Synth {
     /// Monotonic allocation counter, so "oldest" is well defined.
     next_age: u64,
     limiter: Limiter,
+    /// The two shared effects, and the buses that feed them. One of each for
+    /// the whole mix — see [`fx`] for why they are not per voice.
+    chorus: Chorus,
+    reverb: Reverb,
+    chorus_bus: Vec<f32>,
+    reverb_bus: Vec<f32>,
     stats: SynthStats,
 }
 
 /// How long the master limiter takes to come back up after a peak.
 const LIMITER_RELEASE_MS: u16 = 150;
+
+/// Frames the synth renders at a time internally.
+///
+/// The caller's block can be any length a device asks for; the send buses are
+/// fixed buffers sized once, so a long block is walked in pieces rather than
+/// allocating to fit it. The effects are stateful, so splitting changes
+/// nothing about the output — which is also what keeps a render independent of
+/// the device's buffer size.
+const CHUNK_FRAMES: usize = 512;
 
 impl Synth {
     pub fn new(cfg: SynthConfig) -> Self {
@@ -139,8 +156,19 @@ impl Synth {
             instruments: Vec::new(),
             next_age: 0,
             limiter: Limiter::new(cfg.sample_rate, LIMITER_RELEASE_MS),
+            chorus: Chorus::new(cfg.sample_rate),
+            reverb: Reverb::new(cfg.sample_rate),
+            chorus_bus: vec![0.0; CHUNK_FRAMES * 2],
+            reverb_bus: vec![0.0; CHUNK_FRAMES * 2],
             stats: SynthStats::default(),
         }
+    }
+
+    /// Set the shared effects' character. Load-time; the per-voice `chorus` and
+    /// `reverb` sends decide *who* reaches them.
+    pub fn set_fx(&mut self, fx: bank::FxSettings) {
+        self.reverb.set(fx.reverb_size, fx.reverb_damping);
+        self.chorus.set(fx.chorus_rate, fx.chorus_depth);
     }
 
     /// Install the instrument table. Load-time only — this is the one call in
@@ -199,6 +227,11 @@ impl Synth {
                 // Including the master: a limiter still ducked from the old
                 // timeline would fade the new one in.
                 self.limiter.reset();
+                // ...and the tails. `Panic` means "including tails", and a
+                // reverb still ringing from a rewound timeline is the loudest
+                // possible reminder of it.
+                self.reverb.clear();
+                self.chorus.clear();
             }
             // The bank and the sequencer land with the steps that build them;
             // until then these are recorded by the VM and silent here.
@@ -210,10 +243,33 @@ impl Synth {
     ///
     /// `out.len()` must be even; a trailing half-frame is ignored.
     pub fn render(&mut self, out: &mut [f32]) {
-        out.fill(0.0);
-        for v in &mut self.voices {
-            v.render_add(out);
+        for block in out.chunks_mut(CHUNK_FRAMES * 2) {
+            self.render_chunk(block);
         }
+    }
+
+    /// One chunk, no longer than the send buses.
+    fn render_chunk(&mut self, out: &mut [f32]) {
+        let n = out.len();
+        let chorus = &mut self.chorus_bus[..n];
+        let reverb = &mut self.reverb_bus[..n];
+        out.fill(0.0);
+        chorus.fill(0.0);
+        reverb.fill(0.0);
+
+        for v in &mut self.voices {
+            v.render_add(out, chorus, reverb);
+        }
+
+        // Each unit processes its bus in place, and the result is summed back
+        // into the dry mix. The units are shared, so this happens once per
+        // chunk however many voices sent to them.
+        self.chorus.process(chorus);
+        self.reverb.process(reverb);
+        for i in 0..n {
+            out[i] += chorus[i] + reverb[i];
+        }
+
         self.limiter.process(out);
     }
 
@@ -688,6 +744,128 @@ mod tests {
             "drive added no harmonics: rms {} → {}",
             rms(&clean),
             rms(&dirty)
+        );
+    }
+
+    /// A synth with one percussive patch, sending as given.
+    fn sends(chorus: u8, reverb: u8) -> Synth {
+        let mut s = Synth::new(SynthConfig::default());
+        s.set_instruments(&[Patch {
+            wave: Waveform::Square,
+            attack_ms: 0,
+            decay_ms: 30,
+            sustain: 0,
+            chorus,
+            reverb,
+            ..Patch::default()
+        }]);
+        s.set_fx(bank::FxSettings::default());
+        s
+    }
+
+    fn hit(s: &mut Synth) {
+        s.handle(AudioEvent::Play {
+            inst: 0,
+            note: 60,
+            vel: 255,
+            frames: 2,
+        });
+    }
+
+    #[test]
+    fn a_reverb_send_adds_a_tail_the_dry_signal_does_not_have() {
+        // The defining property: well after the note has decayed, a sent voice
+        // is still audible and an unsent one is silent.
+        let tail = |reverb: u8| {
+            let mut s = sends(0, reverb);
+            hit(&mut s);
+            render(&mut s, 10); // well past the note's own decay
+            peak(&render(&mut s, 12))
+        };
+        // Not `== 0.0` for the dry case: the envelope's final sample sits at
+        // the voice's silence threshold, which is a note ending rather than a
+        // tail. The two differ by orders of magnitude, which is the claim.
+        assert!(tail(0) < 1e-4, "a dry voice left a tail: {}", tail(0));
+        assert!(
+            tail(255) > tail(0) * 100.0 + 0.001,
+            "a sent voice left none: {} vs {}",
+            tail(0),
+            tail(255)
+        );
+    }
+
+    #[test]
+    fn a_bigger_send_returns_more() {
+        let level = |reverb: u8| {
+            let mut s = sends(0, reverb);
+            hit(&mut s);
+            render(&mut s, 6);
+            peak(&render(&mut s, 12))
+        };
+        assert!(
+            level(255) > level(60) * 2.0,
+            "the send amount did nothing: {} vs {}",
+            level(60),
+            level(255)
+        );
+    }
+
+    #[test]
+    fn the_effects_are_shared_not_per_voice() {
+        // Sixteen voices into one reverb is one reverb's worth of return, and
+        // it stays inside full scale.
+        let mut s = sends(0, 200);
+        for note in 40..40 + MAX_VOICES as u8 {
+            s.handle(AudioEvent::Play {
+                inst: 0,
+                note,
+                vel: 255,
+                frames: 2,
+            });
+        }
+        let out = render(&mut s, 30);
+        assert!(peak(&out) <= 1.0, "the shared bus blew past full scale");
+        assert!(out.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn panic_takes_the_tails_with_it() {
+        let mut s = sends(255, 255);
+        hit(&mut s);
+        render(&mut s, 6);
+        assert!(peak(&render(&mut s, 2)) > 0.0, "no tail to cancel");
+
+        s.handle(AudioEvent::Panic);
+        assert_eq!(
+            peak(&render(&mut s, 12)),
+            0.0,
+            "an effect tail survived Panic"
+        );
+    }
+
+    #[test]
+    fn a_dry_mix_is_untouched_by_the_effects() {
+        // Nothing sent means nothing returned: the effects must not colour a
+        // game that never asked for them.
+        let mut s = Synth::new(SynthConfig::default());
+        s.set_instruments(&[Patch {
+            wave: Waveform::Square,
+            sustain: 200,
+            ..Patch::default()
+        }]);
+        s.set_fx(bank::FxSettings::default());
+        s.handle(AudioEvent::Play {
+            inst: 0,
+            note: 60,
+            vel: 120,
+            frames: 20,
+        });
+        let out = render(&mut s, 10);
+        let expect = 120.0 / 255.0 * (Patch::default().volume as f32 / 255.0);
+        assert!(
+            (peak(&out) - expect).abs() < 1e-6,
+            "{} vs {expect}",
+            peak(&out)
         );
     }
 

@@ -36,7 +36,8 @@
 use std::collections::HashMap;
 
 use kessel_audio::bank::{
-    set_instrument_field, set_sfx_field, OwnedValue, SfxDef, SoundBank, MAX_INSTRUMENTS, MAX_SFX,
+    set_fx_field, set_instrument_field, set_sfx_field, OwnedValue, SfxDef, SoundBank,
+    MAX_INSTRUMENTS, MAX_SFX,
 };
 use kessel_audio::Patch;
 
@@ -548,6 +549,12 @@ enum Decl {
         fields: Vec<(String, OwnedValue, usize)>,
         line: usize,
     },
+    /// `fx { reverb_size = … }` — what the one shared chorus and reverb sound
+    /// like. Nameless, because there is only ever one of each.
+    Fx {
+        fields: Vec<(String, OwnedValue, usize)>,
+        line: usize,
+    },
 }
 
 // ======================================================================
@@ -638,11 +645,13 @@ impl Parser {
                 decls.push(self.parse_sound_decl("instrument", d));
             } else if self.is_kw("sfx") {
                 decls.push(self.parse_sound_decl("sfx", d));
+            } else if self.is_kw("fx") {
+                decls.push(self.parse_fx(d));
             } else {
                 d.push(err(
                     self.line(),
                     "expected 'record', 'function', 'local', 'sprite', 'tilemap', 'controls', \
-                     'instrument', or 'sfx'",
+                     'instrument', 'sfx', or 'fx'",
                 ));
                 self.advance();
             }
@@ -789,6 +798,26 @@ impl Parser {
         } else {
             Decl::Sfx { name, fields, line }
         }
+    }
+
+    /// `fx { … }` — the shared effects. Unnamed: there is one chorus and one
+    /// reverb for the whole mix, which is the point of a send effect.
+    fn parse_fx(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("fx");
+        self.expect_sym("{", d);
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            let key_line = self.line();
+            let key = self.ident(d);
+            self.expect_sym("=", d);
+            if let Some(v) = self.parse_sound_value(d) {
+                fields.push((key, v, key_line));
+            }
+            self.eat_sym(",");
+        }
+        self.expect_sym("}", d);
+        Decl::Fx { fields, line }
     }
 
     /// A value in an `instrument`/`sfx` block: a number (optionally negative),
@@ -1619,6 +1648,23 @@ impl Compiler {
                 }
                 let id = self.bank.add_sfx(name.clone(), def);
                 self.sfx_ids.insert(name.clone(), id);
+            }
+        }
+
+        // Pass 1.57: the shared effects. A single block, like `screen`.
+        let mut fx_line: Option<usize> = None;
+        for decl in decls {
+            if let Decl::Fx { fields, line } = decl {
+                if fx_line.is_some() {
+                    d.push(err(*line, "duplicate 'fx' block"));
+                    continue;
+                }
+                fx_line = Some(*line);
+                for (key, value, kline) in fields {
+                    if let Err(message) = set_fx_field(&mut self.bank.fx, key, value.as_field()) {
+                        d.push(err(*kline, message));
+                    }
+                }
             }
         }
 

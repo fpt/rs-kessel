@@ -185,6 +185,26 @@ fn main() {
     }
     write(&dir, "polyphony", &[chord], &events, 180);
 
+    // The shared sends: the same hit, dry / chorused / reverbed / both.
+    let hit = |chorus, reverb| Patch {
+        wave: Waveform::Square,
+        attack_ms: 0,
+        decay_ms: 70,
+        sustain: 0,
+        chorus,
+        reverb,
+        ..Patch::default()
+    };
+    write(
+        &dir,
+        "sends",
+        &[hit(0, 0), hit(200, 0), hit(0, 200), hit(200, 200)],
+        &(0..4)
+            .map(|i| (i as u32 * 45, play(i, 64, 220, 3)))
+            .collect::<Vec<_>>(),
+        200,
+    );
+
     // The standalone path, end to end and with no VM in sight: parse a patch
     // file, trigger effects by name, render. This is what a synth app does.
     write_bank(&dir);
@@ -205,6 +225,12 @@ instrument zap {
   attack = 0  decay = 200  sustain = 0
   pitch_env = 48  pitch_decay = 130
   filter = lpf  cutoff = 190  resonance = 120
+  reverb = 110  chorus = 70
+}
+
+fx {
+  reverb_size = 190  reverb_damping = 90
+  chorus_rate = 50   chorus_depth = 140
 }
 
 sfx beat  { inst = kick  speed = 8  notes = "36 . 36 ." }
@@ -274,6 +300,7 @@ fn write(
 ) {
     let cfg = SynthConfig::default();
     let mut synth = Synth::new(cfg);
+    synth.set_fx(kessel_audio::bank::FxSettings::default());
     synth.set_instruments(instruments);
 
     let spf = samples_per_frame(cfg.sample_rate) as usize;

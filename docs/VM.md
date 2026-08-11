@@ -178,6 +178,22 @@ voices: 25 started, 0 stolen
 `music()` triggers are traced but silent until the sequencer lands; the report
 says so rather than leaving you to wonder.
 
+**Chorus and reverb are shared sends.** A patch says how much of itself to send
+(`reverb = 40`, `chorus = 15`, both `0`–`255`); there is one chorus and one
+reverb for the whole mix, and an `fx { }` block says what they sound like:
+
+```lua
+fx {
+  reverb_size = 190      -- how long it rings
+  reverb_damping = 90    -- how fast the treble dies (high = soft room)
+  chorus_rate = 50  chorus_depth = 140
+}
+```
+
+One of each, not one per instrument — a room is a property of the room, and
+sixteen of them would cost sixteen times as much for a difference nobody can
+localize.
+
 **Prefer `vm_run_frames` over a loop of `vm_run_frame`.** One call plays a whole
 scenario from an input script and returns the final observation plus a summary
 (frames run, whether it stopped early on a fault/halt, every sound trigger, and

@@ -8,12 +8,21 @@
 -- on one of them: a note number starts a note, `-` holds it, `.` rests, and
 -- `speed` is frames per row. Check what a game actually plays with
 -- `kessel render-audio games/shooter.lua --buttons A`.
+-- One chorus and one reverb for the whole mix; instruments choose how much of
+-- themselves to send. A short, dark room: explosions should feel like space,
+-- not like a cathedral.
+fx {
+  reverb_size = 120
+  reverb_damping = 180
+}
+
 instrument zap {
   wave = saw
   attack = 0  decay = 90  sustain = 0
   pitch_env = 30  pitch_decay = 60   -- the downward sweep that makes it a laser
   filter = lpf  cutoff = 200
   volume = 150
+  reverb = 30                        -- a touch of space, not a wash
 }
 
 instrument boom {
@@ -22,6 +31,7 @@ instrument boom {
   pitch_env = -18  pitch_decay = 120 -- pitch falling = something big broke
   filter = lpf  cutoff = 140
   volume = 200
+  reverb = 90                        -- the big one gets the room
 }
 
 sfx shoot   { inst = zap   speed = 1  notes = "84" }

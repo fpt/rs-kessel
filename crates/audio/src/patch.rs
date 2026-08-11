@@ -73,6 +73,15 @@ pub struct Patch {
     /// clean lead is a normal thing to want. Chorus and reverb are *not* per
     /// voice, for the opposite reason.
     pub distortion: u8,
+
+    /// How much of this voice to send to the shared chorus, `0`–`255`.
+    pub chorus: u8,
+    /// How much of this voice to send to the shared reverb, `0`–`255`.
+    ///
+    /// A *send*, not an effect: there is one reverb for the whole mix and this
+    /// decides who goes into it. Sixteen reverbs would cost sixteen times as
+    /// much for a difference nobody can localize.
+    pub reverb: u8,
 }
 
 impl Default for Patch {
@@ -93,6 +102,8 @@ impl Default for Patch {
             cutoff: 255,
             resonance: 0,
             distortion: 0,
+            chorus: 0,
+            reverb: 0,
         }
     }
 }
@@ -122,6 +133,8 @@ pub struct VoiceParams {
     /// Output gain that puts a full-scale input back at full scale, so raising
     /// `distortion` adds crunch rather than volume.
     pub drive_comp: f32,
+    pub chorus_send: f32,
+    pub reverb_send: f32,
 }
 
 impl Patch {
@@ -145,6 +158,8 @@ impl Patch {
             filter: Coefs::design(self.filter, self.cutoff, self.resonance, sample_rate),
             drive,
             drive_comp: 1.0 / soft_clip(drive),
+            chorus_send: self.chorus as f32 / 255.0,
+            reverb_send: self.reverb as f32 / 255.0,
         }
     }
 }
