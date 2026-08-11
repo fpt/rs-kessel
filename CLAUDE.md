@@ -123,6 +123,7 @@ assembler, and a sprite blitter. When the event type has to be shared,
 
 `docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
 Today: voices, filter, pan, drive, master limiter, the bank, `sfx`, `music`,
+the note-level API (`play` / `note_on` / `note_off`),
 the offline render (`vm_render_audio`, `kessel render-audio`), **sound on
 `kessel run`** through cpal, and the shared chorus and reverb. No audio on
 Android or when attached.
@@ -166,6 +167,21 @@ block at *both* the next queued event and the next row.
 Music notes are allocated at `Priority::Music`, below sound effects, so an
 explosion can take a voice from the bassline rather than the other way round.
 `music_stop()` releases every music-priority voice and leaves effects alone.
+
+**The device's sound log is `Vec<AudioEvent>`**, not a narrower type of its own.
+The note ports need every field of a `Play`, and a second vocabulary for the
+same thing meant three places converting between them — the observation, the
+tools, and the player. One description (`audio::event_json`) now serves the
+observation record and `vm_run_frames`, so an agent cannot see two spellings of
+one frame.
+
+**An out-of-range note argument emits nothing**, and is counted in
+`Devices::sound_dropped`. Truncating puts `note_on(256, …)` on channel 0 and
+clamping puts it on 255 — and since every channel `0..=255` is one a game may
+be holding a note on, *both* steal someone else's note. There is no spare value
+to land on, so the only answer that cannot corrupt state is to do nothing. Same
+rule as an off-screen `pset`, which this device has always ignored. The count
+reaches the render report, so the silence is explainable rather than mysterious.
 
 **`init()`'s sound has to be carried to frame 0.** The reset vector runs outside
 any frame and the device log is cleared at the start of the next one, so

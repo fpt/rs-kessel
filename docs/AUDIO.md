@@ -112,12 +112,19 @@ so `inst` commits.
 | 4 | velocity | latch |
 | 5 | note | latch |
 | 6 | instrument | **commit `Play`** |
-| 7 | channel | latch |
-| 8 | instrument | **commit `NoteOn`** (with latched note/vel/chan) |
+| 7 | instrument | latch |
+| 8 | channel | **commit `NoteOn`** (with latched inst/note/vel) |
 | 9 | channel | **commit `NoteOff`** |
 
-luax gains `play(inst, note, frames)`, `note_on(chan, inst, note, vel)`,
-`note_off(chan)` beside the existing `sfx` / `music` / `music_stop`.
+luax gains `play(inst, note, vel, frames)`, `note_on(chan, inst, note, vel)`,
+and `note_off(chan)` beside `sfx` / `music` / `music_stop`. `play` takes a
+velocity like `note_on` rather than assuming full: a game that plays notes at
+all is a game that wants dynamics.
+
+The commit register is the one holding the call's **first** argument, since that
+is what a stack machine hands back last — `play(inst, …)` commits on `inst`,
+`note_on(chan, …)` on `chan`. The palette's `pal(i,r,g,b)` works exactly this
+way, and following it means there is one rule rather than two.
 
 ## Where patches live: metadata, not ROM bytes
 

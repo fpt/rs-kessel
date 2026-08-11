@@ -85,15 +85,13 @@ fn sfx_by_name_emits_the_right_id() {
         assert!(c.run_frame(0).sound.is_empty());
     }
     let boom = c.run_frame(0); // the game's 5th update
-    assert_eq!(boom.sound.len(), 1);
-    assert_eq!(boom.sound[0].id, 0);
+    assert_eq!(boom.sound, [kessel_audio::AudioEvent::PlaySfx { id: 0 }]);
 
     for _ in 0..14 {
         assert!(c.run_frame(0).sound.is_empty());
     }
     let coin = c.run_frame(0);
-    assert_eq!(coin.sound.len(), 1);
-    assert_eq!(coin.sound[0].id, 1);
+    assert_eq!(coin.sound, [kessel_audio::AudioEvent::PlaySfx { id: 1 }]);
 }
 
 #[test]
@@ -111,11 +109,8 @@ fn the_ids_a_game_emits_render_through_the_engine() {
 
     for frame in 0..40u64 {
         let obs = c.run_frame(0);
-        for s in &obs.sound {
-            engine.submit(
-                kessel_audio::AudioEvent::PlaySfx { id: s.id },
-                engine.frame_at(frame),
-            );
+        for ev in &obs.sound {
+            engine.submit(*ev, engine.frame_at(frame));
         }
         engine.render(&mut block);
         out.extend_from_slice(&block);

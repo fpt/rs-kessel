@@ -198,6 +198,28 @@ stuttering the tune; `sfx()` stays on the game's clock, because that timing is
 the game's. Music notes also yield their voices to sound effects, so an
 explosion is never eaten by a bassline.
 
+**Notes without a bank entry.** `sfx` and `track` cover sound a game knows in
+advance; for a pitch it decides at runtime there are three more builtins:
+
+```lua
+play(piano, 67, 200, 40)      -- instrument, MIDI note, velocity, frames
+note_on(0, organ, 60, 200)    -- channel, instrument, note, velocity
+note_off(0)                   -- release that channel
+```
+
+`play` is fire-and-forget and needs no bookkeeping. `note_on` holds until you
+release it, on a channel **you** own — any value `0`–`255`, and not a voice,
+because voices get stolen and a game must always be able to stop the note it
+started. A channel is just a label the synth matches on, so using an entity's
+index as its channel works.
+
+An out-of-range argument makes the whole note a **no-op** — nothing is played
+and nothing is disturbed. Neither wrapping nor clamping would do: every channel
+`0`–`255` is one some part of the game may be holding a note on, so *any*
+mapping of an invalid value onto the valid range steals someone else's note.
+`vm_render_audio` reports the count, so the silence has an explanation. `games/piano.lua` is the worked example: it catches falling notes and
+plays each lane's pitch.
+
 **Chorus and reverb are shared sends.** A patch says how much of itself to send
 (`reverb = 40`, `chorus = 15`, both `0`–`255`); there is one chorus and one
 reverb for the whole mix, and an `fx { }` block says what they sound like:

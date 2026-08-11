@@ -15,7 +15,7 @@
 //! | 0x6 | console | 0 write-byte |
 //! | 0x7 | tilemap | 0 base · 1 width · 2 tx · 3 ty · 4 sx · 5 sy · 6 tw · 7 th · 8 draw |
 //! | 0x8 | time    | 0 frame-count (read) |
-//! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop (recorded, no audio yet) |
+//! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop · 3 frames · 4 velocity · 5 note · 6 inst→play · 7 inst · 8 chan→note-on · 9 chan→note-off |
 //! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 //! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
@@ -160,22 +160,39 @@ pub struct Entity {
     pub y: u16,
 }
 
-/// What a game asked the (silent, for now) sound device to do this frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SoundKind {
-    Sfx,
-    Music,
-    MusicStop,
+/// An out-of-range argument to a note port makes the whole note a **no-op**.
+///
+/// Neither truncating nor clamping works here, and the reason is that a channel
+/// is an *identity*: `note_on(256, …)` truncated is channel 0 and clamped is
+/// channel 255, and both are channels a game may legitimately be holding a note
+/// on. Any mapping of an invalid value onto the valid range takes someone
+/// else's note. There is no spare value to land on, so the only answer that
+/// cannot corrupt state is to do nothing.
+///
+/// That is also what this device already does with an off-screen pixel — see
+/// `pixel_out_of_bounds_ignored`. Silence is the cost; [`Devices::sound_dropped`]
+/// is what keeps it from being a *silent* silence.
+fn byte(val: u16) -> Option<u8> {
+    (val <= 255).then_some(val as u8)
 }
 
-/// A sound trigger the running game emitted this frame. The VM stays
-/// deterministic and headless — these are recorded for the observation record
-/// (so the agent sees that a sound "played") and for a future host audio path;
-/// nothing is synthesized yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SoundEvent {
-    pub kind: SoundKind,
-    pub id: u16,
+/// The same for a MIDI note number, whose range is `0..=127`.
+fn midi(val: u16) -> Option<u8> {
+    (val <= 127).then_some(val as u8)
+}
+
+/// Latched arguments for the note-level sound ports.
+///
+/// The multi-argument ports work like the palette's: each argument is written
+/// to its own register and the *last* one commits. A stack machine hands its
+/// arguments back in reverse, so the register that commits is the one holding
+/// the call's **first** argument — `play(inst, …)` commits on `inst`.
+#[derive(Debug, Clone, Copy, Default)]
+struct NoteLatch {
+    frames: u16,
+    vel: u16,
+    note: u16,
+    inst: u16,
 }
 
 /// The 16 colours a ROM gets without touching the palette (PICO-8's).
@@ -287,9 +304,15 @@ pub struct Devices {
     pub entities: Vec<Entity>,
     /// Bytes written to the console this frame (cleared each frame).
     pub console: Vec<u8>,
-    /// Sound triggers emitted this frame (cleared each frame). Recorded only;
+    /// Sound the game asked for this frame (cleared each frame). Recorded only;
     /// no audio is synthesized yet.
-    pub sound: Vec<SoundEvent>,
+    pub sound: Vec<kessel_audio::AudioEvent>,
+    /// Notes ignored because an argument was out of range. Cumulative, so a
+    /// host can report the difference over a run rather than losing it with the
+    /// per-frame log.
+    pub sound_dropped: u64,
+    /// Pending arguments for the note ports.
+    note_latch: NoteLatch,
     /// Persistent storage (survives resets? no — power-on state, but survives frames).
     pub storage: [u8; 256],
 
@@ -363,6 +386,8 @@ impl Devices {
             entities: Vec::new(),
             console: Vec::new(),
             sound: Vec::new(),
+            sound_dropped: 0,
+            note_latch: NoteLatch::default(),
             storage: [0u8; 256],
             rng_state: 0x1234_5678,
             storage_addr: 0,
@@ -513,20 +538,60 @@ impl Devices {
                 0x8 => self.draw_map(mem),
                 _ => {}
             },
-            // Sound device: record a trigger (no audio synthesized yet).
+            // Sound device: record what the game asked for. The machine stays
+            // silent and deterministic; a host renders the log.
             0x9 => match reg {
-                0x0 => self.sound.push(SoundEvent {
-                    kind: SoundKind::Sfx,
-                    id: val,
-                }),
-                0x1 => self.sound.push(SoundEvent {
-                    kind: SoundKind::Music,
-                    id: val,
-                }),
-                0x2 => self.sound.push(SoundEvent {
-                    kind: SoundKind::MusicStop,
-                    id: 0,
-                }),
+                0x0 => self
+                    .sound
+                    .push(kessel_audio::AudioEvent::PlaySfx { id: val }),
+                0x1 => self
+                    .sound
+                    .push(kessel_audio::AudioEvent::PlayMusic { id: val }),
+                0x2 => self.sound.push(kessel_audio::AudioEvent::StopMusic),
+                // Latches, then a commit. See `NoteLatch`.
+                0x3 => self.note_latch.frames = val,
+                0x4 => self.note_latch.vel = val,
+                0x5 => self.note_latch.note = val,
+                0x6 => {
+                    match (
+                        byte(val),
+                        midi(self.note_latch.note),
+                        byte(self.note_latch.vel),
+                    ) {
+                        (Some(inst), Some(note), Some(vel)) => {
+                            self.sound.push(kessel_audio::AudioEvent::Play {
+                                inst,
+                                note,
+                                vel,
+                                frames: self.note_latch.frames,
+                            })
+                        }
+                        _ => self.sound_dropped += 1,
+                    }
+                }
+                0x7 => self.note_latch.inst = val,
+                0x8 => {
+                    match (
+                        byte(val),
+                        byte(self.note_latch.inst),
+                        midi(self.note_latch.note),
+                        byte(self.note_latch.vel),
+                    ) {
+                        (Some(chan), Some(inst), Some(note), Some(vel)) => {
+                            self.sound.push(kessel_audio::AudioEvent::NoteOn {
+                                chan,
+                                inst,
+                                note,
+                                vel,
+                            })
+                        }
+                        _ => self.sound_dropped += 1,
+                    }
+                }
+                0x9 => match byte(val) {
+                    Some(chan) => self.sound.push(kessel_audio::AudioEvent::NoteOff { chan }),
+                    None => self.sound_dropped += 1,
+                },
                 _ => {}
             },
             // Composite-sprite device: draw a w×h block of sheet tiles at the
@@ -1128,6 +1193,73 @@ mod tests {
         assert_eq!(trig_fp(128, true) as i16, -256); // cos 180
                                                      // Mid-angle magnitude is bounded and non-trivial.
         assert_eq!(trig_fp(32, false) as i16, 181); // sin 45 ~ 0.707*256
+    }
+
+    /// An out-of-range note argument emits nothing at all.
+    ///
+    /// Every channel `0..=255` is one a game may be holding a note on, so there
+    /// is no value an invalid channel can be mapped onto without stealing
+    /// someone else's — not 0 (truncation) and not 255 (clamping). Doing
+    /// nothing is the only answer that cannot corrupt state.
+    #[test]
+    fn an_out_of_range_note_argument_emits_nothing() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+
+        for (label, writes) in [
+            ("channel", vec![(0x95u8, 60u16), (0x97, 0), (0x98, 256)]),
+            ("note", vec![(0x95, 200), (0x97, 0), (0x98, 3)]),
+            ("instrument", vec![(0x95, 60), (0x97, 256), (0x98, 3)]),
+            (
+                "velocity",
+                vec![(0x94, 300), (0x95, 60), (0x97, 0), (0x98, 3)],
+            ),
+            ("play's instrument", vec![(0x95, 60), (0x96, 256)]),
+            ("note_off's channel", vec![(0x99, 999)]),
+        ] {
+            d.sound.clear();
+            d.sound_dropped = 0;
+            d.write(0x94, 200, &mem); // a valid velocity, unless overwritten
+            for (port, val) in writes {
+                d.write(port, val, &mem);
+            }
+            assert!(
+                d.sound.is_empty(),
+                "an out-of-range {label} still emitted {:?}",
+                d.sound
+            );
+            assert_eq!(
+                d.sound_dropped, 1,
+                "an out-of-range {label} was not counted"
+            );
+        }
+    }
+
+    /// ...and the valid extremes still work, so the check is a range and not a
+    /// blanket refusal.
+    #[test]
+    fn the_ends_of_each_note_range_are_valid() {
+        use kessel_audio::AudioEvent;
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x94, 255, &mem); // vel
+        d.write(0x95, 127, &mem); // note
+        d.write(0x97, 255, &mem); // inst
+        d.write(0x98, 255, &mem); // chan -> commit
+        assert_eq!(
+            d.sound,
+            [AudioEvent::NoteOn {
+                chan: 255,
+                inst: 255,
+                note: 127,
+                vel: 255,
+            }]
+        );
+        assert_eq!(d.sound_dropped, 0);
+
+        d.sound.clear();
+        d.write(0x99, 0, &mem);
+        assert_eq!(d.sound, [AudioEvent::NoteOff { chan: 0 }]);
     }
 
     #[test]

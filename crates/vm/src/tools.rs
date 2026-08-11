@@ -150,7 +150,7 @@ luax essentials (a '.lua' file):
 - State: top-level `local x = 60` is a persistent global. `record Name { a, b: byte }` (fields default to `word`); `local es: array(8, Name)`.
 - Sprites are DECLARATIONS, not table literals: `sprite hero { <8 rows of 8 chars, '.'=transparent else palette nibble 0-9a-f> }`. `hero` is then a tile id; draw with `spr(hero, x, y, flags)`.
 - Builtins: `cls(c)` (colour REQUIRED), `pset(x,y,c)`, `spr(id,x,y,flags)`, `sprn(id,x,y,w,h,flags)` (w×h block of contiguous tiles, e.g. 16×16 = 2,2), `btn(LEFT|RIGHT|UP|DOWN|A|B)` (held), `btnp`/`btnr` (pressed/released THIS frame — use for jumps/menus), `frame_count()` (frames since start), `len(arr)` (array length), `clear(rec_or_arr)` (zero a record/array in place, e.g. reset a bullet pool), `text("LITERAL",x,y,color)` / `number(n,x,y,color)` (on-screen font: scores/titles/GAME OVER; `text` needs a string LITERAL), `sfx(id)` / `music(id)` / `music_stop()` (sound triggers), `entity(x,y,tag)` (report for observation), `rnd(n)`, `map/mget/mset/fset/solid` (tilemap).
-- Sound is DECLARED like sprites, and the name is the id: `instrument kick { wave = sine  attack = 0  decay = 90  sustain = 0  pitch_env = 36  pitch_decay = 60 }` then `sfx boom { inst = kick  speed = 3  notes = "40 - 36" }`, played with `sfx(boom)`. instrument keys: wave (sine|triangle|saw|square|noise), attack/decay/release/pitch_decay (ms), sustain/cutoff/resonance/distortion/volume (0-255), pitch_env/pan (-127..127), filter (off|lpf|hpf), chorus/reverb (0-255 SENDS to the one shared chorus and reverb — there is one of each for the whole mix, not one per instrument; `fx { reverb_size = 190  reverb_damping = 90  chorus_rate = 50  chorus_depth = 140 }` says what they sound like). sfx keys: inst, speed (frames per row), vel, notes (a string of note numbers, `-` = hold the previous note, `.` = rest). MUSIC is a `track NAME { tempo = 8  vel = 150  loop = 1  <instrument> = "<rows>" ... }` block — each non-reserved key names an instrument and gives that channel's rows, same row syntax as sfx — played with `music(NAME)` and stopped with `music_stop()`. Tracks run on the AUDIO clock, so a slow frame does not stutter them. Start music in `init()`; it loops by default. A note plus holds is ONE long note; a repeated number retriggers. Drums come from noise or sine + pitch_env, not a drum machine. You cannot hear the result, so check it with vm_render_audio: it reports every trigger with its frame, and warns when an id has no declaration or a sound fired but was silent.
+- Sound is DECLARED like sprites, and the name is the id: `instrument kick { wave = sine  attack = 0  decay = 90  sustain = 0  pitch_env = 36  pitch_decay = 60 }` then `sfx boom { inst = kick  speed = 3  notes = "40 - 36" }`, played with `sfx(boom)`. instrument keys: wave (sine|triangle|saw|square|noise), attack/decay/release/pitch_decay (ms), sustain/cutoff/resonance/distortion/volume (0-255), pitch_env/pan (-127..127), filter (off|lpf|hpf), chorus/reverb (0-255 SENDS to the one shared chorus and reverb — there is one of each for the whole mix, not one per instrument; `fx { reverb_size = 190  reverb_damping = 90  chorus_rate = 50  chorus_depth = 140 }` says what they sound like). sfx keys: inst, speed (frames per row), vel, notes (a string of note numbers, `-` = hold the previous note, `.` = rest). MUSIC is a `track NAME { tempo = 8  vel = 150  loop = 1  <instrument> = "<rows>" ... }` block — each non-reserved key names an instrument and gives that channel's rows, same row syntax as sfx — played with `music(NAME)` and stopped with `music_stop()`. Tracks run on the AUDIO clock, so a slow frame does not stutter them. Start music in `init()`; it loops by default. For a note you decide at runtime (a rhythm game, a menu blip that follows the cursor), skip the bank: `play(instrument, note, vel, frames)` plays a MIDI note number for `frames` frames; `note_on(chan, instrument, note, vel)` / `note_off(chan)` hold one until you release it, where `chan` is any 0-255 label YOU choose and track (a voice is not — voices get stolen, channels don't). An out-of-range argument (channel/instrument >255, note >127, velocity >255) plays NOTHING rather than wrapping onto a channel another note is using; vm_render_audio reports how many were ignored. A note plus holds is ONE long note; a repeated number retriggers. Drums come from noise or sine + pitch_env, not a drum machine. You cannot hear the result, so check it with vm_render_audio: it reports every trigger with its frame, and warns when an id has no declaration or a sound fired but was silent.
 - Collision (need a `tilemap`): `map_rect_overlap(x,y,w,h,flag)` (rect hits a flagged tile?); `collide_x(x,y,w,h,dx,flag)`/`collide_y(...,dy,flag)` MOVE a box by dx/dy and return the new coord snapped out of solid tiles — resolve X then Y each frame; `touching_left|right|floor|ceiling(x,y,w,h,flag)` (is a flagged tile against that edge?). Prefer these over hand-writing collision.
 
 Canonical example:
@@ -491,16 +491,12 @@ impl VmTool for RunFrames {
                 // The per-frame sound log is cleared each frame, so collect it as
                 // we go — this stream is the only way the model can tell that
                 // audio "happened" (the console is deliberately silent).
-                for s in &obs.sound {
-                    sounds.push(json!({
-                        "frame": obs.frame,
-                        "kind": match s.kind {
-                            crate::device::SoundKind::Sfx => "sfx",
-                            crate::device::SoundKind::Music => "music",
-                            crate::device::SoundKind::MusicStop => "music_stop",
-                        },
-                        "id": s.id,
-                    }));
+                for ev in &obs.sound {
+                    let mut j = crate::audio::event_json(ev);
+                    if let Some(o) = j.as_object_mut() {
+                        o.insert("frame".into(), json!(obs.frame));
+                    }
+                    sounds.push(j);
                 }
                 // A fault or halt mid-run is the interesting event: stop there so
                 // the returned observation is the one that shows the failure,
