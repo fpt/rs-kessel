@@ -265,6 +265,25 @@ impl SoundBank {
         id
     }
 
+    /// The kind of declaration already using `name`, if any.
+    ///
+    /// Instruments, effects and tracks bind their names into **one** namespace
+    /// — a game writes `sfx(boom)`, not `sfx.boom` — so a name can only mean
+    /// one thing. (A host with more kinds of its own, like `luax` with its
+    /// sprites, checks those too before asking this.)
+    pub fn name_kind(&self, name: &str) -> Option<&'static str> {
+        if self.instrument_names.iter().any(|n| n == name) {
+            return Some("instrument");
+        }
+        if self.sfx_names.iter().any(|n| n == name) {
+            return Some("sfx");
+        }
+        if self.track_names.iter().any(|n| n == name) {
+            return Some("track");
+        }
+        None
+    }
+
     pub fn track_id(&self, name: &str) -> Option<u16> {
         self.track_names
             .iter()
@@ -542,6 +561,18 @@ pub fn parse_rows(src: &str) -> Result<Vec<Row>, String> {
     Ok(rows)
 }
 
+/// The message for a name that is already spoken for.
+///
+/// One phrasing for both front-ends: a repeat of the same kind reads as a
+/// duplicate, and a clash across kinds says which one got there first.
+pub fn name_conflict(existing: &str, name: &str, adding: &str) -> String {
+    if existing == adding {
+        format!("duplicate {adding} '{name}'")
+    } else {
+        format!("'{name}' is already a {existing} — names are one namespace")
+    }
+}
+
 /// A problem with a bank, with the line it was on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BankError {
@@ -658,10 +689,10 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
                 line: *line,
                 message: format!("too many instruments (limit {MAX_INSTRUMENTS})"),
             });
-        } else if bank.instrument_id(name).is_some() {
+        } else if let Some(existing) = bank.name_kind(name) {
             errors.push(BankError {
                 line: *line,
-                message: format!("duplicate instrument '{name}'"),
+                message: name_conflict(existing, name, "instrument"),
             });
         } else {
             bank.add_instrument(name.clone(), patch);
@@ -688,10 +719,10 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
                 line: *line,
                 message: format!("too many sound effects (limit {MAX_SFX})"),
             });
-        } else if bank.sfx_id(name).is_some() {
+        } else if let Some(existing) = bank.name_kind(name) {
             errors.push(BankError {
                 line: *line,
-                message: format!("duplicate sfx '{name}'"),
+                message: name_conflict(existing, name, "sfx"),
             });
         } else {
             bank.add_sfx(name.clone(), def);
@@ -716,10 +747,10 @@ pub fn parse(src: &str) -> (SoundBank, Vec<BankError>) {
                 line: *line,
                 message: format!("too many tracks (limit {MAX_TRACKS})"),
             });
-        } else if bank.track_id(name).is_some() {
+        } else if let Some(existing) = bank.name_kind(name) {
             errors.push(BankError {
                 line: *line,
-                message: format!("duplicate track '{name}'"),
+                message: name_conflict(existing, name, "track"),
             });
         } else {
             bank.add_track(name.clone(), def);
@@ -1268,6 +1299,22 @@ sfx boom {
         assert_eq!(errors, vec![]);
         assert_eq!(bank.instrument_id("later"), Some(1));
         assert_eq!(bank.sfx[0].inst, 1, "forward reference resolved wrongly");
+    }
+
+    #[test]
+    fn a_name_may_only_mean_one_thing() {
+        // One namespace across the kinds, so `sfx(x)` cannot silently be the
+        // instrument called `x`.
+        let (_, errors) = parse(r#"instrument x { wave = sine }  sfx x { inst = x }"#);
+        assert!(
+            errors[0].message.contains("'x' is already a instrument"),
+            "{errors:?}"
+        );
+        let (_, errors) = parse(r#"instrument y { wave = sine }  track y { tempo = 4 }"#);
+        assert!(
+            errors[0].message.contains("'y' is already a instrument"),
+            "{errors:?}"
+        );
     }
 
     #[test]

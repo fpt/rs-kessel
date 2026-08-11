@@ -175,6 +175,14 @@ tools, and the player. One description (`audio::event_json`) now serves the
 observation record and `vm_run_frames`, so an agent cannot see two spellings of
 one frame.
 
+**A name means one thing.** Sprites, instruments, effects and tracks bind their
+names into one namespace and `gen_expr` resolves sprites first — so a game with
+both `sprite coin` and `sfx coin` compiled `sfx(coin)` to the *sprite's* id and
+triggered nothing. It assembled, ran, and was silent. `games/platform.lua`
+shipped that way until `games_audio.rs` counted it. Declaring a name twice
+across kinds is now a diagnostic, phrased by `bank::name_conflict` so both
+front-ends say the same thing.
+
 **An out-of-range note argument emits nothing**, and is counted in
 `Devices::sound_dropped`. Truncating puts `note_on(256, …)` on channel 0 and
 clamping puts it on 255 — and since every channel `0..=255` is one a game may
@@ -409,6 +417,12 @@ kessel/
 
 ## Testing notes
 
+- `crates/vm/tests/games_audio.rs` guards what every game in `games/` *sounds*
+  like: no trigger naming a declaration that does not exist, no note on a
+  missing instrument, nothing non-finite, nothing past full scale, and no mix
+  that keeps the master limiter engaged. The games that declare instruments must
+  also be audible, and the ones that don't must be silent — otherwise the whole
+  suite passes happily over silence.
 - `crates/vm/tests/games_compile.rs` guards every file in `games/`: each must
   compile with no diagnostics and survive 300 frames under both idle and rotating
   button input without faulting. Sources are `include_str!`'d, so renaming a game

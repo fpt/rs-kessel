@@ -4,6 +4,36 @@
 --
 --   kessel --play games/platform.lua
 
+-- Sound. These calls used to be bare numbers, from when the console recorded
+-- triggers and played nothing; an id with no declaration is silent now, so the
+-- three sounds this game always asked for are declared here.
+instrument chime {
+  wave = triangle
+  attack = 0  decay = 90  sustain = 0
+  reverb = 60
+  volume = 130
+}
+
+instrument squash {
+  wave = square
+  attack = 0  decay = 110  sustain = 0
+  pitch_env = -20  pitch_decay = 70   -- falling: something got flattened
+  filter = lpf  cutoff = 150
+  volume = 120
+}
+
+instrument hurt {
+  wave = noise
+  attack = 0  decay = 200  sustain = 0
+  pitch_env = -14  pitch_decay = 110
+  filter = lpf  cutoff = 110
+  volume = 150
+}
+
+sfx pickup { inst = chime   speed = 2  notes = "76 83" }
+sfx bounce { inst = squash  speed = 3  notes = "60" }
+sfx ouch   { inst = hurt    speed = 4  notes = "45 -" }
+
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {
   dpad = true       -- arrows move
@@ -148,7 +178,7 @@ function collect_coins()
     if coins[i].taken == 0 and rect_overlap(p.x, p.y, 8, 8, coins[i].x, coins[i].y, 8, 8) then
       coins[i].taken = 1
       coins_collected = coins_collected + 1
-      sfx(0)
+      sfx(pickup)
     end
     i = i + 1
   end
@@ -165,14 +195,14 @@ function resolve_enemies()
         p.y = enemies[i].y - 8
         p.y4 = p.y * 4
         p.vy = 0 - 11
-        sfx(1)
+        sfx(bounce)
       elseif invuln == 0 then
         invuln = 45
         knock_timer = 5
         if p.x < enemies[i].x then knock_dir = 0 - 1 else knock_dir = 1 end
         p.x = collide_x(p.x, p.y, 8, 8, knock_dir * 3, SOLID)
         p.vy = 0 - 8
-        sfx(2)
+        sfx(ouch)
         return
       end
     end

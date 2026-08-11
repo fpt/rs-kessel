@@ -36,8 +36,8 @@
 use std::collections::HashMap;
 
 use kessel_audio::bank::{
-    set_fx_field, set_instrument_field, set_sfx_field, set_track_field, OwnedValue, SfxDef,
-    SoundBank, TrackDef, MAX_INSTRUMENTS, MAX_SFX, MAX_TRACKS,
+    name_conflict, set_fx_field, set_instrument_field, set_sfx_field, set_track_field, OwnedValue,
+    SfxDef, SoundBank, TrackDef, MAX_INSTRUMENTS, MAX_SFX, MAX_TRACKS,
 };
 use kessel_audio::Patch;
 
@@ -1557,6 +1557,22 @@ impl Compiler {
         }
     }
 
+    /// The kind of declaration already using `name`, if any.
+    ///
+    /// Sprites, instruments, effects and tracks all bind their name as a
+    /// compile-time constant in **one** namespace, and `gen_expr` resolves
+    /// sprites first — so `sprite coin` and `sfx coin` in the same game made
+    /// `sfx(coin)` compile to the sprite's id and trigger nothing. It looked
+    /// right, assembled, ran, and was silent. One name means one thing.
+    fn name_taken(&self, name: &str) -> Option<&'static str> {
+        if self.sprite_ids.contains_key(name) {
+            return Some("sprite");
+        }
+        // The sound kinds are `kessel-audio`'s to answer for, so that a patch
+        // file and a game source reject the same collisions.
+        self.bank.name_kind(name)
+    }
+
     /// An `sfx`, `track`, or `instrument` name, as its id.
     ///
     /// Effects first, then tracks, then instruments: `sfx(boom)` and
@@ -1629,8 +1645,8 @@ impl Compiler {
                 // holding two patches while the name resolved to the second,
                 // so the ids in the metadata and the ids in the code would
                 // describe different instruments.
-                if self.instrument_ids.contains_key(name) {
-                    d.push(err(*line, format!("duplicate instrument '{name}'")));
+                if let Some(existing) = self.name_taken(name) {
+                    d.push(err(*line, name_conflict(existing, name, "instrument")));
                     continue;
                 }
                 let id = self.bank.add_instrument(name.clone(), patch) as u16;
@@ -1657,8 +1673,8 @@ impl Compiler {
                 // Check before adding, as with instruments above: adding first
                 // leaves the bank holding two definitions while the name
                 // resolves to the second.
-                if self.sfx_ids.contains_key(name) {
-                    d.push(err(*line, format!("duplicate sfx '{name}'")));
+                if let Some(existing) = self.name_taken(name) {
+                    d.push(err(*line, name_conflict(existing, name, "sfx")));
                     continue;
                 }
                 let id = self.bank.add_sfx(name.clone(), def);
@@ -1682,8 +1698,8 @@ impl Compiler {
                     d.push(err(*line, format!("too many tracks (limit {MAX_TRACKS})")));
                     continue;
                 }
-                if self.track_ids.contains_key(name) {
-                    d.push(err(*line, format!("duplicate track '{name}'")));
+                if let Some(existing) = self.name_taken(name) {
+                    d.push(err(*line, name_conflict(existing, name, "track")));
                     continue;
                 }
                 let id = self.bank.add_track(name.clone(), def);
