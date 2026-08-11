@@ -280,14 +280,32 @@ The C ABI is the portable layer and the JNI module is a wrapper over it, not a
 parallel implementation. That is what makes "iOS later" a build-system problem
 rather than a second port: Swift calls the header directly.
 
+Sound is **opt-in**: `kessel_player_audio_enable` gives a player a synth, and a
+host that never calls it has no engine, no delay lines, and nothing in `tick`
+beyond a push onto an empty queue.
+
+`kessel_player_audio_render` is the only entry point that does **not** take the
+console's lock. That is the whole design: the audio thread must never wait on a
+frame of game code, because a late buffer is a click in everything rather than a
+dropped frame in one thing. The two sides meet through a lock-free
+`kessel_audio::EventQueue` — the same queue the desktop player uses, which is
+why it lives in the synth crate and not in either host.
+
+It also never *waits* for the lock it does use (the engine's own): a contended
+synth renders silence rather than a late buffer.
+
 Two things the JNI layer owes the JVM, both load-bearing:
 
 - **Frames go through a direct `ByteBuffer`.** Returning a `byte[]` would put
   64 KiB on the Java heap sixty times a second. `framebuffer_rgba_into` exists
   in `kessel-vm` for exactly this.
-- **Panics stop at the boundary.** Unwinding into the JVM is UB, so the two
-  functions that run game code — `playerLoad`, `playerTick` — sit inside
-  `catch_unwind`.
+- **Panics stop at the boundary.** Unwinding into the JVM is UB, so the
+  functions that run game code or DSP — `playerLoad`, `playerTick`,
+  `playerAudioRender` — sit inside `catch_unwind`. The audio one matters most:
+  it runs on a thread the platform will kill the process over.
+- **`playerTick` goes through the C ABI, not `player.tick`.** The C entry point
+  is what collects the frame's sound into the queue; calling the inner player
+  directly is how Android ends up silent while every other host plays.
 
 ### Attaching (`kessel attach`)
 
@@ -331,6 +349,7 @@ additions rather than a rewrite.
 | `vm/Controls.kt` | Parses the ROM's control metadata, so the pad shows only the buttons that do something. |
 | `game/GameCatalog.kt` | The library, read from `assets/`. |
 | `game/GameEngine.kt` | The 60 Hz thread. Draws to a `Surface`; publishes only pause/halt to Compose. |
+| `game/AudioPlayer.kt` | The audio thread: an `AudioTrack` in `ENCODING_PCM_FLOAT`, fed from a direct `ByteBuffer` the native synth renders into. `write` blocks, which is what clocks the loop — there is no timer. |
 | `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. |
 | `ui/GameSurface.kt` | The `SurfaceView` the engine draws into. |
 | `ui/Gamepad.kt` | Geometry-driven touch pad — one `pointerInput` hit-tests every pointer, which is what makes multi-touch and d-pad diagonals work. |
@@ -342,6 +361,14 @@ and a compositor need an ownership handoff; `lockCanvas` /
 reader is done with the older one" is not — that was the first version, and
 nothing enforced the assumption. It also keeps 60 frames a second from meaning
 60 recompositions a second.
+
+**`KesselVm.renderAudio` is the one method that is not `@Synchronized`**, and it
+has to be: that lock is held for a whole frame of game code, and an audio
+callback waiting on it is an audible gap in everything. The price is that the
+caller owns the ordering — `GameEngine.stop()` joins the audio thread *before*
+the console is closed, and that join is the only thing making it safe. The
+handle is `@Volatile` so a late call is a no-op rather than a use-after-free,
+but volatility narrows the window; it does not close it.
 
 `destRect` is a pure function over plain ints rather than `android.graphics.Rect`
 because that class is a throwing stub on the unit-test classpath, and geometry

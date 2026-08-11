@@ -48,6 +48,15 @@ data class PlayState(
  */
 class GameEngine(private val vm: KesselVm) : AutoCloseable {
 
+    /**
+     * Sound, on its own thread.
+     *
+     * Not driven from [loop]: the render call is the one that does not take the
+     * console's lock, so keeping it off this thread is what stops a slow frame
+     * from becoming a click. See [AudioPlayer].
+     */
+    private val audio = AudioPlayer(vm)
+
     private val _state = MutableStateFlow(PlayState())
     val state: StateFlow<PlayState> = _state.asStateFlow()
 
@@ -133,6 +142,11 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         src.set(0, 0, dim, dim)
         _state.value = PlayState(controls = vm.controls())
 
+        // After the load, because the synth needs the ROM's instruments — and
+        // before the game thread, so the first frame's sound has somewhere to
+        // go. A device with no audio simply plays the game silently.
+        audio.start()
+
         running = true
         thread = Thread({ loop() }, "kessel-game").apply {
             // Above default, below the UI: frames should keep pace under load,
@@ -142,8 +156,15 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         }
     }
 
-    /** Stop the loop and wait for it. Safe to call twice. */
+    /**
+     * Stop the loop and wait for it. Safe to call twice.
+     *
+     * The audio thread goes first and is joined, because it is the one caller
+     * that reaches the console without the lock guarding `close` — see
+     * [dev.kessel.vm.KesselVm.renderAudio].
+     */
     fun stop() {
+        audio.stop()
         running = false
         thread?.let {
             it.interrupt()
@@ -159,9 +180,11 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      * reclaim, so an engine that is merely stopped leaks a whole `VmConsole`
      * every time the player backs out of a game.
      *
-     * [stop] comes first so the loop is not mid-tick, though the ordering is
-     * belt-and-braces — [KesselVm] serialises `close` against `tick` and turns a
-     * late tick into a no-op rather than a use-after-free.
+     * [stop] comes first so the loop is not mid-tick. For the game thread that
+     * is belt-and-braces — [KesselVm] serialises `close` against `tick` and
+     * turns a late tick into a no-op. For the *audio* thread it is not: that
+     * one renders without the lock, so joining it before the console is freed
+     * is the only thing making it safe.
      */
     override fun close() {
         stop()

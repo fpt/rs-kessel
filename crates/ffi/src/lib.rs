@@ -30,13 +30,41 @@
 mod android;
 
 use std::ffi::{c_char, CStr, CString};
+use std::sync::Arc;
 
+use kessel_audio::{AudioEngine, AudioEvent, EventQueue, SynthConfig};
 use kessel_vm::VmPlayer;
+use parking_lot::Mutex;
 
 /// Opaque handle. A pointer to this is what crosses the ABI; the layout is
 /// nobody else's business.
 pub struct KesselPlayer {
     player: VmPlayer,
+    /// Sound the game has asked for, waiting for the audio thread.
+    ///
+    /// Lock-free on purpose: this is the one path that crosses from the game
+    /// thread to the audio callback, and the callback must never wait on a
+    /// frame that is running arbitrary game code.
+    queue: Arc<EventQueue>,
+    /// The synth, once a host has asked for one. `None` means this player is
+    /// silent and costs nothing — no engine, no delay lines, no work in `tick`
+    /// beyond an empty queue push.
+    audio: Mutex<Option<AudioEngine>>,
+}
+
+/// Borrow the whole handle, or return `$default` if it is null.
+///
+/// The twin of [`player!`], for the entry points that need more than the
+/// console — the audio ones, which also reach the queue and the synth. Both
+/// exist as macros rather than functions so the null check and the deref stay
+/// inside one `unsafe` block per call site.
+macro_rules! handle {
+    ($ptr:expr, $default:expr) => {
+        match unsafe { $ptr.as_ref() } {
+            Some(h) => h,
+            None => return $default,
+        }
+    };
 }
 
 /// Borrow a handle, or return `$default` if it is null.
@@ -55,6 +83,8 @@ macro_rules! player {
 pub extern "C" fn kessel_player_new() -> *mut KesselPlayer {
     Box::into_raw(Box::new(KesselPlayer {
         player: VmPlayer::new(),
+        queue: Arc::new(EventQueue::new()),
+        audio: Mutex::new(None),
     }))
 }
 
@@ -93,6 +123,14 @@ pub unsafe extern "C" fn kessel_player_load(
     };
     let err = player.load(source.to_owned(), name.to_owned());
     if err.is_empty() {
+        // A new game means new instruments, and the old game's voices and
+        // reverb tail have no business ringing over it.
+        if let Some(handle) = unsafe { p.as_ref() } {
+            if let Some(engine) = handle.audio.lock().as_mut() {
+                engine.handle(AudioEvent::Panic);
+                engine.set_bank(handle.player.sound_bank());
+            }
+        }
         std::ptr::null_mut()
     } else {
         own_cstring(err)
@@ -101,9 +139,102 @@ pub unsafe extern "C" fn kessel_player_load(
 
 /// Advance one frame with `buttons` held (the `BTN_*` bitfield). A no-op until a
 /// ROM is loaded.
+///
+/// When audio is enabled this also hands the frame's sound to the audio thread.
+/// It never blocks on it: the queue is lock-free, and a full one drops the
+/// sound rather than stalling the game.
 #[no_mangle]
 pub extern "C" fn kessel_player_tick(p: *mut KesselPlayer, buttons: u8) {
-    player!(p, ()).tick(buttons);
+    let handle = handle!(p, ());
+    let queue = &handle.queue;
+    handle.player.tick_collecting(buttons, &mut |ev| {
+        queue.push(ev);
+    });
+}
+
+// ---- audio ----
+
+/// Give this player a synth, running at `sample_rate`.
+///
+/// Opt-in: a host that never calls this pays nothing at all — no engine, no
+/// delay lines, and nothing in `tick` beyond a push onto an empty queue. Call
+/// it once, before starting an audio thread, and call
+/// [`kessel_player_audio_render`] from that thread.
+///
+/// Returns false only for a null handle. Enabling twice replaces the engine,
+/// which is how a host changes sample rate.
+#[no_mangle]
+pub extern "C" fn kessel_player_audio_enable(p: *mut KesselPlayer, sample_rate: u32) -> bool {
+    let handle = handle!(p, false);
+    let mut engine = AudioEngine::new(SynthConfig {
+        sample_rate: sample_rate.max(8_000),
+        ..SynthConfig::default()
+    });
+    engine.set_bank(handle.player.sound_bank());
+    *handle.audio.lock() = Some(engine);
+    true
+}
+
+/// Render `frames` stereo frames into `out`, which must hold `frames * 2`
+/// `f32`s. Returns the frames written, or 0.
+///
+/// **Call this from the audio thread and nowhere else.** It never touches the
+/// console's lock, so it cannot be delayed by a frame of game code — that
+/// separation is the whole point, and calling it from the game thread throws it
+/// away.
+///
+/// It also never *waits* for the lock it does use: a contended engine yields
+/// silence rather than a late buffer, because an audio callback that blocks is
+/// an audible gap in everything, not just the sound it was waiting for.
+///
+/// # Safety
+///
+/// `out` must be valid for `frames * 2` `f32` writes.
+#[no_mangle]
+pub unsafe extern "C" fn kessel_player_audio_render(
+    p: *mut KesselPlayer,
+    out: *mut f32,
+    frames: u32,
+) -> u32 {
+    if out.is_null() || frames == 0 {
+        return 0;
+    }
+    let buf = unsafe { std::slice::from_raw_parts_mut(out, frames as usize * 2) };
+    let Some(handle) = (unsafe { p.as_ref() }) else {
+        buf.fill(0.0);
+        return 0;
+    };
+    // Game code cannot reach this lock, so the only contention is another
+    // audio thread — a host bug, and one that must not become a stall.
+    let Some(mut guard) = handle.audio.try_lock() else {
+        buf.fill(0.0);
+        return 0;
+    };
+    let Some(engine) = guard.as_mut() else {
+        buf.fill(0.0);
+        return 0;
+    };
+
+    // Game code runs nowhere near here, but the synth is still Rust, and
+    // unwinding into a JVM or an iOS audio thread is undefined behaviour.
+    let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        while let Some(ev) = handle.queue.pop() {
+            engine.handle(ev);
+        }
+        engine.render(buf);
+    }))
+    .is_ok();
+    if !ok {
+        buf.fill(0.0);
+        return 0;
+    }
+    frames
+}
+
+/// Sounds dropped because the queue was full — a host can show it, or ignore it.
+#[no_mangle]
+pub extern "C" fn kessel_player_audio_dropped(p: *mut KesselPlayer) -> u64 {
+    handle!(p, 0).queue.rejected()
 }
 
 /// Screen edge length in pixels; the framebuffer is `dim * dim * 4` bytes.
@@ -209,6 +340,8 @@ unsafe fn borrow_str<'a>(s: *const c_char) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    // The audio tests below drive the ABI exactly as a host does: enable, tick
+    // on one thread, render on another.
     use super::*;
     use kessel_vm::device::{BTN_RIGHT, CLASSIC_DIM};
 
@@ -219,6 +352,14 @@ mod tests {
         local x = 32
         function update() if btn(RIGHT) then x = x + 1 end end
         function draw() cls(0)  pset(x, 60, 7)  entity(x, 60, 1) end
+    "#;
+
+    const BEEPER: &str = r#"
+        instrument blip { wave = square  attack = 0  decay = 80  sustain = 0 }
+        sfx ping { inst = blip  notes = "72" }
+        local t: word
+        function update() t = t + 1  if t == 2 then sfx(ping) end end
+        function draw() cls(0) end
     "#;
 
     /// Load `src` through the ABI, returning the diagnostics string (empty on
@@ -369,6 +510,140 @@ mod tests {
             // A null destination is refused even with a live player.
             let p = kessel_player_new();
             assert!(!kessel_player_framebuffer(p, std::ptr::null_mut(), 0));
+            kessel_player_free(p);
+        }
+    }
+
+    fn peak(buf: &[f32]) -> f32 {
+        buf.iter().fold(0.0f32, |a, s| a.max(s.abs()))
+    }
+
+    /// Render `frames` stereo frames through the ABI.
+    unsafe fn render(p: *mut KesselPlayer, frames: u32) -> Vec<f32> {
+        let mut buf = vec![0.0f32; frames as usize * 2];
+        let n = unsafe { kessel_player_audio_render(p, buf.as_mut_ptr(), frames) };
+        assert_eq!(n, frames);
+        buf
+    }
+
+    #[test]
+    fn a_player_is_silent_until_audio_is_enabled() {
+        // Opt-in: a host that never asks for sound gets none, and pays for none.
+        unsafe {
+            let p = kessel_player_new();
+            assert!(load(p, BEEPER, "g.lua").is_empty());
+            for _ in 0..10 {
+                kessel_player_tick(p, 0);
+            }
+            let mut buf = [0.0f32; 64];
+            assert_eq!(kessel_player_audio_render(p, buf.as_mut_ptr(), 32), 0);
+            assert_eq!(peak(&buf), 0.0);
+            kessel_player_free(p);
+        }
+    }
+
+    #[test]
+    fn ticking_then_rendering_produces_the_games_sound() {
+        unsafe {
+            let p = kessel_player_new();
+            assert!(load(p, BEEPER, "g.lua").is_empty());
+            assert!(kessel_player_audio_enable(p, 48_000));
+
+            // Silence before the game asks for anything.
+            assert_eq!(peak(&render(p, 800)), 0.0);
+
+            for _ in 0..3 {
+                kessel_player_tick(p, 0);
+            }
+            let out = render(p, 4_000);
+            assert!(peak(&out) > 0.1, "the game's sound never arrived");
+            assert!(out.iter().all(|v| v.is_finite()));
+            kessel_player_free(p);
+        }
+    }
+
+    #[test]
+    fn loading_a_new_game_reinstalls_the_bank_and_cuts_the_old_one_off() {
+        unsafe {
+            let p = kessel_player_new();
+            assert!(load(p, BEEPER, "g.lua").is_empty());
+            assert!(kessel_player_audio_enable(p, 48_000));
+            for _ in 0..3 {
+                kessel_player_tick(p, 0);
+            }
+            assert!(peak(&render(p, 400)) > 0.0);
+
+            // A game with no sound at all: the previous game's ringing note
+            // must not carry over into it.
+            assert!(load(p, MOVER, "m.lua").is_empty());
+            for _ in 0..3 {
+                kessel_player_tick(p, 0);
+            }
+            assert_eq!(peak(&render(p, 4_000)), 0.0, "the old game kept playing");
+            kessel_player_free(p);
+        }
+    }
+
+    #[test]
+    fn every_audio_entry_point_tolerates_a_null_handle() {
+        unsafe {
+            assert!(!kessel_player_audio_enable(std::ptr::null_mut(), 48_000));
+            let mut buf = [1.0f32; 8];
+            assert_eq!(
+                kessel_player_audio_render(std::ptr::null_mut(), buf.as_mut_ptr(), 4),
+                0
+            );
+            assert_eq!(peak(&buf), 0.0, "a null handle must still clear the buffer");
+            assert_eq!(kessel_player_audio_dropped(std::ptr::null_mut()), 0);
+
+            // A null output buffer is a caller bug, not a crash.
+            let p = kessel_player_new();
+            assert_eq!(kessel_player_audio_render(p, std::ptr::null_mut(), 4), 0);
+            kessel_player_free(p);
+        }
+    }
+
+    /// The arrangement every host actually uses: the game ticks on one thread
+    /// while the audio callback renders on another.
+    ///
+    /// The render path must not touch the console's lock — if it did, this
+    /// would still pass, but a slow frame would become an audible gap. What it
+    /// does catch is the shape being wrong: a deadlock, a panic across the
+    /// boundary, or nothing ever reaching the synth.
+    #[test]
+    fn the_game_thread_and_the_audio_thread_can_run_at_once() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct Handle(*mut KesselPlayer);
+        // Safe for the same reason the C ABI documents: the console is behind a
+        // mutex and the queue is lock-free. Only `free` may not race.
+        unsafe impl Send for Handle {}
+
+        unsafe {
+            let p = kessel_player_new();
+            assert!(load(p, BEEPER, "g.lua").is_empty());
+            assert!(kessel_player_audio_enable(p, 48_000));
+
+            let stop = Arc::new(AtomicBool::new(false));
+            let ticker_stop = Arc::clone(&stop);
+            let ticker_handle = Handle(p);
+            let ticker = std::thread::spawn(move || {
+                let h = ticker_handle;
+                while !ticker_stop.load(Ordering::Relaxed) {
+                    kessel_player_tick(h.0, 0);
+                    std::thread::yield_now();
+                }
+            });
+
+            let mut heard = false;
+            for _ in 0..200 {
+                if peak(&render(p, 256)) > 0.0 {
+                    heard = true;
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+            ticker.join().unwrap();
+            assert!(heard, "nothing reached the synth from the other thread");
             kessel_player_free(p);
         }
     }

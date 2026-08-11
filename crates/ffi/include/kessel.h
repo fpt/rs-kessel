@@ -82,6 +82,30 @@ bool kessel_player_framebuffer(KesselPlayer *p, uint8_t *dst, size_t len);
  */
 char *kessel_player_controls_json(KesselPlayer *p);
 
+/*
+ * Give this console a synth at `sample_rate`. Opt-in: a console that never gets
+ * one costs nothing, and stays silent.
+ *
+ * Call once, before starting an audio thread; call
+ * kessel_player_audio_render() from that thread and nowhere else.
+ */
+bool kessel_player_audio_enable(KesselPlayer *p, uint32_t sample_rate);
+
+/*
+ * Render `frames` stereo frames into `out`, which must hold `frames * 2`
+ * floats. Returns the frames written, or 0 (with `out` zeroed) when there is no
+ * synth.
+ *
+ * Safe to call while another thread is ticking the game: this path never takes
+ * the console's lock, so a slow frame cannot delay a buffer. It also never
+ * waits — a contended synth yields silence rather than a late buffer, because
+ * an audio callback that blocks is a gap in everything, not just this sound.
+ */
+uint32_t kessel_player_audio_render(KesselPlayer *p, float *out, uint32_t frames);
+
+/* Sounds dropped because the game got ahead of the audio thread. */
+uint64_t kessel_player_audio_dropped(KesselPlayer *p);
+
 bool kessel_player_has_rom(KesselPlayer *p);
 bool kessel_player_is_paused(KesselPlayer *p);
 bool kessel_player_is_halted(KesselPlayer *p);

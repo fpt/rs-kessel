@@ -50,6 +50,29 @@ internal object KesselNative {
     /** The loaded ROM's control metadata as JSON. Always a parseable object. */
     external fun playerControlsJson(handle: Long): String
 
+    /**
+     * Give the console a synth at [sampleRate]. Call once, before starting an
+     * audio thread. A console that never gets one stays silent and costs
+     * nothing.
+     */
+    external fun playerAudioEnable(handle: Long, sampleRate: Int): Boolean
+
+    /**
+     * Render [frames] stereo frames of little-endian f32 into [dst], returning
+     * the frames written.
+     *
+     * [dst] **must** be direct and hold at least `frames * 2 * 4` bytes.
+     *
+     * Called from the audio thread. Unlike every other function here it does
+     * not reach the console's lock, so a slow frame of game code cannot delay
+     * it — which is the entire reason sound on this platform is not simply
+     * rendered inside [playerTick].
+     */
+    external fun playerAudioRender(handle: Long, dst: ByteBuffer, frames: Int): Int
+
+    /** Sounds dropped because the game got ahead of the audio thread. */
+    external fun playerAudioDropped(handle: Long): Long
+
     external fun playerHasRom(handle: Long): Boolean
 
     external fun playerIsPaused(handle: Long): Boolean
