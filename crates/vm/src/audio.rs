@@ -22,8 +22,53 @@ use kessel_audio::{
     samples_per_frame, wav, AudioEngine, AudioEvent, SynthConfig, DEFAULT_SAMPLE_RATE,
 };
 
-use crate::device::SoundKind;
 use crate::VmConsole;
+
+/// One sound event as JSON, for the observation record and `vm_run_frames`.
+///
+/// Defined once: two spellings of "what the game asked for" is how an agent
+/// ends up debugging the difference between two reports of the same frame.
+pub fn event_json(ev: &AudioEvent) -> serde_json::Value {
+    match *ev {
+        AudioEvent::PlaySfx { id } => serde_json::json!({"kind": "sfx", "id": id}),
+        AudioEvent::PlayMusic { id } => serde_json::json!({"kind": "music", "id": id}),
+        AudioEvent::StopMusic => serde_json::json!({"kind": "music_stop"}),
+        AudioEvent::Play {
+            inst,
+            note,
+            vel,
+            frames,
+        } => serde_json::json!({
+            "kind": "play", "inst": inst, "note": note, "vel": vel, "frames": frames,
+        }),
+        AudioEvent::NoteOn {
+            chan,
+            inst,
+            note,
+            vel,
+        } => serde_json::json!({
+            "kind": "note_on", "chan": chan, "inst": inst, "note": note, "vel": vel,
+        }),
+        AudioEvent::NoteOff { chan } => serde_json::json!({"kind": "note_off", "chan": chan}),
+        AudioEvent::Panic => serde_json::json!({"kind": "panic"}),
+    }
+}
+
+/// Name an event for the trace: what kind it is, and the id it names.
+///
+/// A note has no single id, so its instrument and pitch are packed into one —
+/// enough for a machine to compare, while `trace` supplies the readable name.
+fn describe(ev: AudioEvent) -> (&'static str, u16) {
+    match ev {
+        AudioEvent::PlaySfx { id } => ("sfx", id),
+        AudioEvent::PlayMusic { id } => ("music", id),
+        AudioEvent::StopMusic => ("music_stop", 0),
+        AudioEvent::Play { inst, note, .. } => ("play", ((inst as u16) << 8) | note as u16),
+        AudioEvent::NoteOn { inst, note, .. } => ("note_on", ((inst as u16) << 8) | note as u16),
+        AudioEvent::NoteOff { chan } => ("note_off", chan as u16),
+        AudioEvent::Panic => ("panic", 0),
+    }
+}
 
 /// One sound the game triggered, and when.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +215,30 @@ impl AudioRender {
 pub const MAX_RENDER_FRAMES: u64 = 1800;
 
 impl VmConsole {
+    /// Describe one event for the trace, naming the declaration behind an id
+    /// where there is one.
+    fn trace(&self, ev: AudioEvent, frame: u64) -> AudioTrace {
+        let (kind, id) = describe(ev);
+        let name = match ev {
+            AudioEvent::PlaySfx { id } => self.sound_bank().sfx_names.get(id as usize).cloned(),
+            AudioEvent::PlayMusic { id } => self.sound_bank().track_names.get(id as usize).cloned(),
+            // A note reads better as `piano 67` than as the packed id the
+            // trace carries for machine comparison.
+            AudioEvent::Play { inst, note, .. } | AudioEvent::NoteOn { inst, note, .. } => self
+                .sound_bank()
+                .instrument_names
+                .get(inst as usize)
+                .map(|n| format!("{n} {note}")),
+            _ => None,
+        };
+        AudioTrace {
+            frame,
+            kind,
+            id,
+            name,
+        }
+    }
+
     /// Run the loaded ROM forward and render its audio.
     ///
     /// **This advances the machine**, exactly like `run_frame` — it is the same
@@ -198,24 +267,9 @@ impl VmConsole {
         let mut block = vec![0.0f32; spf * 2];
 
         // Whatever `init()` asked for happens before frame 0's samples.
-        for s in self.take_reset_sound() {
-            let (kind, event) = match s.kind {
-                SoundKind::Sfx => ("sfx", AudioEvent::PlaySfx { id: s.id }),
-                SoundKind::Music => ("music", AudioEvent::PlayMusic { id: s.id }),
-                SoundKind::MusicStop => ("music_stop", AudioEvent::StopMusic),
-            };
-            let name = match s.kind {
-                SoundKind::Sfx => self.sound_bank().sfx_names.get(s.id as usize).cloned(),
-                SoundKind::Music => self.sound_bank().track_names.get(s.id as usize).cloned(),
-                SoundKind::MusicStop => None,
-            };
-            summary.events.push(AudioTrace {
-                frame: 0,
-                kind,
-                id: s.id,
-                name,
-            });
-            engine.submit(event, 0);
+        for ev in self.take_reset_sound() {
+            summary.events.push(self.trace(ev, 0));
+            engine.submit(ev, 0);
         }
 
         let mut frame = 0u64;
@@ -230,26 +284,11 @@ impl VmConsole {
                 // Timestamps are relative to the render, which always starts at
                 // sample zero; the *trace* uses the console's own counter.
                 let at = engine.frame_at(frame);
-                for s in &obs.sound {
-                    let (kind, event) = match s.kind {
-                        SoundKind::Sfx => ("sfx", AudioEvent::PlaySfx { id: s.id }),
-                        SoundKind::Music => ("music", AudioEvent::PlayMusic { id: s.id }),
-                        SoundKind::MusicStop => ("music_stop", AudioEvent::StopMusic),
-                    };
-                    let name = match s.kind {
-                        SoundKind::Sfx => self.sound_bank().sfx_names.get(s.id as usize).cloned(),
-                        SoundKind::Music => {
-                            self.sound_bank().track_names.get(s.id as usize).cloned()
-                        }
-                        SoundKind::MusicStop => None,
-                    };
-                    summary.events.push(AudioTrace {
-                        frame: obs.frame,
-                        kind,
-                        id: s.id,
-                        name,
-                    });
-                    engine.submit(event, at);
+                // Cloned so the trace can look names up on `self` while the
+                // borrow of the observation is done with.
+                for ev in obs.sound.clone() {
+                    summary.events.push(self.trace(ev, obs.frame));
+                    engine.submit(ev, at);
                 }
                 engine.render(&mut block);
                 samples.extend_from_slice(&block);
@@ -454,6 +493,89 @@ function draw() cls(0) end
         assert_eq!(r.summary.events[0].kind, "music");
         assert_eq!(r.summary.events[0].frame, 0);
         assert!(r.summary.peak > 0.1, "the track never played");
+    }
+
+    #[test]
+    fn play_reaches_the_synth_with_every_argument_intact() {
+        // The note ports latch three values and commit on the fourth. A wrong
+        // register or a wrong commit order does not fail — it plays a
+        // different note, which is why every field is checked.
+        let mut c = console(
+            r#"
+            instrument piano { wave = triangle  attack = 0  decay = 200  sustain = 0 }
+            local t: word
+            function update()
+              t = t + 1
+              if t == 2 then play(piano, 67, 200, 15) end
+            end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(0, 30)]).unwrap();
+        assert_eq!(r.summary.events.len(), 1);
+        assert_eq!(r.summary.events[0].kind, "play");
+        assert_eq!(r.summary.events[0].name.as_deref(), Some("piano 67"));
+        assert_eq!(r.summary.voices_started, 1);
+        assert!(r.summary.peak > 0.1, "the note was silent");
+    }
+
+    #[test]
+    fn a_held_note_lasts_until_note_off() {
+        // `play` is fire-and-forget; `note_on` holds until the game says so.
+        // The difference is the whole reason both exist.
+        let src = |release: &str| {
+            format!(
+                r#"
+                instrument organ {{ wave = square  attack = 0  decay = 0  sustain = 255  release = 10 }}
+                local t: word
+                function update()
+                  t = t + 1
+                  if t == 2 then note_on(0, organ, 60, 200) end
+                  {release}
+                end
+                function draw() cls(0) end
+                "#
+            )
+        };
+        // Held: still sounding at the end of a long render.
+        let mut held = console(&src(""));
+        let r = held.render_audio(&[(0, 90)]).unwrap();
+        let spf = kessel_audio::samples_per_frame(r.summary.sample_rate) as usize;
+        let last = &r.samples[r.samples.len() - spf * 2..];
+        assert!(
+            last.iter().fold(0.0f32, |a, s| a.max(s.abs())) > 0.05,
+            "a held note stopped on its own"
+        );
+
+        // Released: silent well before the end.
+        let mut released = console(&src("if t == 20 then note_off(0) end"));
+        let r = released.render_audio(&[(0, 90)]).unwrap();
+        let kinds: Vec<&str> = r.summary.events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, ["note_on", "note_off"]);
+        let last = &r.samples[r.samples.len() - spf * 2..];
+        assert_eq!(
+            last.iter().fold(0.0f32, |a, s| a.max(s.abs())),
+            0.0,
+            "note_off did not release the note"
+        );
+    }
+
+    #[test]
+    fn a_note_naming_no_instrument_is_counted_not_guessed() {
+        let mut c = console(
+            r#"
+            local t: word
+            function update() t = t + 1  if t == 2 then play(9, 60, 200, 10) end end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(0, 10)]).unwrap();
+        assert_eq!(r.summary.notes_dropped, 1);
+        assert_eq!(r.summary.peak, 0.0);
+        assert!(r
+            .summary
+            .report()
+            .contains("instrument the bank doesn't have"));
     }
 
     #[test]

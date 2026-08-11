@@ -649,6 +649,7 @@ const GAMES: &[(&str, &str)] = &[
     ("brick.lua", include_str!("../../../games/brick.lua")),
     ("mover.lua", include_str!("../../../games/mover.lua")),
     ("outrun.lua", include_str!("../../../games/outrun.lua")),
+    ("piano.lua", include_str!("../../../games/piano.lua")),
     ("platform.lua", include_str!("../../../games/platform.lua")),
     ("rogue.lua", include_str!("../../../games/rogue.lua")),
     ("shooter.lua", include_str!("../../../games/shooter.lua")),
@@ -804,6 +805,43 @@ games_ok! {
     rogue_ok => "rogue",
     tetris_ok => "tetris",
     sokoban_ok => "sokoban",
+    piano_ok => "piano",
+}
+
+/// piano.lua is the reference for the note-level sound API, so catching a note
+/// must actually emit a `play` for that lane's pitch.
+///
+/// The catcher starts in lane 2 and the pattern drops a note there, so an idle
+/// run catches one without any input — which is what makes this checkable
+/// without scripting the whole game.
+#[test]
+fn piano_plays_the_note_it_catches() {
+    use kessel_audio::AudioEvent;
+
+    const PIANO: &str = include_str!("../../../games/piano.lua");
+    let mut c = VmConsole::new();
+    c.write_source("piano.lua", PIANO).unwrap();
+    assert!(c.assemble("piano.lua").unwrap().ok());
+    c.load_rom("piano.lua").unwrap();
+
+    // The music starts in `init()`, before any frame.
+    assert_eq!(c.take_reset_sound(), [AudioEvent::PlayMusic { id: 0 }]);
+
+    let mut played = Vec::new();
+    for _ in 0..300 {
+        let obs = c.run_frame(0);
+        for ev in &obs.sound {
+            if let AudioEvent::Play { note, inst, .. } = ev {
+                played.push((*inst, *note));
+            }
+        }
+    }
+    assert!(!played.is_empty(), "nothing was ever caught");
+    // Lane 2 of a C major pentatonic is E — instrument 0 is `piano`.
+    assert!(
+        played.iter().all(|(inst, note)| *inst == 0 && *note == 64),
+        "caught the wrong pitch: {played:?}"
+    );
 }
 
 /// spectrum.lua is the reference for the video features, so its ROM must

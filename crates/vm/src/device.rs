@@ -15,7 +15,7 @@
 //! | 0x6 | console | 0 write-byte |
 //! | 0x7 | tilemap | 0 base · 1 width · 2 tx · 3 ty · 4 sx · 5 sy · 6 tw · 7 th · 8 draw |
 //! | 0x8 | time    | 0 frame-count (read) |
-//! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop (recorded, no audio yet) |
+//! | 0x9 | sound   | 0 sfx(id) · 1 music(id) · 2 music-stop · 3 frames · 4 velocity · 5 note · 6 inst→play · 7 inst · 8 chan→note-on · 9 chan→note-off |
 //! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 //! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
@@ -160,22 +160,18 @@ pub struct Entity {
     pub y: u16,
 }
 
-/// What a game asked the (silent, for now) sound device to do this frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SoundKind {
-    Sfx,
-    Music,
-    MusicStop,
-}
-
-/// A sound trigger the running game emitted this frame. The VM stays
-/// deterministic and headless — these are recorded for the observation record
-/// (so the agent sees that a sound "played") and for a future host audio path;
-/// nothing is synthesized yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SoundEvent {
-    pub kind: SoundKind,
-    pub id: u16,
+/// Latched arguments for the note-level sound ports.
+///
+/// The multi-argument ports work like the palette's: each argument is written
+/// to its own register and the *last* one commits. A stack machine hands its
+/// arguments back in reverse, so the register that commits is the one holding
+/// the call's **first** argument — `play(inst, …)` commits on `inst`.
+#[derive(Debug, Clone, Copy, Default)]
+struct NoteLatch {
+    frames: u16,
+    vel: u16,
+    note: u16,
+    inst: u16,
 }
 
 /// The 16 colours a ROM gets without touching the palette (PICO-8's).
@@ -287,9 +283,11 @@ pub struct Devices {
     pub entities: Vec<Entity>,
     /// Bytes written to the console this frame (cleared each frame).
     pub console: Vec<u8>,
-    /// Sound triggers emitted this frame (cleared each frame). Recorded only;
+    /// Sound the game asked for this frame (cleared each frame). Recorded only;
     /// no audio is synthesized yet.
-    pub sound: Vec<SoundEvent>,
+    pub sound: Vec<kessel_audio::AudioEvent>,
+    /// Pending arguments for the note ports.
+    note_latch: NoteLatch,
     /// Persistent storage (survives resets? no — power-on state, but survives frames).
     pub storage: [u8; 256],
 
@@ -363,6 +361,7 @@ impl Devices {
             entities: Vec::new(),
             console: Vec::new(),
             sound: Vec::new(),
+            note_latch: NoteLatch::default(),
             storage: [0u8; 256],
             rng_state: 0x1234_5678,
             storage_addr: 0,
@@ -513,20 +512,36 @@ impl Devices {
                 0x8 => self.draw_map(mem),
                 _ => {}
             },
-            // Sound device: record a trigger (no audio synthesized yet).
+            // Sound device: record what the game asked for. The machine stays
+            // silent and deterministic; a host renders the log.
             0x9 => match reg {
-                0x0 => self.sound.push(SoundEvent {
-                    kind: SoundKind::Sfx,
-                    id: val,
+                0x0 => self
+                    .sound
+                    .push(kessel_audio::AudioEvent::PlaySfx { id: val }),
+                0x1 => self
+                    .sound
+                    .push(kessel_audio::AudioEvent::PlayMusic { id: val }),
+                0x2 => self.sound.push(kessel_audio::AudioEvent::StopMusic),
+                // Latches, then a commit. See `NoteLatch`.
+                0x3 => self.note_latch.frames = val,
+                0x4 => self.note_latch.vel = val,
+                0x5 => self.note_latch.note = val,
+                0x6 => self.sound.push(kessel_audio::AudioEvent::Play {
+                    inst: val as u8,
+                    note: self.note_latch.note as u8 & 0x7f,
+                    vel: self.note_latch.vel.min(255) as u8,
+                    frames: self.note_latch.frames,
                 }),
-                0x1 => self.sound.push(SoundEvent {
-                    kind: SoundKind::Music,
-                    id: val,
+                0x7 => self.note_latch.inst = val,
+                0x8 => self.sound.push(kessel_audio::AudioEvent::NoteOn {
+                    chan: val as u8,
+                    inst: self.note_latch.inst as u8,
+                    note: self.note_latch.note as u8 & 0x7f,
+                    vel: self.note_latch.vel.min(255) as u8,
                 }),
-                0x2 => self.sound.push(SoundEvent {
-                    kind: SoundKind::MusicStop,
-                    id: 0,
-                }),
+                0x9 => self
+                    .sound
+                    .push(kessel_audio::AudioEvent::NoteOff { chan: val as u8 }),
                 _ => {}
             },
             // Composite-sprite device: draw a w×h block of sheet tiles at the

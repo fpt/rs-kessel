@@ -69,7 +69,7 @@ pub struct VmConsole {
     /// cleared at the start of the next one — so a game that starts its music
     /// in `init()` would have that trigger quietly dropped by every host. It is
     /// parked here instead and belongs to whatever frame comes first.
-    reset_sound: Vec<device::SoundEvent>,
+    reset_sound: Vec<kessel_audio::AudioEvent>,
     /// Bumped whenever the timeline jumps — reset, restore, or a ROM load.
     ///
     /// A host holding a live synth watches this and turns a change into
@@ -300,7 +300,7 @@ impl VmConsole {
     /// A host calls this once after loading and treats the result as belonging
     /// to the first frame. See [`reset_sound`](Self::reset_sound) — without it,
     /// `music()` in `init()` is silent everywhere.
-    pub fn take_reset_sound(&mut self) -> Vec<device::SoundEvent> {
+    pub fn take_reset_sound(&mut self) -> Vec<kessel_audio::AudioEvent> {
         std::mem::take(&mut self.reset_sound)
     }
 
@@ -467,7 +467,7 @@ pub struct Observation {
     pub data_stack: Vec<u16>,
     pub return_stack_depth: usize,
     pub entities: Vec<device::Entity>,
-    pub sound: Vec<device::SoundEvent>,
+    pub sound: Vec<kessel_audio::AudioEvent>,
     pub halted: bool,
 }
 
@@ -490,14 +490,7 @@ impl Observation {
             "entities": self.entities.iter().map(|e| serde_json::json!({
                 "tag": e.tag, "x": e.x, "y": e.y,
             })).collect::<Vec<_>>(),
-            "sound": self.sound.iter().map(|s| serde_json::json!({
-                "kind": match s.kind {
-                    device::SoundKind::Sfx => "sfx",
-                    device::SoundKind::Music => "music",
-                    device::SoundKind::MusicStop => "music_stop",
-                },
-                "id": s.id,
-            })).collect::<Vec<_>>(),
+            "sound": self.sound.iter().map(audio::event_json).collect::<Vec<_>>(),
         })
     }
 }

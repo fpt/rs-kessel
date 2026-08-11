@@ -108,24 +108,16 @@ impl VmPlayer {
         }
         // `init()` ran at load, outside any frame. Its triggers belong to the
         // first frame that runs, or they are lost.
-        for s in c.take_reset_sound() {
-            sink(match s.kind {
-                crate::device::SoundKind::Sfx => kessel_audio::AudioEvent::PlaySfx { id: s.id },
-                crate::device::SoundKind::Music => kessel_audio::AudioEvent::PlayMusic { id: s.id },
-                crate::device::SoundKind::MusicStop => kessel_audio::AudioEvent::StopMusic,
-            });
+        for ev in c.take_reset_sound() {
+            sink(ev);
         }
         let before = c.frame;
         c.play_tick(buttons);
         if c.frame == before {
             return; // paused
         }
-        for s in &c.vm.devices.sound {
-            sink(match s.kind {
-                crate::device::SoundKind::Sfx => kessel_audio::AudioEvent::PlaySfx { id: s.id },
-                crate::device::SoundKind::Music => kessel_audio::AudioEvent::PlayMusic { id: s.id },
-                crate::device::SoundKind::MusicStop => kessel_audio::AudioEvent::StopMusic,
-            });
+        for ev in &c.vm.devices.sound {
+            sink(*ev);
         }
     }
 

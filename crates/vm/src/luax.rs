@@ -1472,6 +1472,9 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "sfx" => (1, false),
         "music" => (1, false),
         "music_stop" => (0, false),
+        "play" => (4, false),
+        "note_on" => (4, false),
+        "note_off" => (1, false),
         _ => return None,
     })
 }
@@ -2539,7 +2542,15 @@ impl Compiler {
             "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
             "music" => "#91 DEO",           // ( id ) start a music track
             "music_stop" => "#00 #92 DEO",  // stop music
-            "rnd" => "#30 DEI SWAP MOD",    // ( n ) -> rand % n
+            // The note ports latch and commit on the register holding the
+            // call's FIRST argument, which a stack machine hands back last —
+            // the same shape as `pal` above.
+            // ( inst note vel frames ) play a note for `frames` frames
+            "play" => "#93 DEO #94 DEO #95 DEO #96 DEO",
+            // ( chan inst note vel ) hold a note on a game-owned channel
+            "note_on" => "#94 DEO #95 DEO #97 DEO #98 DEO",
+            "note_off" => "#99 DEO",     // ( chan ) release that channel
+            "rnd" => "#30 DEI SWAP MOD", // ( n ) -> rand % n
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
             "entity" => {
@@ -3028,8 +3039,9 @@ fn fn_has_return(decl: &Decl) -> bool {
 mod tests {
     use super::*;
     use crate::assembler::assemble;
-    use crate::device::{SoundKind, BTN_A, BTN_LEFT, BTN_RIGHT};
+    use crate::device::{BTN_A, BTN_LEFT, BTN_RIGHT};
     use crate::VmConsole;
+    use kessel_audio::AudioEvent;
 
     fn compile_ok(src: &str) -> String {
         let c = compile(src);
@@ -4050,13 +4062,13 @@ mod tests {
         "#;
         let mut c = load(src);
         let o1 = c.run_frame(0);
-        assert_eq!(o1.sound.len(), 1);
-        assert_eq!(o1.sound[0].kind, SoundKind::Sfx);
-        assert_eq!(o1.sound[0].id, 3);
+        assert_eq!(o1.sound, [AudioEvent::PlaySfx { id: 3 }]);
         let o2 = c.run_frame(0);
-        assert_eq!(o2.sound.len(), 2); // music then music_stop, in order
-        assert_eq!(o2.sound[0].kind, SoundKind::Music);
-        assert_eq!(o2.sound[1].kind, SoundKind::MusicStop);
+        // music then music_stop, in order
+        assert_eq!(
+            o2.sound,
+            [AudioEvent::PlayMusic { id: 1 }, AudioEvent::StopMusic]
+        );
         let o3 = c.run_frame(0);
         assert!(o3.sound.is_empty()); // cleared each frame
     }
