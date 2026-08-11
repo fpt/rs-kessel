@@ -1,8 +1,8 @@
-# Kessel Audio — architecture (design, not yet built)
+# Kessel Audio — architecture
 
-The console currently records sound *events* and synthesizes nothing:
-`device.rs` pushes `SoundEvent { kind, id }` on port `0x9` and clears the log
-each frame. This document is the plan for what sits under that port.
+What sits under sound port `0x9`. Written first as a plan (#64) and kept as the
+record of what was built and why — where the two diverged, the divergence is
+noted rather than quietly edited out, because the reasons are the useful part.
 
 The shape in one line: **a host-free synth crate, driven by an event log the VM
 emits, rendered by whoever owns an audio device.** The VM never produces a
@@ -264,18 +264,26 @@ DSP — only reproducibility of the event log, which the VM already guarantees.
 
 | host | who owns the device | how it reaches the engine |
 |------|--------------------|---------------------------|
-| `kessel run` | `crates/cli`, cpal, feature `audio` (defaults with `play`) | frame loop drains `devices.audio` → SPSC queue → cpal callback renders |
+| `kessel run` | `crates/cli`, cpal, feature `audio` (implies `play`) | frame loop drains the frame's events → `kessel_audio::EventQueue` → cpal callback renders |
 | Android | Kotlin `AudioTrack` on its own thread | `kessel_player_audio_render(p, buf, frames)` fills a **direct `ByteBuffer`** of f32 — the same reason frames do, 60 Hz of heap traffic is not acceptable |
-| iOS | `AVAudioSourceNode` | calls the same C ABI from the render block |
-| `kessel mcp` | nobody | events recorded only, exactly as today |
+| iOS | `AVAudioSourceNode` | the same C ABI from the render block — not built; nothing is needed here but the header |
+| `kessel mcp` | nobody | events recorded only |
 
-New C ABI, matching the existing `kessel_player_*` shape (null-tolerant,
+The C ABI, matching the existing `kessel_player_*` shape (null-tolerant,
 `catch_unwind` around anything that runs game or DSP code):
 
 ```c
-void kessel_player_audio_enable(KesselPlayer*, uint32_t sample_rate);
+bool     kessel_player_audio_enable(KesselPlayer*, uint32_t sample_rate);
 uint32_t kessel_player_audio_render(KesselPlayer*, float* out, uint32_t frames);
+uint64_t kessel_player_audio_dropped(KesselPlayer*);
 ```
+
+`audio_render` is the **only** entry point that does not take the console's
+lock, and that is the design rather than an optimization: an audio thread
+waiting on a frame of game code is a click in everything. The queue between them
+is multi-producer, because the ABI promises a handle is usable from several
+threads and a queue that corrupts under a second caller is worse to own than a
+compare-exchange.
 
 Audio is opt-in per host, so a host that never enables it pays nothing and the
 Android app can ship its next release without it.
@@ -312,7 +320,7 @@ The CLI gets the same thing:
 kessel render-audio games/tetris.lua --frames 600 -o preview.wav
 ```
 
-Which also means `games/` gains an audio guard like
+Which also means `games/` has an audio guard beside
 `crates/vm/tests/games_compile.rs`: every bank compiles, and 300 frames of
 render produce no NaN and no sustained clipping.
 
@@ -327,6 +335,12 @@ API layers above: `Synth` for instruments, `AudioEngine` for the console.
 
 This is also why the patch grammar must not depend on luax. If patches parse
 only as part of a game source file, the synth app has to link the compiler.
+
+Both halves of that still hold: `cargo tree -p kessel-audio` is one line, and
+`bank::parse` is what reads a patch file — the luax front-end shares the field
+setters rather than the other way round. Nobody has written the host, so the
+claim is unproven in the way any unbuilt thing is; what is proven is that
+nothing stands in its way.
 
 ## Build order
 
@@ -352,4 +366,22 @@ only as part of a game source file, the synth app has to link the compiler.
    leaves no room for the explosion it is meant to sit under.)*
 8. FFI + Android `AudioTrack`. *(Done.)*
 9. Device ports 3–9 and the luax `play` / `note_on` / `note_off` builtins.
-   (Late on purpose: the high-level `sfx(id)` path proves the engine first.)
+   *(Done, and moved **ahead** of step 8: a game that catches falling notes
+   needs them, and the port table above had `note_on` committing on the
+   instrument — the commit has to be the call's first argument, since that is
+   what a stack machine hands back last.)*
+10. A `games/` audio guard. *(Done — its first run found `games/platform.lua`
+    triggering sound ids it never declared, and under that, a name collision:
+    `sfx(coin)` was compiling to the id of `sprite coin`.)*
+
+## What was deliberately left out
+
+FM, wavetables, arbitrary routing, per-voice reverb, delay, EQ, compressor, and
+automation curves — all still out, for the reasons above. **Bitcrusher** is the
+first thing worth adding: two parameters, and the one retro effect this design
+cannot fake.
+
+Two things the plan promised that nobody has built yet, because nothing needs
+them: `kessel synth` as a standalone instrument (the crate links alone and its
+patch format is text, so this is a host and not a redesign), and iOS, which
+needs nothing from this repo but `crates/ffi/include/kessel.h`.
