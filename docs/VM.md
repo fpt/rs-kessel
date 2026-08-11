@@ -208,9 +208,14 @@ note_off(0)                   -- release that channel
 ```
 
 `play` is fire-and-forget and needs no bookkeeping. `note_on` holds until you
-release it, on a channel **you** own — channels are 0–7 and are not voices,
+release it, on a channel **you** own — any value `0`–`255`, and not a voice,
 because voices get stolen and a game must always be able to stop the note it
-started. `games/piano.lua` is the worked example: it catches falling notes and
+started. A channel is just a label the synth matches on, so using an entity's
+index as its channel works.
+
+Arguments are **clamped, not wrapped**: `note_on(300, …)` is channel 255 rather
+than channel 44, so a mistake cannot silently take over a channel some other
+part of the game is holding. `games/piano.lua` is the worked example: it catches falling notes and
 plays each lane's pitch.
 
 **Chorus and reverb are shared sends.** A patch says how much of itself to send

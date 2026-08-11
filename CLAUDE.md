@@ -175,6 +175,12 @@ tools, and the player. One description (`audio::event_json`) now serves the
 observation record and `vm_run_frames`, so an agent cannot see two spellings of
 one frame.
 
+The note ports **clamp** their arguments rather than truncating. `val as u8`
+turns `note_on(256, …)` into channel 0, silently taking over a note another part
+of the game is holding; masking a note to 7 bits turns 200 into 72, a plausible
+pitch in the middle of the scale. Clamping puts both mistakes somewhere audibly
+wrong instead of somewhere quietly wrong.
+
 **`init()`'s sound has to be carried to frame 0.** The reset vector runs outside
 any frame and the device log is cleared at the start of the next one, so
 `music()` in `init()` — the obvious way to write it — was silently dropped by

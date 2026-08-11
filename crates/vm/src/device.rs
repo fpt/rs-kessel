@@ -160,6 +160,27 @@ pub struct Entity {
     pub y: u16,
 }
 
+/// Narrow a port argument to a byte by **clamping**, not truncating.
+///
+/// `val as u8` aliases: `note_on(256, …)` becomes channel 0 and silently
+/// replaces or releases a note another part of the game is holding, which is
+/// close to the worst way for an out-of-range argument to fail. Clamping keeps
+/// the mistake at the far end of the range, where it cannot collide with the
+/// low channels a game actually uses.
+fn byte(val: u16) -> u8 {
+    val.min(255) as u8
+}
+
+/// The same for a MIDI note number, whose range is `0..=127`.
+///
+/// Clamped rather than masked, and the reason is sharper here: masking turns
+/// note 200 into note 72 — a plausible pitch in the middle of the scale, and so
+/// the hardest kind of wrong to notice. Clamping plays the top note, which is
+/// audibly a mistake.
+fn midi(val: u16) -> u8 {
+    val.min(127) as u8
+}
+
 /// Latched arguments for the note-level sound ports.
 ///
 /// The multi-argument ports work like the palette's: each argument is written
@@ -527,21 +548,21 @@ impl Devices {
                 0x4 => self.note_latch.vel = val,
                 0x5 => self.note_latch.note = val,
                 0x6 => self.sound.push(kessel_audio::AudioEvent::Play {
-                    inst: val as u8,
-                    note: self.note_latch.note as u8 & 0x7f,
-                    vel: self.note_latch.vel.min(255) as u8,
+                    inst: byte(val),
+                    note: midi(self.note_latch.note),
+                    vel: byte(self.note_latch.vel),
                     frames: self.note_latch.frames,
                 }),
                 0x7 => self.note_latch.inst = val,
                 0x8 => self.sound.push(kessel_audio::AudioEvent::NoteOn {
-                    chan: val as u8,
-                    inst: self.note_latch.inst as u8,
-                    note: self.note_latch.note as u8 & 0x7f,
-                    vel: self.note_latch.vel.min(255) as u8,
+                    chan: byte(val),
+                    inst: byte(self.note_latch.inst),
+                    note: midi(self.note_latch.note),
+                    vel: byte(self.note_latch.vel),
                 }),
                 0x9 => self
                     .sound
-                    .push(kessel_audio::AudioEvent::NoteOff { chan: val as u8 }),
+                    .push(kessel_audio::AudioEvent::NoteOff { chan: byte(val) }),
                 _ => {}
             },
             // Composite-sprite device: draw a w×h block of sheet tiles at the
@@ -1143,6 +1164,45 @@ mod tests {
         assert_eq!(trig_fp(128, true) as i16, -256); // cos 180
                                                      // Mid-angle magnitude is bounded and non-trivial.
         assert_eq!(trig_fp(32, false) as i16, 181); // sin 45 ~ 0.707*256
+    }
+
+    /// Out-of-range note arguments must not alias onto a channel or a pitch a
+    /// game is legitimately using.
+    #[test]
+    fn note_arguments_clamp_rather_than_wrap() {
+        use kessel_audio::AudioEvent;
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+
+        // note_on with an absurd channel and note.
+        d.write(0x94, 300, &mem); // vel
+        d.write(0x95, 200, &mem); // note (> 127)
+        d.write(0x97, 400, &mem); // instrument
+        d.write(0x98, 256, &mem); // channel -> commit
+        assert_eq!(
+            d.sound,
+            [AudioEvent::NoteOn {
+                chan: 255,
+                inst: 255,
+                note: 127,
+                vel: 255,
+            }],
+            "an out-of-range argument wrapped onto a usable value"
+        );
+
+        d.sound.clear();
+        d.write(0x99, 256, &mem); // note_off on the same absurd channel
+        assert_eq!(d.sound, [AudioEvent::NoteOff { chan: 255 }]);
+
+        // ...and specifically not channel 0, which a game is likely to be using.
+        d.sound.clear();
+        d.write(0x95, 60, &mem);
+        d.write(0x97, 0, &mem);
+        d.write(0x98, 1000, &mem);
+        match d.sound[0] {
+            AudioEvent::NoteOn { chan, .. } => assert_ne!(chan, 0),
+            ref other => panic!("expected a note_on, got {other:?}"),
+        }
     }
 
     #[test]
