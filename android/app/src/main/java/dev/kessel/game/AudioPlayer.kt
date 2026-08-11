@@ -21,9 +21,10 @@ import java.nio.ByteOrder
  * That is what makes this loop self-clocking — there is no timer here, and no
  * relationship to the game's 60 Hz beyond the events the game queues.
  *
- * **[stop] must run before the console is closed.** The render path reads the
- * native handle without the lock that protects `close`, so only a joined thread
- * makes that safe; [GameEngine] joins this one first.
+ * **[stop] must run before the console is closed**, and its result must be
+ * believed. The render path reads the native handle without the lock that
+ * protects `close`, so only a *confirmed dead* thread makes that safe — which is
+ * why [stop] reports whether it got one.
  */
 class AudioPlayer(private val vm: KesselVm) : AutoCloseable {
 
@@ -102,13 +103,20 @@ class AudioPlayer(private val vm: KesselVm) : AutoCloseable {
         return true
     }
 
-    /** Stop playing and wait for the thread. Safe to call twice. */
-    fun stop() {
+    /**
+     * Stop playing and wait for the thread. Safe to call twice.
+     *
+     * Returns true when the thread is confirmed finished. **A false result
+     * means the console must not be freed**: the render loop may still be
+     * inside a native call, and a `close` from here would be a use-after-free.
+     * Leaking one console is the better half of that trade, and it is a
+     * situation that should not arise — see the pause below.
+     */
+    fun stop(): Boolean {
         running = false
         // Pause and flush *before* joining. The loop spends most of its life
-        // blocked inside `write`, waiting for the device to take more audio;
-        // joining first would wait out the timeout and then release the track
-        // from under a thread still inside it.
+        // blocked inside `write`, waiting for the device to take room; this is
+        // what returns it. Joining first would simply wait out the timeout.
         track?.let {
             try {
                 it.pause()
@@ -117,24 +125,49 @@ class AudioPlayer(private val vm: KesselVm) : AutoCloseable {
                 // Already torn down.
             }
         }
-        thread?.let {
-            it.interrupt() // in case it is idling rather than writing
-            it.join(JOIN_TIMEOUT_MS)
+        val t = thread
+        if (t != null) {
+            t.interrupt() // in case it is idling rather than writing
+            t.join(JOIN_TIMEOUT_MS)
+            if (t.isAlive) {
+                // Do not release the track: the thread is still using it, and
+                // `release()` under a live `write` is a native crash rather
+                // than an exception. Both it and the console are left to the
+                // thread, which frees the track on its way out.
+                return false
+            }
         }
         thread = null
-        track?.let {
-            try {
-                it.stop()
-            } catch (_: IllegalStateException) {
-            }
-            it.release()
-        }
         track = null
+        return true
     }
 
-    override fun close() = stop()
+    override fun close() {
+        stop()
+    }
 
+    /**
+     * The render loop, which **owns the track's lifetime**.
+     *
+     * Releasing it here rather than in [stop] removes the race by construction:
+     * the only thread that ever calls `write` is the one that frees it, so a
+     * timed join that comes back early cannot pull the track out from under a
+     * call in flight.
+     */
     private fun loop(t: AudioTrack) {
+        try {
+            render(t)
+        } finally {
+            try {
+                t.stop()
+            } catch (_: IllegalStateException) {
+                // Already stopped by `stop()`; releasing is still ours to do.
+            }
+            t.release()
+        }
+    }
+
+    private fun render(t: AudioTrack) {
         val bytes = CHUNK_FRAMES * 2 * 4
         while (running) {
             staging.clear()

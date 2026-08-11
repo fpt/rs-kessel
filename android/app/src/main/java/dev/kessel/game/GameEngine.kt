@@ -81,6 +81,11 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
     private var thread: Thread? = null
 
     /**
+     * Whether the audio thread was confirmed stopped. Gates [close] — see there.
+     */
+    private var audioStopped = true
+
+    /**
      * The game thread's private staging bitmap. Never published, never touched
      * by another thread — `drawBitmap` copies out of it into the locked canvas
      * before the frame is posted.
@@ -164,7 +169,7 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      * [dev.kessel.vm.KesselVm.renderAudio].
      */
     fun stop() {
-        audio.stop()
+        audioStopped = audio.stop()
         running = false
         thread?.let {
             it.interrupt()
@@ -183,12 +188,19 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      * [stop] comes first so the loop is not mid-tick. For the game thread that
      * is belt-and-braces — [KesselVm] serialises `close` against `tick` and
      * turns a late tick into a no-op. For the *audio* thread it is not: that
-     * one renders without the lock, so joining it before the console is freed
-     * is the only thing making it safe.
+     * one renders without the lock, so a confirmed-dead thread is the only
+     * thing making the free safe.
+     *
+     * If the audio thread would not stop, the console is deliberately **not**
+     * freed. That leaks it, once, in a situation that should not arise — and
+     * leaking a console is a great deal better than freeing one that a native
+     * render call is still reading.
      */
     override fun close() {
         stop()
-        vm.close()
+        if (audioStopped) {
+            vm.close()
+        }
     }
 
     private fun loop() {

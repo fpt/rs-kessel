@@ -4,9 +4,14 @@
 //! wrong twice, so it lives here rather than in one of them: the desktop player
 //! and the mobile FFI feed their synths through the same queue.
 //!
-//! The producer is whatever thread runs the game; the consumer is the audio
-//! callback. Neither blocks, the consumer never allocates, and a full queue
-//! drops the sound rather than making the game wait for a speaker.
+//! Producers are whatever threads ask for sound; the consumer is the audio
+//! callback. Nothing blocks, the consumer never allocates, and a full queue
+//! drops the sound rather than making a game wait for a speaker.
+//!
+//! **Many producers, one consumer.** A single producer is all a game loop needs
+//! and would be cheaper, but the C ABI this feeds promises that a handle is safe
+//! to use from several threads at once — and a queue that quietly corrupts under
+//! a second caller is a worse thing to own than a compare-exchange.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -16,7 +21,7 @@ use crate::event::AudioEvent;
 /// several seconds of backlog — far past the point where dropping is right.
 pub const QUEUE_CAPACITY: usize = 256;
 
-/// A single-producer, single-consumer queue of [`AudioEvent`].
+/// A multi-producer, single-consumer queue of [`AudioEvent`].
 ///
 /// Each slot is an `AtomicU64` holding an *encoded* event, which is what makes
 /// this whole type safe code: a queue of `AudioEvent` values would need
@@ -47,28 +52,49 @@ impl EventQueue {
     }
 
     /// Producer side. Returns false if the queue was full.
+    ///
+    /// Safe from any number of threads: the slot is *reserved* with a
+    /// compare-exchange and only then written, so two producers can never take
+    /// the same one.
     pub fn push(&self, ev: AudioEvent) -> bool {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Acquire);
-        if tail.wrapping_sub(head) >= QUEUE_CAPACITY {
-            self.rejected.fetch_add(1, Ordering::Relaxed);
-            return false;
+        let mut tail = self.tail.load(Ordering::Relaxed);
+        loop {
+            let head = self.head.load(Ordering::Acquire);
+            if tail.wrapping_sub(head) >= QUEUE_CAPACITY {
+                self.rejected.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
+            match self.tail.compare_exchange_weak(
+                tail,
+                tail.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => tail = actual,
+            }
         }
-        self.slots[tail % QUEUE_CAPACITY].store(encode(ev), Ordering::Relaxed);
-        // Release: the slot's contents must be visible before the consumer can
-        // see the index that exposes them.
-        self.tail.store(tail.wrapping_add(1), Ordering::Release);
+        // Release: the slot's contents must be visible before a consumer that
+        // reads a non-empty slot can act on them.
+        self.slots[tail % QUEUE_CAPACITY].store(encode(ev), Ordering::Release);
         true
     }
 
-    /// Consumer side.
+    /// Consumer side. One thread only.
     pub fn pop(&self) -> Option<AudioEvent> {
         let head = self.head.load(Ordering::Relaxed);
-        let tail = self.tail.load(Ordering::Acquire);
-        if head == tail {
+        if head == self.tail.load(Ordering::Acquire) {
             return None;
         }
-        let bits = self.slots[head % QUEUE_CAPACITY].load(Ordering::Relaxed);
+        // A reserved-but-unwritten slot reads as zero, which `encode` never
+        // produces. Treating it as "nothing yet" rather than advancing is what
+        // keeps a producer that was interrupted between reserving and writing
+        // from costing the event: the next call finds it.
+        let bits = self.slots[head % QUEUE_CAPACITY].load(Ordering::Acquire);
+        if bits == 0 {
+            return None;
+        }
+        self.slots[head % QUEUE_CAPACITY].store(0, Ordering::Relaxed);
         self.head.store(head.wrapping_add(1), Ordering::Release);
         decode(bits)
     }
@@ -173,6 +199,15 @@ mod tests {
     }
 
     #[test]
+    fn an_encoded_event_is_never_zero() {
+        // The consumer uses zero to mean "reserved but not yet written". If any
+        // event encoded to zero it would be skipped forever.
+        for ev in SAMPLES {
+            assert_ne!(encode(ev), 0, "{ev:?} encodes to the empty marker");
+        }
+    }
+
+    #[test]
     fn an_empty_slot_is_not_an_event() {
         assert_eq!(decode(0), None);
         assert_eq!(decode(0xff), None);
@@ -213,6 +248,56 @@ mod tests {
             assert_eq!(r.pop(), Some(AudioEvent::PlaySfx { id: i as u16 }));
         }
         assert_eq!(r.rejected(), 0);
+    }
+
+    /// Several producers at once, which the C ABI allows.
+    ///
+    /// With a plain load/store on `tail` two producers take the same slot and
+    /// one event overwrites the other — silently, and only under contention.
+    #[test]
+    fn many_producers_lose_nothing() {
+        const PRODUCERS: usize = 4;
+        const EACH: usize = 5_000;
+        let q = Arc::new(EventQueue::new());
+
+        let writers: Vec<_> = (0..PRODUCERS)
+            .map(|p| {
+                let q = Arc::clone(&q);
+                std::thread::spawn(move || {
+                    for _ in 0..EACH {
+                        // Retry rather than drop, so the count at the end is
+                        // exact and a lost event cannot hide as a rejection.
+                        while !q.push(AudioEvent::NoteOff { chan: p as u8 }) {
+                            std::thread::yield_now();
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        let mut seen = [0usize; PRODUCERS];
+        let mut total = 0;
+        // Bounded, because the failure this is looking for is a *lost* event —
+        // and waiting forever for one that will never arrive is a hung test
+        // rather than a failing one.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while total < PRODUCERS * EACH && std::time::Instant::now() < deadline {
+            match q.pop() {
+                Some(AudioEvent::NoteOff { chan }) => {
+                    seen[chan as usize] += 1;
+                    total += 1;
+                }
+                Some(other) => panic!("corrupted event {other:?}"),
+                None => std::thread::yield_now(),
+            }
+        }
+        assert_eq!(
+            seen, [EACH; PRODUCERS],
+            "a producer's events went missing under contention"
+        );
+        for w in writers {
+            w.join().unwrap();
+        }
     }
 
     #[test]

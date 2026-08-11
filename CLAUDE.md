@@ -366,9 +366,16 @@ nothing enforced the assumption. It also keeps 60 frames a second from meaning
 has to be: that lock is held for a whole frame of game code, and an audio
 callback waiting on it is an audible gap in everything. The price is that the
 caller owns the ordering — `GameEngine.stop()` joins the audio thread *before*
-the console is closed, and that join is the only thing making it safe. The
-handle is `@Volatile` so a late call is a no-op rather than a use-after-free,
-but volatility narrows the window; it does not close it.
+the console is closed, and a **confirmed dead** thread is the only thing making
+that safe. `AudioPlayer.stop()` therefore returns whether it got one, and
+`close()` skips `vm.close()` when it did not: leaking one console beats freeing
+one a native render call is still reading.
+
+For the same reason the **render thread owns the `AudioTrack`** and releases it
+in a `finally`, rather than `stop()` releasing it after a timed join. The only
+thread that calls `write` is the one that frees it, so an early join cannot pull
+the track out from under a call in flight — a native crash rather than an
+exception.
 
 `destRect` is a pure function over plain ints rather than `android.graphics.Rect`
 because that class is a throwing stub on the unit-test classpath, and geometry
