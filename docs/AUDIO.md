@@ -154,7 +154,13 @@ sfx boom  { inst = lead  speed = 3  notes = "48 - 43 . 36" }
 -- A note plus holds is one long note; a repeated number retriggers. That is
 -- the difference between a drone and a machine gun, and games want both.
 
-track intro { tempo = 6, rows = { ... } }   -- not yet; lands with the sequencer
+track intro {
+  tempo = 7          -- frames per row
+  vel = 150          -- music sits under the sound effects
+  loop = 1
+  bass = "36 - - - 43 - - -"    -- a key that is not reserved names an
+  lead = "60 . 64 67 . 72 - -"  -- instrument, and gives that channel's rows
+}
 ```
 
 Every parameter is a `u8`/`u16` — the byte world the VM already lives in, and
@@ -333,7 +339,10 @@ only as part of a game source file, the synth app has to link the compiler.
 6. Chorus, reverb, sends. *(Done. The reverb needed an input gain the sketch
    did not mention — four parallel combs sum, so an un-scaled network returns
    ~200× at the largest room.)*
-7. Sequencer, `track` blocks, `music`/`music_stop` on the audio clock.
+7. Sequencer, `track` blocks, `music`/`music_stop` on the audio clock. *(Done.
+   Tracks gained a `vel`, because several channels sustaining is a much louder
+   thing than one hit and music that arrives already fighting the limiter
+   leaves no room for the explosion it is meant to sit under.)*
 8. FFI + Android `AudioTrack`.
 9. Device ports 3–9 and the luax `play` / `note_on` / `note_off` builtins.
    (Late on purpose: the high-level `sfx(id)` path proves the engine first.)

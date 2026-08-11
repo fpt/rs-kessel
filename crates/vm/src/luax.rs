@@ -36,8 +36,8 @@
 use std::collections::HashMap;
 
 use kessel_audio::bank::{
-    set_fx_field, set_instrument_field, set_sfx_field, OwnedValue, SfxDef, SoundBank,
-    MAX_INSTRUMENTS, MAX_SFX,
+    set_fx_field, set_instrument_field, set_sfx_field, set_track_field, OwnedValue, SfxDef,
+    SoundBank, TrackDef, MAX_INSTRUMENTS, MAX_SFX, MAX_TRACKS,
 };
 use kessel_audio::Patch;
 
@@ -549,6 +549,13 @@ enum Decl {
         fields: Vec<(String, OwnedValue, usize)>,
         line: usize,
     },
+    /// `track NAME { tempo = … bass = "…" }` — a piece of music. Keys that
+    /// are not reserved name an instrument, and give that channel's rows.
+    Track {
+        name: String,
+        fields: Vec<(String, OwnedValue, usize)>,
+        line: usize,
+    },
     /// `fx { reverb_size = … }` — what the one shared chorus and reverb sound
     /// like. Nameless, because there is only ever one of each.
     Fx {
@@ -645,13 +652,15 @@ impl Parser {
                 decls.push(self.parse_sound_decl("instrument", d));
             } else if self.is_kw("sfx") {
                 decls.push(self.parse_sound_decl("sfx", d));
+            } else if self.is_kw("track") {
+                decls.push(self.parse_sound_decl("track", d));
             } else if self.is_kw("fx") {
                 decls.push(self.parse_fx(d));
             } else {
                 d.push(err(
                     self.line(),
                     "expected 'record', 'function', 'local', 'sprite', 'tilemap', 'controls', \
-                     'instrument', 'sfx', or 'fx'",
+                     'instrument', 'sfx', 'track', or 'fx'",
                 ));
                 self.advance();
             }
@@ -793,10 +802,10 @@ impl Parser {
             self.eat_sym(",");
         }
         self.expect_sym("}", d);
-        if kw == "instrument" {
-            Decl::Instrument { name, fields, line }
-        } else {
-            Decl::Sfx { name, fields, line }
+        match kw {
+            "instrument" => Decl::Instrument { name, fields, line },
+            "sfx" => Decl::Sfx { name, fields, line },
+            _ => Decl::Track { name, fields, line },
         }
     }
 
@@ -1352,6 +1361,7 @@ struct Compiler {
     bank: SoundBank,
     instrument_ids: HashMap<String, u16>,
     sfx_ids: HashMap<String, u16>,
+    track_ids: HashMap<String, u16>,
     /// The single declared tilemap: (label, width, height). `mget`/`mset`/`map`/
     /// `solid` need it.
     tilemap: Option<(String, u16, u16)>,
@@ -1493,6 +1503,7 @@ impl Compiler {
             bank: SoundBank::default(),
             instrument_ids: HashMap::new(),
             sfx_ids: HashMap::new(),
+            track_ids: HashMap::new(),
             tilemap: None,
             data: Vec::new(),
             label_ctr: 0,
@@ -1543,14 +1554,15 @@ impl Compiler {
         }
     }
 
-    /// An `sfx` or `instrument` name, as its id.
+    /// An `sfx`, `track`, or `instrument` name, as its id.
     ///
-    /// Effects are checked first: `sfx(boom)` is the common case, and a game
-    /// that names an instrument and an effect the same thing has bigger
-    /// problems than which one wins.
+    /// Effects first, then tracks, then instruments: `sfx(boom)` and
+    /// `music(theme)` are the common cases, and a game that gives two
+    /// declarations the same name has bigger problems than which one wins.
     fn sound_id(&self, name: &str) -> Option<u16> {
         self.sfx_ids
             .get(name)
+            .or_else(|| self.track_ids.get(name))
             .or_else(|| self.instrument_ids.get(name))
             .copied()
     }
@@ -1648,6 +1660,31 @@ impl Compiler {
                 }
                 let id = self.bank.add_sfx(name.clone(), def);
                 self.sfx_ids.insert(name.clone(), id);
+            }
+        }
+
+        // Pass 1.56: tracks. After instruments, since a channel names one.
+        for decl in decls {
+            if let Decl::Track { name, fields, line } = decl {
+                let mut def = TrackDef::default();
+                let known = &self.instrument_ids;
+                let resolve = |n: &str| known.get(n).map(|id| *id as u8);
+                for (key, value, kline) in fields {
+                    if let Err(message) = set_track_field(&mut def, key, value.as_field(), &resolve)
+                    {
+                        d.push(err(*kline, message));
+                    }
+                }
+                if self.bank.tracks.len() >= MAX_TRACKS {
+                    d.push(err(*line, format!("too many tracks (limit {MAX_TRACKS})")));
+                    continue;
+                }
+                if self.track_ids.contains_key(name) {
+                    d.push(err(*line, format!("duplicate track '{name}'")));
+                    continue;
+                }
+                let id = self.bank.add_track(name.clone(), def);
+                self.track_ids.insert(name.clone(), id);
             }
         }
 

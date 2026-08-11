@@ -34,6 +34,30 @@ instrument boom {
   reverb = 90                        -- the big one gets the room
 }
 
+-- Music. A `track` is channels of rows, one channel per instrument, `tempo`
+-- frames per row. It plays on the AUDIO clock, so a dropped frame drops a
+-- frame instead of stuttering the tune.
+instrument pulse {
+  wave = square
+  attack = 0  decay = 90  sustain = 60  release = 40
+  filter = lpf  cutoff = 150
+  volume = 90
+}
+
+instrument thud {
+  wave = triangle
+  attack = 0  decay = 140  sustain = 0
+  pitch_env = 12  pitch_decay = 60
+  volume = 110
+}
+
+track drive {
+  tempo = 9
+  vel = 150                          -- music sits under the sound effects
+  thud  = "33 . 33 . 40 . 33 ."
+  pulse = "57 60 64 60 57 60 63 60"
+}
+
 sfx shoot   { inst = zap   speed = 1  notes = "84" }
 sfx explode { inst = boom  speed = 3  notes = "48 - -" }
 sfx gameover {
@@ -100,6 +124,7 @@ function init()
   spawn = 0
   score = 0
   dead = 0
+  music(drive)                       -- loops until something stops it
 end
 
 function fire()
@@ -170,6 +195,7 @@ function update()
   for i = 0, len(foes) - 1 do
     if foes[i].alive == 1 and rect_overlap(px + 1, 113, 6, 6, foes[i].x, foes[i].y, 8, 8) then
       dead = 1
+      music_stop()                   -- the tune gets out of the way
       sfx(gameover)
       return
     end

@@ -62,8 +62,8 @@ pub struct AudioSummary {
     pub queue_overflow: u64,
     /// Every trigger the game emitted, in order.
     pub events: Vec<AudioTrace>,
-    /// Triggers that were recorded but cannot be rendered yet (`music`).
-    pub unsupported: u64,
+    /// `music(id)` for an id the bank doesn't have.
+    pub unknown_track: u64,
     /// Why the run stopped before the requested frame count, if it did.
     pub stopped_early: Option<String>,
 }
@@ -136,11 +136,10 @@ impl AudioSummary {
                 self.queue_overflow
             ));
         }
-        if self.unsupported > 0 {
+        if self.unknown_track > 0 {
             out.push_str(&format!(
-                "NOTE: {} music trigger(s) were recorded but the sequencer is not \
-                 built yet, so they are silent in this render.\n",
-                self.unsupported
+                "WARNING: {} music trigger(s) named a track the bank doesn't have.\n",
+                self.unknown_track
             ));
         }
         if self.peak == 0.0 && !self.events.is_empty() {
@@ -198,6 +197,27 @@ impl VmConsole {
         let mut samples: Vec<f32> = Vec::new();
         let mut block = vec![0.0f32; spf * 2];
 
+        // Whatever `init()` asked for happens before frame 0's samples.
+        for s in self.take_reset_sound() {
+            let (kind, event) = match s.kind {
+                SoundKind::Sfx => ("sfx", AudioEvent::PlaySfx { id: s.id }),
+                SoundKind::Music => ("music", AudioEvent::PlayMusic { id: s.id }),
+                SoundKind::MusicStop => ("music_stop", AudioEvent::StopMusic),
+            };
+            let name = match s.kind {
+                SoundKind::Sfx => self.sound_bank().sfx_names.get(s.id as usize).cloned(),
+                SoundKind::Music => self.sound_bank().track_names.get(s.id as usize).cloned(),
+                SoundKind::MusicStop => None,
+            };
+            summary.events.push(AudioTrace {
+                frame: 0,
+                kind,
+                id: s.id,
+                name,
+            });
+            engine.submit(event, 0);
+        }
+
         let mut frame = 0u64;
         'outer: for (bits, count) in segments {
             for _ in 0..*count {
@@ -212,17 +232,16 @@ impl VmConsole {
                 let at = engine.frame_at(frame);
                 for s in &obs.sound {
                     let (kind, event) = match s.kind {
-                        SoundKind::Sfx => ("sfx", Some(AudioEvent::PlaySfx { id: s.id })),
-                        // Recorded and traced, but the sequencer that would
-                        // play them is a later step. Reporting them as
-                        // unsupported beats rendering silence and saying
-                        // nothing.
-                        SoundKind::Music => ("music", None),
-                        SoundKind::MusicStop => ("music_stop", None),
+                        SoundKind::Sfx => ("sfx", AudioEvent::PlaySfx { id: s.id }),
+                        SoundKind::Music => ("music", AudioEvent::PlayMusic { id: s.id }),
+                        SoundKind::MusicStop => ("music_stop", AudioEvent::StopMusic),
                     };
                     let name = match s.kind {
                         SoundKind::Sfx => self.sound_bank().sfx_names.get(s.id as usize).cloned(),
-                        _ => None,
+                        SoundKind::Music => {
+                            self.sound_bank().track_names.get(s.id as usize).cloned()
+                        }
+                        SoundKind::MusicStop => None,
                     };
                     summary.events.push(AudioTrace {
                         frame: obs.frame,
@@ -230,10 +249,7 @@ impl VmConsole {
                         id: s.id,
                         name,
                     });
-                    match event {
-                        Some(ev) => engine.submit(ev, at),
-                        None => summary.unsupported += 1,
-                    }
+                    engine.submit(event, at);
                 }
                 engine.render(&mut block);
                 samples.extend_from_slice(&block);
@@ -273,6 +289,7 @@ impl VmConsole {
         summary.limited = synth.limited;
         let eng = engine.stats();
         summary.unknown_sfx = eng.unknown_sfx;
+        summary.unknown_track = eng.unknown_track;
         summary.queue_overflow = eng.queue_overflow;
 
         Ok(AudioRender { samples, summary })
@@ -360,19 +377,83 @@ function draw() cls(0) end
     }
 
     #[test]
-    fn music_is_traced_and_reported_as_not_yet_playable() {
+    fn a_track_renders_and_is_named_in_the_trace() {
+        let mut c = console(
+            r#"
+            instrument bass { wave = triangle  attack = 0  decay = 0  sustain = 200  release = 20 }
+            track theme { tempo = 4  bass = "36 - 43 -" }
+            local t: word
+            function update() t = t + 1  if t == 2 then music(theme) end end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(0, 40)]).unwrap();
+        assert_eq!(r.summary.events.len(), 1);
+        assert_eq!(r.summary.events[0].kind, "music");
+        assert_eq!(r.summary.events[0].name.as_deref(), Some("theme"));
+        assert!(r.summary.peak > 0.1, "the track was silent");
+        // It loops by default, so a 40-frame render is more than one pass.
+        assert!(r.summary.voices_started > 2);
+    }
+
+    #[test]
+    fn music_stop_shows_up_in_the_trace() {
+        let mut c = console(
+            r#"
+            instrument bass { wave = triangle  sustain = 200 }
+            track theme { tempo = 4  bass = "36 - 43 -" }
+            local t: word
+            function update()
+              t = t + 1
+              if t == 2 then music(theme) end
+              if t == 10 then music_stop() end
+            end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(0, 40)]).unwrap();
+        let kinds: Vec<&str> = r.summary.events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, ["music", "music_stop"]);
+    }
+
+    #[test]
+    fn an_unknown_track_is_a_warning_not_silence() {
         let mut c = console(
             r#"
             local t: word
-            function update() t = t + 1  if t == 2 then music(0) end end
+            function update() t = t + 1  if t == 2 then music(3) end end
             function draw() cls(0) end
             "#,
         );
         let r = c.render_audio(&[(0, 10)]).unwrap();
-        assert_eq!(r.summary.unsupported, 1);
-        assert_eq!(r.summary.events[0].kind, "music");
+        assert_eq!(r.summary.unknown_track, 1);
         let text = r.summary.report();
-        assert!(text.contains("sequencer is not built yet"), "{text}");
+        assert!(
+            text.contains("named a track the bank doesn't have"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn sound_asked_for_in_init_is_not_lost() {
+        // `init()` runs at load, outside any frame, and the device's log is
+        // cleared at the start of the next one. Starting the music in `init()`
+        // is the obvious way to write a game, and without the reset-vector
+        // hand-off it is silent everywhere.
+        let mut c = console(
+            r#"
+            instrument bass { wave = triangle  attack = 0  decay = 0  sustain = 200  release = 20 }
+            track theme { tempo = 4  bass = "36 - 43 -" }
+            function init() music(theme) end
+            function update() end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(0, 30)]).unwrap();
+        assert_eq!(r.summary.events.len(), 1, "the init() trigger was dropped");
+        assert_eq!(r.summary.events[0].kind, "music");
+        assert_eq!(r.summary.events[0].frame, 0);
+        assert!(r.summary.peak > 0.1, "the track never played");
     }
 
     #[test]

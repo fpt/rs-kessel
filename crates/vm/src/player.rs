@@ -106,6 +106,15 @@ impl VmPlayer {
         if !c.rom_loaded {
             return;
         }
+        // `init()` ran at load, outside any frame. Its triggers belong to the
+        // first frame that runs, or they are lost.
+        for s in c.take_reset_sound() {
+            sink(match s.kind {
+                crate::device::SoundKind::Sfx => kessel_audio::AudioEvent::PlaySfx { id: s.id },
+                crate::device::SoundKind::Music => kessel_audio::AudioEvent::PlayMusic { id: s.id },
+                crate::device::SoundKind::MusicStop => kessel_audio::AudioEvent::StopMusic,
+            });
+        }
         let before = c.frame;
         c.play_tick(buttons);
         if c.frame == before {
