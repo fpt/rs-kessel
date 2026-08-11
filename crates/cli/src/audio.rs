@@ -360,6 +360,47 @@ mod tests {
     }
 
     #[test]
+    fn music_queued_from_the_game_thread_plays() {
+        // `sfx` and `music` reach the device by the same route but through
+        // different arms of the engine, and only one of them was covered here.
+        // A track that renders offline and is silent in `kessel run` would slip
+        // through everything else.
+        let (bank, errors) = kessel_audio::bank::parse(
+            r#"
+            instrument bass { wave = triangle  attack = 0  decay = 0  sustain = 255 }
+            track theme { tempo = 2  bass = "36 - 43 -" }
+            "#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut engine = AudioEngine::new(SynthConfig::default());
+        engine.set_bank(bank);
+
+        let ring = Ring::new();
+        let mut scratch = vec![0.0f32; 512 * 2];
+        let mut out = vec![0.0f32; 2048 * 2];
+
+        render_block(&mut engine, &ring, &mut out, 2, &mut scratch);
+        assert_eq!(peak(&out), 0.0, "silent until the game asks");
+
+        ring.push(AudioEvent::PlayMusic { id: 0 });
+        render_block(&mut engine, &ring, &mut out, 2, &mut scratch);
+        assert!(peak(&out) > 0.1, "the track never started: {}", peak(&out));
+
+        // ...and it keeps going without another event, because the sequencer
+        // is driven by the render itself.
+        for _ in 0..20 {
+            render_block(&mut engine, &ring, &mut out, 2, &mut scratch);
+        }
+        assert!(peak(&out) > 0.1, "the track stopped on its own");
+
+        ring.push(AudioEvent::StopMusic);
+        for _ in 0..40 {
+            render_block(&mut engine, &ring, &mut out, 2, &mut scratch);
+        }
+        assert_eq!(peak(&out), 0.0, "music_stop did not reach the device");
+    }
+
+    #[test]
     fn panic_from_the_queue_silences_the_stream() {
         let ring = Ring::new();
         let mut engine = test_engine();
