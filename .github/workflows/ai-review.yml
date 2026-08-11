@@ -10,8 +10,14 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# `contents: write` is not used to push anything — the review writes no code. It
+# is what GitHub requires for the `resolveReviewThread` GraphQL mutation; under
+# `contents: read` that call fails with "Resource not accessible by integration"
+# and threads the reviewer verified as fixed stay open forever (see PR #70, and
+# fpt/klein-cli#111). A reusable workflow can only narrow inherited permissions,
+# so the scope has to be granted here.
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
