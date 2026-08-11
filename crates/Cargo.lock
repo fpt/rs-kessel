@@ -756,7 +756,9 @@ name = "kessel-ffi"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
+ "kessel-audio",
  "kessel-vm",
+ "parking_lot",
 ]
 
 [[package]]

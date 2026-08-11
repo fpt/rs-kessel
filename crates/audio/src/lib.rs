@@ -43,6 +43,7 @@ pub mod filter;
 pub mod fx;
 pub mod master;
 pub mod patch;
+pub mod queue;
 pub mod sequencer;
 pub mod voice;
 pub mod wav;
@@ -52,6 +53,7 @@ pub use engine::AudioEngine;
 pub use event::AudioEvent;
 pub use filter::{cutoff_hz, resonance_q, FilterMode};
 pub use patch::{Patch, VoiceParams, Waveform};
+pub use queue::EventQueue;
 pub use voice::{note_hz, Priority};
 
 use fx::{Chorus, Reverb};

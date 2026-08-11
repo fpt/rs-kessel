@@ -265,7 +265,7 @@ DSP — only reproducibility of the event log, which the VM already guarantees.
 | host | who owns the device | how it reaches the engine |
 |------|--------------------|---------------------------|
 | `kessel run` | `crates/cli`, cpal, feature `audio` (defaults with `play`) | frame loop drains `devices.audio` → SPSC queue → cpal callback renders |
-| Android | Kotlin `AudioTrack` on its own thread | `kessel_audio_render(p, buf, frames)` fills a **direct `ByteBuffer`** of f32 — the same reason frames do, 60 Hz of heap traffic is not acceptable |
+| Android | Kotlin `AudioTrack` on its own thread | `kessel_player_audio_render(p, buf, frames)` fills a **direct `ByteBuffer`** of f32 — the same reason frames do, 60 Hz of heap traffic is not acceptable |
 | iOS | `AVAudioSourceNode` | calls the same C ABI from the render block |
 | `kessel mcp` | nobody | events recorded only, exactly as today |
 
@@ -350,6 +350,6 @@ only as part of a game source file, the synth app has to link the compiler.
    Tracks gained a `vel`, because several channels sustaining is a much louder
    thing than one hit and music that arrives already fighting the limiter
    leaves no room for the explosion it is meant to sit under.)*
-8. FFI + Android `AudioTrack`.
+8. FFI + Android `AudioTrack`. *(Done.)*
 9. Device ports 3–9 and the luax `play` / `note_on` / `note_off` builtins.
    (Late on purpose: the high-level `sfx(id)` path proves the engine first.)

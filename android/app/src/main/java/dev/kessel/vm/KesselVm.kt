@@ -38,14 +38,23 @@ const val CLASSIC_DIM = 128
  * object or be used after [close]. That matters more than it looks: the native
  * side tolerates a *null* handle, but nothing can save it from a freed one.
  *
- * Every method is `synchronized`. The native console is internally locked and
- * would be safe to call concurrently, but `close` racing a `tick` would not be,
- * and one lock here removes the whole question. The cost is bounded — a frame of
- * a 128×128 machine is microseconds, so a UI thread asking [isPaused] never
- * waits long enough to notice.
+ * Every method is `synchronized` **except [renderAudio]**. The native console
+ * is internally locked and would be safe to call concurrently, but `close`
+ * racing a `tick` would not be, and one lock here removes the whole question.
+ * The cost is bounded — a frame of a 128×128 machine is microseconds, so a UI
+ * thread asking [isPaused] never waits long enough to notice.
+ *
+ * The audio thread is the exception, and has to be: it would be waiting on a
+ * whole frame of game code, and the result is a click in everything. See
+ * [renderAudio] for what the caller owes in exchange.
  */
 class KesselVm : AutoCloseable {
 
+    /**
+     * Volatile because [renderAudio] reads it off the audio thread without
+     * taking this object's lock — see that method for why it must not.
+     */
+    @Volatile
     private var handle: Long = KesselNative.playerNew()
 
     /**
@@ -120,6 +129,42 @@ class KesselVm : AutoCloseable {
     /** Halted or faulted — game over, or a crash the game didn't handle. */
     @Synchronized
     fun isHalted(): Boolean = handle != 0L && KesselNative.playerIsHalted(handle)
+
+    /**
+     * Give the console a synth. Call before starting an audio thread.
+     *
+     * Returns false if the console is closed.
+     */
+    @Synchronized
+    fun enableAudio(sampleRate: Int): Boolean =
+        handle != 0L && KesselNative.playerAudioEnable(handle, sampleRate)
+
+    /**
+     * Render [frames] stereo frames into [dst]. Returns the frames written.
+     *
+     * **Deliberately not `@Synchronized`.** Every other method here shares one
+     * lock so that `close` cannot race a `tick`; this one must not join them,
+     * because the lock is held for the length of a frame — the VM running
+     * arbitrary game code — and an audio callback that waits that long is an
+     * audible gap in *everything*, not just this sound. The native side is
+     * built for it: this path never touches the console's own lock.
+     *
+     * The price is that the caller owns the ordering against [close]. Stop the
+     * audio thread and join it before closing the console; [AudioPlayer] does,
+     * and [handle] being volatile turns a late call into a no-op rather than a
+     * use-after-free in the common case — but only a joined thread is a
+     * guarantee.
+     */
+    fun renderAudio(dst: ByteBuffer, frames: Int): Int {
+        val h = handle
+        return if (h == 0L) 0 else KesselNative.playerAudioRender(h, dst, frames)
+    }
+
+    /** Sounds dropped because the game got ahead of the audio thread. */
+    fun audioDropped(): Long {
+        val h = handle
+        return if (h == 0L) 0 else KesselNative.playerAudioDropped(h)
+    }
 
     /** Free the console. Idempotent; every method is a no-op afterwards. */
     @Synchronized

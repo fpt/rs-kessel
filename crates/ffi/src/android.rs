@@ -106,11 +106,75 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTick(
     handle: jlong,
     buttons: jint,
 ) {
-    let Some(p) = player(handle) else { return };
+    // Through the C ABI rather than `player.tick`, so this frame's sound
+    // reaches the audio queue. Calling the inner player directly is how Android
+    // would end up silent while every other host played.
+    //
     // The VM traps faults itself and reports them through `isHalted`, so a
     // panic here means a bug in the VM, not a bad game. Swallow it: the app
     // freezes on its last frame instead of the process dying under the user.
-    let _ = catch_unwind(AssertUnwindSafe(|| p.player.tick(buttons as u8)));
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        crate::kessel_player_tick(handle as *mut KesselPlayer, buttons as u8)
+    }));
+}
+
+/// Give this console a synth at `sampleRate`. Call once, before starting an
+/// audio thread.
+#[no_mangle]
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerAudioEnable(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    sample_rate: jint,
+) -> jboolean {
+    crate::kessel_player_audio_enable(handle as *mut KesselPlayer, sample_rate.max(0) as u32)
+        as jboolean
+}
+
+/// Render `frames` stereo frames of `f32` into `dst`, which **must** be a
+/// direct `ByteBuffer` of at least `frames * 2 * 4` bytes.
+///
+/// Called from the audio thread. It reaches the synth without touching the
+/// console's lock, so a slow frame of game code cannot delay it — and it is
+/// wrapped in `catch_unwind` for the same reason every other entry point here
+/// is: unwinding into the JVM is undefined behaviour, and this one runs on a
+/// thread the platform will kill the process over.
+#[no_mangle]
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerAudioRender<'l>(
+    env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    handle: jlong,
+    dst: JByteBuffer<'l>,
+    frames: jint,
+) -> jint {
+    if frames <= 0 {
+        return 0;
+    }
+    let frames = frames as u32;
+    let (Ok(addr), Ok(cap)) = (
+        env.get_direct_buffer_address(&dst),
+        env.get_direct_buffer_capacity(&dst),
+    ) else {
+        return 0;
+    };
+    if addr.is_null() || cap < frames as usize * 2 * std::mem::size_of::<f32>() {
+        return 0;
+    }
+    let out = addr as *mut f32;
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        crate::kessel_player_audio_render(handle as *mut KesselPlayer, out, frames) as jint
+    }))
+    .unwrap_or(0)
+}
+
+/// Sounds dropped because the queue was full.
+#[no_mangle]
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerAudioDropped(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlong {
+    crate::kessel_player_audio_dropped(handle as *mut KesselPlayer) as jlong
 }
 
 /// Screen edge length. Valid only after `playerLoad` — the ROM chooses it.
