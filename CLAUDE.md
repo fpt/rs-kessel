@@ -175,11 +175,13 @@ tools, and the player. One description (`audio::event_json`) now serves the
 observation record and `vm_run_frames`, so an agent cannot see two spellings of
 one frame.
 
-The note ports **clamp** their arguments rather than truncating. `val as u8`
-turns `note_on(256, …)` into channel 0, silently taking over a note another part
-of the game is holding; masking a note to 7 bits turns 200 into 72, a plausible
-pitch in the middle of the scale. Clamping puts both mistakes somewhere audibly
-wrong instead of somewhere quietly wrong.
+**An out-of-range note argument emits nothing**, and is counted in
+`Devices::sound_dropped`. Truncating puts `note_on(256, …)` on channel 0 and
+clamping puts it on 255 — and since every channel `0..=255` is one a game may
+be holding a note on, *both* steal someone else's note. There is no spare value
+to land on, so the only answer that cannot corrupt state is to do nothing. Same
+rule as an off-screen `pset`, which this device has always ignored. The count
+reaches the render report, so the silence is explainable rather than mysterious.
 
 **`init()`'s sound has to be carried to frame 0.** The reset vector runs outside
 any frame and the device log is cleared at the start of the next one, so

@@ -109,6 +109,8 @@ pub struct AudioSummary {
     pub events: Vec<AudioTrace>,
     /// `music(id)` for an id the bank doesn't have.
     pub unknown_track: u64,
+    /// Notes the machine refused because an argument was out of range.
+    pub bad_note_args: u64,
     /// Why the run stopped before the requested frame count, if it did.
     pub stopped_early: Option<String>,
 }
@@ -179,6 +181,13 @@ impl AudioSummary {
             out.push_str(&format!(
                 "WARNING: {} note(s) dropped — too many sounds in flight at once.\n",
                 self.queue_overflow
+            ));
+        }
+        if self.bad_note_args > 0 {
+            out.push_str(&format!(
+                "WARNING: {} note(s) were ignored because an argument was out of range \
+                 (channel and instrument 0-255, note 0-127, velocity 0-255).\n",
+                self.bad_note_args
             ));
         }
         if self.unknown_track > 0 {
@@ -263,6 +272,9 @@ impl VmConsole {
             sample_rate,
             ..AudioSummary::default()
         };
+        // Counted cumulatively by the device, so take the difference over this
+        // run rather than reporting a total from before it started.
+        let dropped_before = self.vm.devices.sound_dropped;
         let mut samples: Vec<f32> = Vec::new();
         let mut block = vec![0.0f32; spf * 2];
 
@@ -326,6 +338,7 @@ impl VmConsole {
         summary.voices_stolen = synth.stolen;
         summary.notes_dropped = synth.dropped;
         summary.limited = synth.limited;
+        summary.bad_note_args = self.vm.devices.sound_dropped - dropped_before;
         let eng = engine.stats();
         summary.unknown_sfx = eng.unknown_sfx;
         summary.unknown_track = eng.unknown_track;
@@ -557,6 +570,33 @@ function draw() cls(0) end
             last.iter().fold(0.0f32, |a, s| a.max(s.abs())),
             0.0,
             "note_off did not release the note"
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_note_is_reported_rather_than_played_wrong() {
+        // Every channel is one some game may be holding, so an invalid one
+        // cannot be mapped onto the valid range without stealing a note. The
+        // machine emits nothing — and says so, or the silence is unexplainable.
+        let mut c = console(
+            r#"
+            instrument piano { wave = triangle  attack = 0  decay = 200  sustain = 0 }
+            local t: word
+            function update()
+              t = t + 1
+              if t == 2 then play(piano, 300, 200, 15) end
+            end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(0, 20)]).unwrap();
+        assert_eq!(r.summary.bad_note_args, 1);
+        assert!(r.summary.events.is_empty(), "a bad note reached the synth");
+        assert_eq!(r.summary.peak, 0.0);
+        assert!(
+            r.summary.report().contains("out of range"),
+            "{}",
+            r.summary.report()
         );
     }
 

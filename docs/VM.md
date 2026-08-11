@@ -213,9 +213,11 @@ because voices get stolen and a game must always be able to stop the note it
 started. A channel is just a label the synth matches on, so using an entity's
 index as its channel works.
 
-Arguments are **clamped, not wrapped**: `note_on(300, …)` is channel 255 rather
-than channel 44, so a mistake cannot silently take over a channel some other
-part of the game is holding. `games/piano.lua` is the worked example: it catches falling notes and
+An out-of-range argument makes the whole note a **no-op** — nothing is played
+and nothing is disturbed. Neither wrapping nor clamping would do: every channel
+`0`–`255` is one some part of the game may be holding a note on, so *any*
+mapping of an invalid value onto the valid range steals someone else's note.
+`vm_render_audio` reports the count, so the silence has an explanation. `games/piano.lua` is the worked example: it catches falling notes and
 plays each lane's pitch.
 
 **Chorus and reverb are shared sends.** A patch says how much of itself to send
