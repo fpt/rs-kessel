@@ -98,6 +98,9 @@ Port byte = `(device << 4) | register`.
 | `0xc0` | in/out | trig: write angle (0..255 = a turn) → read sin; `0xc1` reads cos. Signed 8.8 fixed (-256..256) |
 | `0x20` | in  | gamepad buttons bitfield (held) |
 | `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
+| `0x23` `0x24` | in | analog stick x / y, signed 8.8 fixed (-256..256), 0 centred |
+| `0xd0` | in/out | touch: read the number of fingers down / write to select a slot |
+| `0xd1` `0xd2` `0xd3` | in | the selected slot's x, y (console pixels) and state (bit0 down, bit1 pressed, bit2 released) |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
 | `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
 | `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop |
@@ -109,6 +112,37 @@ Port byte = `(device << 4) | register`.
 
 Gamepad bits: `LEFT 0x01 RIGHT 0x02 UP 0x04 DOWN 0x08 A 0x10 B 0x20 START 0x40
 SELECT 0x80`.
+
+### Analog input
+
+Two surfaces sit beside the buttons, and both are **optional** — a ROM that
+never reads them sees the console it always saw.
+
+**The stick** (`0x23`/`0x24`) is signed 8.8 fixed in `[-256, 256]`, the same
+scale and the same `int` type `sin`/`cos` return. Which means the same caveat:
+`/` is unsigned, so branch on the sign before dividing the magnitude. The
+console never applies a deadzone — that is a host's decision about its own
+hardware, and a game that wants one compares against a threshold it chose.
+
+**Touch** (`0xd0`–`0xd3`) reports up to **four** points, in *console pixels*.
+The host has already undone its own letterboxing and upscale, so these are the
+coordinates the game draws with; a game never learns the window size. Select a
+slot by writing `0xd0`, then read it — the trig device's shape.
+
+A point's **slot is its identity** for that finger's whole life. Press and
+release edges are computed per slot, so a host that renumbers its fingers
+between frames reports a release and a press that never happened. Reading a slot
+the console does not have gives an empty one rather than wrapping onto a real
+finger — the same do-nothing answer an off-screen `pset` gets.
+
+What each host provides:
+
+| host | stick | touch |
+|------|-------|-------|
+| `kessel run` | the direction keys, diagonals normalized to ±181 so they aren't √2 faster | the mouse, as slot 0 |
+| Android | an on-screen thumbstick, when the ROM declares `stick` | fingers on the game surface, when the ROM declares `touch` |
+| `vm_run_frame(s)` | the `stick: [x, y]` argument | the `touch: [[x, y], …]` argument |
+| `kessel attach` | whatever the attached window has | the same |
 
 ### Colour
 
@@ -434,6 +468,15 @@ end
   for jumps, menu steps and fire-on-press so the model doesn't have to track the
   previous frame's buttons by hand. `frame_count()→word` gives frames since
   power-on (wraps at 65536) for blink/timers/periodic spawns.
+- **Analog input:** `stick_x()→int` / `stick_y()→int` are the analog stick,
+  signed 8.8 fixed in `[-256, 256]` — same scale, same type, and same unsigned-`/`
+  caveat as `sin`/`cos` above. `touch_count()→word` is how many fingers are
+  down; `touch_x(slot)` / `touch_y(slot)` give one finger's position in **console
+  pixels** (0..3, already unprojected by the host), and
+  `touch_down|pressed|released(slot)→0/1` are the held/edge predicates, the touch
+  equivalents of `btn`/`btnp`/`btnr`. `paint.lua` is the worked example. A slot
+  is a finger's identity, so `touch_pressed(0)` means "the finger in slot 0
+  landed this frame", not "some finger landed".
 - **Arrays:** `len(arr)→word` is the array's declared length (a compile-time
   constant) — write `for i = 0, len(bullets)-1 do` so the loop follows the array
   size instead of a hand-written bound. `clear(x)` zeroes a record or whole array
@@ -464,15 +507,43 @@ end
     dpad = true       -- is the movement pad used
     a = "jump"        -- action labels for the A / B / Start / Select buttons
     b = "dash"
+    stick = "aim"     -- the analog stick is read, and what for
+    touch = "draw"    -- the game reads raw touches on the screen
     pause = START     -- which physical button pauses (default START)
   }
   ```
-  Keys: `dpad` (bool), `a`/`b`/`start`/`select` (a `"..."` label), and `pause` (a
-  button name). Entries are separated by whitespace (commas optional). Every game
-  has a **pause** binding by default (`START`) even with no block, so the host
-  always has a pause control to offer — the play window freezes/resumes the game
-  on that button and shows "PAUSED" in the title. `VmPlayer.controls_json()`
-  hands the whole layout to the host as JSON.
+  Keys: `dpad` (bool), `a`/`b`/`start`/`select` and `left`/`right`/`up`/`down`
+  (a `"..."` label), `stick`/`touch` (a `"..."` label), and `pause` (a button
+  name). Entries are separated by whitespace (commas optional). Every game has a
+  **pause** binding by default (`START`) even with no block, so the host always
+  has a pause control to offer — the play window freezes/resumes the game on that
+  button and shows "PAUSED" in the title. `VmPlayer.controls_json()` hands the
+  whole layout to the host as JSON.
+
+  **Buttons instead of a d-pad.** Labelling the four direction bits says they are
+  plain keys rather than a direction, and a host lays them out as a row — the
+  pop'n-music shape, where nothing on the pad means "up":
+
+  ```lua
+  controls {
+    dpad  = false
+    left  = "red"    down = "green"  up = "blue"  right = "yellow"
+    a     = "white"  b    = "black"
+    pause = START
+  }
+  ```
+
+  `dpad = true` together with a direction label is a **diagnostic**, not a silent
+  winner: the two are claims about the same four bits that mean opposite things.
+  The JSON carries the resolved answer as `dir_layout` (`"dpad"` / `"buttons"` /
+  `"none"`), so every host draws the same pad rather than re-deriving the rule
+  three times. `games/popn.lua` is the worked example, and note what it has to
+  get right: the lane order on screen must match the order a host lays the keys
+  out (`left`, `down`, `up`, `right`, then `a`, `b`).
+
+  `stick` and `touch` are declarations for the host in the same way. The ports
+  work regardless; declaring them is what gets a thumbstick drawn on a phone and
+  what tells the app to route screen touches to the game rather than eating them.
 - Comments: `--` line, `--[[ … ]]` block.
 
 ### Tutorial snippets
@@ -549,7 +620,11 @@ rotation, a `tilemap` well + line clears, `min`-clamped difficulty), `rogue`
 `sokoban` (grid puzzle — `btnp` step input, a board held in the `tilemap` and
 mutated with `mset`, `text`/`number` HUD), and `outrun` (a pseudo-3D road racer
 — per-scanline `hline` road with a parabolic curve, `spr_scaled` roadside trees,
-and a `sin`-bobbed sun).
+and a `sin`-bobbed sun), `popn` (a six-key rhythm game with **no directions** —
+the four direction bits declared as labelled keys, so a host draws a button row),
+and `paint` (the two analog surfaces — `touch_*` fingers in console pixels and a
+`stick_x`/`stick_y` brush, with the branch-on-the-sign idiom the unsigned divide
+forces).
 
 > Note on `min`/`max`: they compile to the VM's **unsigned** `LT`/`GT`, so only
 > clamp values that stay non-negative with them (e.g. a score-derived level).
@@ -561,11 +636,12 @@ and a `sin`-bobbed sun).
 
 | Key | Button |
 |-----|--------|
-| Arrows / WASD | D-pad |
+| Arrows / WASD | D-pad — and the analog stick, at full deflection |
 | `Z` or `J` (or Space) | A |
 | `X` or `K` | B |
 | Return | START |
 | Shift | SELECT |
+| Mouse drag | touch slot 0 |
 | `R` | reload the file from disk |
 | Esc | quit |
 

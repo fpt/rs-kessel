@@ -326,28 +326,34 @@ impl VmConsole {
     /// resume press would leak in as a `btn`/`btnp` on the pause button). Used by
     /// the play window; the agent's `vm_run_frame` drives
     /// [`run_frame`](Self::run_frame) directly instead.
-    pub fn play_tick(&mut self, buttons: u8) {
+    pub fn play_tick(&mut self, input: impl Into<device::Input>) {
+        let input = input.into();
         let pause_bit = self.active_controls.pause_bit();
-        let down = pause_bit != 0 && buttons & pause_bit != 0;
+        let down = pause_bit != 0 && input.buttons & pause_bit != 0;
         if down && !self.prev_pause_down {
             self.paused = !self.paused;
         }
         self.prev_pause_down = down;
         if !self.paused {
-            self.run_frame(buttons & !pause_bit);
+            self.run_frame(input.with_buttons(input.buttons & !pause_bit));
         }
     }
 
-    /// Advance one frame with `buttons` held; returns the observation record.
-    pub fn run_frame(&mut self, buttons: u8) -> Observation {
-        let outcome = self.vm.run_frame(buttons, vm::cap());
+    /// Advance one frame with `input` applied; returns the observation record.
+    ///
+    /// Takes anything that converts into an [`Input`](device::Input), so a
+    /// digital game is still `run_frame(BTN_A)` and only a game that reads the
+    /// stick or the screen has to say more.
+    pub fn run_frame(&mut self, input: impl Into<device::Input>) -> Observation {
+        let input = input.into();
+        let outcome = self.vm.run_frame(input, vm::cap());
         self.frame += 1;
-        let obs = self.observe(buttons, outcome);
+        let obs = self.observe(input, outcome);
         self.prev_fb = self.vm.devices.framebuffer.clone();
         obs
     }
 
-    fn observe(&self, buttons: u8, outcome: RunOutcome) -> Observation {
+    fn observe(&self, input: device::Input, outcome: RunOutcome) -> Observation {
         let fb = &self.vm.devices.framebuffer;
         let bbox = changed_bbox(&self.prev_fb, fb, self.vm.devices.dim());
         let fault = match outcome {
@@ -357,7 +363,11 @@ impl VmConsole {
         Observation {
             frame: self.frame,
             cycles: self.vm.cycle,
-            buttons: button_names(buttons),
+            buttons: button_names(input.buttons),
+            // Recorded only when something analog actually moved. An agent
+            // reading a hundred frames of a d-pad game should not have to skim
+            // past a hundred `"stick": [0,0]` lines to find what changed.
+            analog: (!input.analog_is_at_rest()).then_some(input),
             framebuffer_hash: fnv1a(fb),
             changed_pixels_bbox: bbox,
             console: String::from_utf8_lossy(&self.vm.devices.console).into_owned(),
@@ -459,6 +469,8 @@ pub struct Observation {
     pub frame: u64,
     pub cycles: u64,
     pub buttons: Vec<String>,
+    /// The frame's stick and touches, present only when either was in play.
+    pub analog: Option<device::Input>,
     pub framebuffer_hash: String,
     pub changed_pixels_bbox: Option<[u16; 4]>,
     pub console: String,
@@ -491,6 +503,12 @@ impl Observation {
                 "tag": e.tag, "x": e.x, "y": e.y,
             })).collect::<Vec<_>>(),
             "sound": self.sound.iter().map(audio::event_json).collect::<Vec<_>>(),
+            "stick": self.analog.map(|i| serde_json::json!([i.stick_x, i.stick_y])),
+            "touches": self.analog.map(|i| i.touches.iter()
+                .enumerate()
+                .filter(|(_, t)| t.down)
+                .map(|(slot, t)| serde_json::json!({"slot": slot, "x": t.x, "y": t.y}))
+                .collect::<Vec<_>>()),
         })
     }
 }

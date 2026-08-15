@@ -32,6 +32,26 @@ internal object KesselNative {
     external fun playerTick(handle: Long, buttons: Int)
 
     /**
+     * Advance one frame with buttons, an analog stick, and touch points.
+     *
+     * [stickX]/[stickY] are signed 8.8 fixed point: ±256 is full deflection,
+     * 0 centred. [touches] is a flat `[x, y, down] * MAX_TOUCHES` array the
+     * caller allocates **once** and reuses — an object array of touch points
+     * would be an allocation and a JNI call per finger, sixty times a second.
+     *
+     * A touch's *index* is its identity: the console derives press and release
+     * edges per slot, so a finger must keep the same slot for its whole life or
+     * the game sees a release and a press that never happened.
+     */
+    external fun playerTickInput(
+        handle: Long,
+        buttons: Int,
+        stickX: Int,
+        stickY: Int,
+        touches: IntArray,
+    )
+
+    /**
      * Screen edge length in pixels — valid only after [playerLoad], since the
      * ROM's `screen { … }` block chooses it. Reports the 128 default before.
      */

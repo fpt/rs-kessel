@@ -76,9 +76,29 @@ impl Compiled {
 ///   dpad = true       -- the movement pad is used
 ///   a = "jump"        -- what the A / B / Start / Select buttons do
 ///   b = "dash"
+///   stick = "aim"     -- the analog stick is read, and what for
+///   touch = "draw"    -- the game reads raw touches on the screen
 ///   pause = START     -- which physical button pauses (default START)
 /// }
 /// ```
+///
+/// The four direction bits can also be **labelled**, which says they are plain
+/// buttons rather than a direction — the pop'n-music shape, where nine coloured
+/// keys sit in a row and nothing on the pad means "up":
+///
+/// ```lua
+/// controls {
+///   dpad  = false
+///   left  = "red"    down = "green"  up = "blue"  right = "yellow"
+///   a     = "white"  b    = "black"
+/// }
+/// ```
+///
+/// Labelling a direction is a positive statement that overrides the default
+/// d-pad, so [`dir_layout`](Controls::dir_layout) is the single answer a host
+/// asks for. Saying both — `dpad = true` *and* a direction label — is a
+/// diagnostic rather than a silent winner, because the two mean opposite things
+/// about the same four bits.
 ///
 /// Every game has a **pause** binding by default (START) even without a block,
 /// so the host always has a pause control to offer.
@@ -91,8 +111,44 @@ pub struct Controls {
     pub b: Option<String>,
     pub start: Option<String>,
     pub select: Option<String>,
+    /// Labels for the four direction bits when the game uses them as plain
+    /// buttons. Any of these being set means the host draws a button row rather
+    /// than a d-pad — see [`dir_layout`](Controls::dir_layout).
+    pub left: Option<String>,
+    pub right: Option<String>,
+    pub up: Option<String>,
+    pub down: Option<String>,
+    /// What the analog stick does, or `None` when the game never reads it.
+    pub stick: Option<String>,
+    /// What touching the screen does, or `None` when the game never reads it.
+    pub touch: Option<String>,
     /// The physical button that pauses (uppercase name, e.g. `"START"`).
     pub pause: String,
+}
+
+/// How a host should present the four direction bits.
+///
+/// One enum rather than a host re-deriving the rule from `dpad` plus four
+/// options: three hosts guessing separately is three chances to disagree about
+/// what the same ROM asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirLayout {
+    /// A d-pad. The default, and what every directional game gets.
+    Dpad,
+    /// Four plain buttons in a row, each with its own label.
+    Buttons,
+    /// The game ignores those bits; draw nothing.
+    None,
+}
+
+impl DirLayout {
+    pub fn name(self) -> &'static str {
+        match self {
+            DirLayout::Dpad => "dpad",
+            DirLayout::Buttons => "buttons",
+            DirLayout::None => "none",
+        }
+    }
 }
 
 impl Default for Controls {
@@ -103,6 +159,12 @@ impl Default for Controls {
             b: None,
             start: None,
             select: None,
+            left: None,
+            right: None,
+            up: None,
+            down: None,
+            stick: None,
+            touch: None,
             pause: "START".to_string(),
         }
     }
@@ -114,14 +176,37 @@ impl Controls {
         super::buttons_from_names(std::slice::from_ref(&self.pause))
     }
 
+    /// The direction labels in pad order, `None` where the game gave none.
+    pub fn dir_labels(&self) -> [&Option<String>; 4] {
+        [&self.left, &self.right, &self.up, &self.down]
+    }
+
+    /// What a host should draw for the four direction bits.
+    pub fn dir_layout(&self) -> DirLayout {
+        if self.dir_labels().iter().any(|l| l.is_some()) {
+            DirLayout::Buttons
+        } else if self.dpad {
+            DirLayout::Dpad
+        } else {
+            DirLayout::None
+        }
+    }
+
     /// The metadata as JSON, for a host UI to read.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "dpad": self.dpad,
+            "dir_layout": self.dir_layout().name(),
             "a": self.a,
             "b": self.b,
             "start": self.start,
             "select": self.select,
+            "left": self.left,
+            "right": self.right,
+            "up": self.up,
+            "down": self.down,
+            "stick": self.stick,
+            "touch": self.touch,
             "pause": self.pause,
         })
     }
@@ -857,22 +942,46 @@ impl Parser {
         self.eat_kw("controls");
         self.expect_sym("{", d);
         let mut controls = Controls::default();
+        // `dpad` defaults to true, so "the author asked for a d-pad" and "the
+        // author said nothing" are only distinguishable if we remember which
+        // happened. Without this, labelling a direction would contradict a
+        // default nobody wrote.
+        let mut dpad_line: Option<usize> = None;
+        let mut label_line: Option<usize> = None;
         while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
             let key_line = self.line();
             let key = self.ident(d);
             self.expect_sym("=", d);
             match key.as_str() {
-                "dpad" => controls.dpad = self.parse_bool_value(d),
+                "dpad" => {
+                    controls.dpad = self.parse_bool_value(d);
+                    if controls.dpad {
+                        dpad_line = Some(key_line);
+                    }
+                }
                 "a" => controls.a = Some(self.parse_str_value(d)),
                 "b" => controls.b = Some(self.parse_str_value(d)),
                 "start" => controls.start = Some(self.parse_str_value(d)),
                 "select" => controls.select = Some(self.parse_str_value(d)),
+                "left" | "right" | "up" | "down" => {
+                    let label = Some(self.parse_str_value(d));
+                    label_line.get_or_insert(key_line);
+                    match key.as_str() {
+                        "left" => controls.left = label,
+                        "right" => controls.right = label,
+                        "up" => controls.up = label,
+                        _ => controls.down = label,
+                    }
+                }
+                "stick" => controls.stick = Some(self.parse_str_value(d)),
+                "touch" => controls.touch = Some(self.parse_str_value(d)),
                 "pause" => controls.pause = self.parse_button_value(d),
                 other => {
                     d.push(err(
                         key_line,
                         format!(
-                            "unknown controls key '{other}' (expected dpad, a, b, start, select, or pause)"
+                            "unknown controls key '{other}' (expected dpad, a, b, start, select, \
+                             left, right, up, down, stick, touch, or pause)"
                         ),
                     ));
                     self.advance(); // consume the value token to recover
@@ -881,6 +990,16 @@ impl Parser {
             self.eat_sym(","); // commas are optional between entries
         }
         self.expect_sym("}", d);
+        // Both claim the same four bits and mean opposite things. Picking a
+        // winner would give the author a pad that silently ignored half of what
+        // they wrote.
+        if let (Some(dl), Some(ll)) = (dpad_line, label_line) {
+            d.push(err(
+                ll.max(dl),
+                "'dpad = true' and a direction label name the same four bits — \
+                 set 'dpad = false' to use left/right/up/down as plain buttons",
+            ));
+        }
         Decl::Controls { controls, line }
     }
 
@@ -1446,6 +1565,14 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "btn" => (1, true),
         "btnp" => (1, true),
         "btnr" => (1, true),
+        "stick_x" => (0, true),
+        "stick_y" => (0, true),
+        "touch_count" => (0, true),
+        "touch_x" => (1, true),
+        "touch_y" => (1, true),
+        "touch_down" => (1, true),
+        "touch_pressed" => (1, true),
+        "touch_released" => (1, true),
         "frame_count" => (0, true),
         "sin" => (1, true),
         "cos" => (1, true),
@@ -2336,9 +2463,12 @@ impl Compiler {
                     Ty::Word
                 }
             }
-            // sin/cos return a signed 8.8 fixed value; the rest are unsigned.
+            // sin/cos and the stick axes return a signed 8.8 fixed value; the
+            // rest are unsigned. Without this a game would compare a full-left
+            // deflection (-256, delivered as 0xFF00) as a large positive
+            // number, and every stick-steered game would only steer one way.
             Expr::Call(name, ..) => match name.as_str() {
-                "sin" | "cos" => Ty::Int,
+                "sin" | "cos" | "stick_x" | "stick_y" => Ty::Int,
                 _ => Ty::Word,
             },
         }
@@ -2552,12 +2682,24 @@ impl Compiler {
             "btn" => "#20 DEI AND #00 NE",
             "btnp" => "#21 DEI AND #00 NE", // just-pressed this frame
             "btnr" => "#22 DEI AND #00 NE", // just-released this frame
-            "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
-            "sin" => "#c0 DEO #c0 DEI",     // ( angle ) -> signed 8.8 fixed sin
-            "cos" => "#c0 DEO #c1 DEI",     // ( angle ) -> signed 8.8 fixed cos
-            "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
-            "music" => "#91 DEO",           // ( id ) start a music track
-            "music_stop" => "#00 #92 DEO",  // stop music
+            // Analog stick, signed 8.8 fixed like sin/cos — so a game moves by
+            // `stick_x() * speed / 256` exactly as it would along an angle.
+            "stick_x" => "#23 DEI",
+            "stick_y" => "#24 DEI",
+            // Touch: latch the slot, then read. Same shape as the trig device —
+            // one register selects, the next answers.
+            "touch_count" => "#d0 DEI",
+            "touch_x" => "#d0 DEO #d1 DEI", // ( slot ) -> console px
+            "touch_y" => "#d0 DEO #d2 DEI", // ( slot ) -> console px
+            "touch_down" => "#d0 DEO #d3 DEI #01 AND #00 NE",
+            "touch_pressed" => "#d0 DEO #d3 DEI #02 AND #00 NE",
+            "touch_released" => "#d0 DEO #d3 DEI #04 AND #00 NE",
+            "frame_count" => "#80 DEI", // frames since power-on (wraps at 65536)
+            "sin" => "#c0 DEO #c0 DEI", // ( angle ) -> signed 8.8 fixed sin
+            "cos" => "#c0 DEO #c1 DEI", // ( angle ) -> signed 8.8 fixed cos
+            "sfx" => "#90 DEO",         // ( id ) trigger a sound effect
+            "music" => "#91 DEO",       // ( id ) start a music track
+            "music_stop" => "#00 #92 DEO", // stop music
             // The note ports latch and commit on the register holding the
             // call's FIRST argument, which a stack machine hands back last —
             // the same shape as `pal` above.
@@ -4109,6 +4251,148 @@ mod tests {
         assert_eq!(c.controls, Controls::default());
         assert_eq!(c.controls.pause, "START");
         assert!(c.controls.dpad);
+    }
+
+    /// A ROM with no block reads its direction bits as a d-pad — the default
+    /// every existing game relies on.
+    #[test]
+    fn dir_layout_defaults_to_a_dpad() {
+        assert_eq!(
+            compile("function draw() end").controls.dir_layout(),
+            DirLayout::Dpad
+        );
+        let none = compile("controls { dpad = false } function draw() end");
+        assert_eq!(none.controls.dir_layout(), DirLayout::None);
+    }
+
+    /// Labelling a direction says those four bits are plain keys, which is the
+    /// whole pop'n-music layout. It also overrides the *default* d-pad without
+    /// the author having to think about it.
+    #[test]
+    fn labelling_a_direction_makes_it_a_button_row() {
+        let c = compile(
+            r#"
+            controls {
+              dpad = false
+              left = "red"  down = "green"  up = "blue"  right = "yellow"
+              a = "white"
+            }
+            function draw() end
+        "#,
+        );
+        assert!(c.ok(), "{:?}", c.diagnostics);
+        assert_eq!(c.controls.dir_layout(), DirLayout::Buttons);
+        assert_eq!(c.controls.left.as_deref(), Some("red"));
+        let j = c.controls.to_json();
+        assert_eq!(j["dir_layout"], "buttons");
+        assert_eq!(j["down"], "green");
+    }
+
+    /// `dpad = true` and a direction label are claims about the same four bits
+    /// that mean opposite things. Picking a winner would give the author a pad
+    /// that silently ignored half of what they wrote.
+    #[test]
+    fn a_dpad_and_a_direction_label_together_are_a_diagnostic() {
+        let c = compile(
+            r#"
+            controls {
+              dpad = true
+              left = "red"
+            }
+            function draw() end
+        "#,
+        );
+        assert!(!c.ok(), "the contradiction must not compile");
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("same four bits")),
+            "{:?}",
+            c.diagnostics
+        );
+    }
+
+    /// The stick and touch are declarations for the host UI, exactly like the
+    /// button labels — the VM itself reads the ports regardless.
+    #[test]
+    fn stick_and_touch_are_declared_and_reach_the_json() {
+        let c = compile(
+            r#"
+            controls {
+              dpad = false
+              stick = "steer"
+              touch = "aim"
+            }
+            function draw() end
+        "#,
+        );
+        assert!(c.ok(), "{:?}", c.diagnostics);
+        let j = c.controls.to_json();
+        assert_eq!(j["stick"], "steer");
+        assert_eq!(j["touch"], "aim");
+        // A game that says nothing must not advertise either.
+        let quiet = compile("function draw() end").controls.to_json();
+        assert!(quiet["stick"].is_null() && quiet["touch"].is_null());
+    }
+
+    /// The stick reads as a *signed* value, so a full-left deflection compares
+    /// as negative rather than as 65280.
+    #[test]
+    fn the_stick_axes_are_signed() {
+        let src = r#"
+            function update() end
+            function draw()
+              local x: int = stick_x()
+              if x < 0 then entity(1, 0, 1) else entity(0, 0, 1) end
+            end
+        "#;
+        let mut c = load(src);
+        let left = crate::device::Input {
+            stick_x: -crate::device::STICK_FULL,
+            ..Default::default()
+        };
+        assert_eq!(
+            c.run_frame(left).entities[0].x,
+            1,
+            "-256 must read negative"
+        );
+        let right = crate::device::Input {
+            stick_x: crate::device::STICK_FULL,
+            ..Default::default()
+        };
+        assert_eq!(c.run_frame(right).entities[0].x, 0);
+    }
+
+    /// The touch builtins latch a slot and read it back, and the edges are per
+    /// slot — the same shape the device tests pin, reached through luax.
+    #[test]
+    fn touch_builtins_read_the_selected_slot() {
+        let src = r#"
+            function update() end
+            function draw()
+              entity(touch_x(0), touch_y(0), touch_count())
+              if touch_pressed(0) then entity(1, 1, 99) end
+            end
+        "#;
+        let mut c = load(src);
+        let mut input = crate::device::Input::default();
+        input.touches[0] = crate::device::Touch {
+            x: 33,
+            y: 44,
+            down: true,
+        };
+
+        let o = c.run_frame(input);
+        assert_eq!((o.entities[0].x, o.entities[0].y), (33, 44));
+        assert_eq!(o.entities[0].tag, 1, "one finger down");
+        assert!(
+            o.entities.iter().any(|e| e.tag == 99),
+            "a fresh press must report pressed"
+        );
+
+        // Held, not newly pressed.
+        let o = c.run_frame(input);
+        assert!(!o.entities.iter().any(|e| e.tag == 99));
     }
 
     #[test]

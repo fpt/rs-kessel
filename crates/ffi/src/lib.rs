@@ -137,17 +137,97 @@ pub unsafe extern "C" fn kessel_player_load(
     }
 }
 
+/// One touch point, in console pixels. Mirrors `kessel_vm::device::Touch`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct KesselTouch {
+    pub x: u16,
+    pub y: u16,
+    pub down: bool,
+}
+
+/// How many touch slots [`KesselInput`] carries. Mirrors
+/// `kessel_vm::device::MAX_TOUCHES`; the compile-time assert below is what keeps
+/// the two from drifting into a struct the C side reads short.
+pub const KESSEL_MAX_TOUCHES: usize = 4;
+const _: () = assert!(KESSEL_MAX_TOUCHES == kessel_vm::device::MAX_TOUCHES);
+
+/// Everything a host hands the console for one frame.
+///
+/// `#[repr(C)]` and passed by pointer, so adding a field later is a header
+/// change rather than a different calling convention — and so a Swift host can
+/// build one without a shim.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct KesselInput {
+    /// The `KESSEL_BTN_*` bitfield.
+    pub buttons: u8,
+    /// Analog stick, signed 8.8 fixed: ±256 is full deflection, 0 centred.
+    pub stick_x: i16,
+    pub stick_y: i16,
+    /// Touch points by slot. A slot is a finger's identity for its whole life —
+    /// renumbering them between frames reports a release and a press the player
+    /// never made.
+    pub touches: [KesselTouch; KESSEL_MAX_TOUCHES],
+}
+
+impl From<&KesselInput> for kessel_vm::device::Input {
+    fn from(i: &KesselInput) -> Self {
+        let mut touches = [kessel_vm::device::Touch::default(); KESSEL_MAX_TOUCHES];
+        for (dst, src) in touches.iter_mut().zip(i.touches.iter()) {
+            *dst = kessel_vm::device::Touch {
+                x: src.x,
+                y: src.y,
+                down: src.down,
+            };
+        }
+        kessel_vm::device::Input {
+            buttons: i.buttons,
+            stick_x: i.stick_x,
+            stick_y: i.stick_y,
+            touches,
+        }
+    }
+}
+
 /// Advance one frame with `buttons` held (the `BTN_*` bitfield). A no-op until a
 /// ROM is loaded.
 ///
 /// When audio is enabled this also hands the frame's sound to the audio thread.
 /// It never blocks on it: the queue is lock-free, and a full one drops the
 /// sound rather than stalling the game.
+///
+/// The buttons-only shorthand for [`kessel_player_tick_input`]. It stays because
+/// most games are digital, and making every host build a struct to press A would
+/// be ceremony for nothing.
 #[no_mangle]
 pub extern "C" fn kessel_player_tick(p: *mut KesselPlayer, buttons: u8) {
     let handle = handle!(p, ());
     let queue = &handle.queue;
     handle.player.tick_collecting(buttons, &mut |ev| {
+        queue.push(ev);
+    });
+}
+
+/// Advance one frame with the full input — buttons, analog stick, touches.
+///
+/// A null `input` is treated as "nothing held", the same as passing 0 to
+/// [`kessel_player_tick`], rather than skipping the frame: a game that stops
+/// advancing is a far worse answer to a host bug than a frame with no input.
+///
+/// # Safety
+/// `input` must be null or point to a readable `KesselInput` for the call. It is
+/// only read, never retained — the caller keeps owning it, and is expected to
+/// reuse one struct rather than build a fresh one sixty times a second.
+#[no_mangle]
+pub unsafe extern "C" fn kessel_player_tick_input(p: *mut KesselPlayer, input: *const KesselInput) {
+    let handle = handle!(p, ());
+    let input = match unsafe { input.as_ref() } {
+        Some(i) => kessel_vm::device::Input::from(i),
+        None => kessel_vm::device::Input::default(),
+    };
+    let queue = &handle.queue;
+    handle.player.tick_collecting(input, &mut |ev| {
         queue.push(ev);
     });
 }
@@ -410,6 +490,66 @@ mod tests {
             assert_ne!(before, fb, "frame did not advance");
 
             kessel_player_free(p);
+        }
+    }
+
+    /// The full-input entry point has to reach the same ports the Rust hosts
+    /// do, or an iOS/Android game would read a permanently centred stick.
+    #[test]
+    fn tick_input_carries_the_stick_and_touches() {
+        // Paints where the finger is, and marks x=1 for a negative stick or
+        // x=2 for a non-negative one. The framebuffer is the only state this
+        // ABI exposes, so the probe writes its answers into pixels.
+        const PROBE: &str = r#"
+            function update() end
+            function draw()
+              cls(0)
+              local x: int = stick_x()
+              if x < 0 then pset(1, 0, 7) else pset(2, 0, 7) end
+              if touch_down(0) then pset(touch_x(0), touch_y(0), 7) end
+            end
+        "#;
+        unsafe {
+            let p = kessel_player_new();
+            assert_eq!(load(p, PROBE, "probe.lua"), "");
+            let dim = kessel_player_screen_dim(p) as usize;
+            let mut fb = vec![0u8; dim * dim * 4];
+            // Colour 7 is (0xFF,0xF1,0xE8); index 0 is black. Comparing the red
+            // channel is enough to tell them apart.
+            let lit = |fb: &[u8], x: usize, y: usize| fb[(y * dim + x) * 4] == 0xFF;
+
+            let mut input = KesselInput {
+                stick_x: -256,
+                ..KesselInput::default()
+            };
+            input.touches[0] = KesselTouch {
+                x: 40,
+                y: 90,
+                down: true,
+            };
+            kessel_player_tick_input(p, &input);
+            assert!(kessel_player_framebuffer(p, fb.as_mut_ptr(), fb.len()));
+            assert!(lit(&fb, 1, 0), "a full-left stick did not read as negative");
+            assert!(lit(&fb, 40, 90), "the touch never reached the ROM");
+
+            // A null input is "nothing held" — the frame still has to run, and
+            // the previous frame's finger must be gone.
+            kessel_player_tick_input(p, std::ptr::null());
+            assert!(kessel_player_framebuffer(p, fb.as_mut_ptr(), fb.len()));
+            assert!(lit(&fb, 2, 0), "a null input must centre the stick");
+            assert!(!lit(&fb, 40, 90), "the finger outlived its frame");
+
+            kessel_player_free(p);
+        }
+    }
+
+    /// A null handle must be as safe here as everywhere else on this surface.
+    #[test]
+    fn tick_input_tolerates_a_null_handle() {
+        let input = KesselInput::default();
+        unsafe {
+            kessel_player_tick_input(std::ptr::null_mut(), &input);
+            kessel_player_tick_input(std::ptr::null_mut(), std::ptr::null());
         }
     }
 

@@ -2,6 +2,7 @@ package dev.kessel
 
 import dev.kessel.vm.Buttons
 import dev.kessel.vm.Controls
+import dev.kessel.vm.DirLayout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -72,6 +73,58 @@ class ControlsTest {
         assertEquals(0, c.pauseBit)
         // …and with no pause bit, nothing gets filtered off the pad by accident.
         assertTrue(c.actionButtons.isEmpty())
+    }
+
+    @Test
+    fun `a labelled direction turns the pad into a button row`() {
+        // popn.lua: six coloured keys, nothing meaning "up".
+        val c = Controls.parse(
+            """{"dpad":false,"dir_layout":"buttons","a":"white","b":"pink","start":null,
+               "select":null,"left":"red","right":"yellow","up":"blue","down":"green",
+               "stick":null,"touch":null,"pause":"START"}"""
+        )
+        assertEquals(DirLayout.BUTTONS, c.dirLayout)
+        // Left to right as a player sees them, and as popn.lua's `lane_bit`
+        // orders its lanes — the pad and the screen have to agree.
+        assertEquals(
+            listOf(
+                Buttons.LEFT to "red",
+                Buttons.DOWN to "green",
+                Buttons.UP to "blue",
+                Buttons.RIGHT to "yellow",
+            ),
+            c.directionButtons,
+        )
+        assertEquals(listOf(Buttons.A to "white", Buttons.B to "pink"), c.actionButtons)
+    }
+
+    @Test
+    fun `dir layout covers the three cases a rom can ask for`() {
+        val dpad = Controls.parse("""{"dpad":true,"pause":"START"}""")
+        assertEquals(DirLayout.DPAD, dpad.dirLayout)
+        assertTrue(dpad.directionButtons.isEmpty())
+
+        val none = Controls.parse("""{"dpad":false,"pause":"START"}""")
+        assertEquals(DirLayout.NONE, none.dirLayout)
+
+        // One label is enough — a game may use a single key.
+        val one = Controls.parse("""{"dpad":false,"left":"red","pause":"START"}""")
+        assertEquals(DirLayout.BUTTONS, one.dirLayout)
+        assertEquals(listOf(Buttons.LEFT to "red"), one.directionButtons)
+    }
+
+    @Test
+    fun `the analog surfaces are opt-in`() {
+        val plain = Controls.parse("""{"dpad":true,"pause":"START"}""")
+        assertNull(plain.stick)
+        assertNull(plain.touch)
+
+        // paint.lua declares both.
+        val analog = Controls.parse(
+            """{"dpad":false,"stick":"move brush","touch":"draw","a":"clear","pause":"START"}"""
+        )
+        assertEquals("move brush", analog.stick)
+        assertEquals("draw", analog.touch)
     }
 
     @Test

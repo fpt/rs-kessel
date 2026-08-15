@@ -31,6 +31,38 @@ object Buttons {
 /** Screen edge length of [dev.kessel.vm.KesselNative]'s default mode. */
 const val CLASSIC_DIM = 128
 
+/** Touch slots the console reports. Must match `MAX_TOUCHES` in `device.rs`. */
+const val MAX_TOUCHES = 4
+
+/** Full analog deflection, signed 8.8 fixed. Must match `STICK_FULL`. */
+const val STICK_FULL = 256
+
+/**
+ * One frame's input: buttons, an analog stick, and touch points.
+ *
+ * The touch array is flat `[x, y, down] * MAX_TOUCHES` because that is what
+ * crosses JNI without allocating — see [KesselNative.playerTickInput]. It is
+ * owned by whoever builds the input and must not be shared across threads
+ * without the caller's own ordering.
+ */
+class VmInput {
+    var buttons: Int = 0
+    var stickX: Int = 0
+    var stickY: Int = 0
+    val touches = IntArray(MAX_TOUCHES * 3)
+
+    /** Clear every touch slot. Cheaper than allocating a fresh array a frame. */
+    fun clearTouches() = touches.fill(0)
+
+    /** Put a finger in [slot]; out-of-range slots are dropped, not wrapped. */
+    fun setTouch(slot: Int, x: Int, y: Int) {
+        if (slot !in 0 until MAX_TOUCHES) return
+        touches[slot * 3] = x
+        touches[slot * 3 + 1] = y
+        touches[slot * 3 + 2] = 1
+    }
+}
+
 /**
  * A console, with a lifetime Kotlin can be trusted with.
  *
@@ -89,6 +121,25 @@ class KesselVm : AutoCloseable {
     @Synchronized
     fun tick(buttons: Int) {
         if (handle != 0L) KesselNative.playerTick(handle, buttons)
+    }
+
+    /**
+     * Advance one frame with the full input — buttons, stick and touches.
+     *
+     * [input] is read, not retained: the caller keeps owning it and is expected
+     * to reuse one instance so the 60 Hz path allocates nothing.
+     */
+    @Synchronized
+    fun tick(input: VmInput) {
+        if (handle != 0L) {
+            KesselNative.playerTickInput(
+                handle,
+                input.buttons,
+                input.stickX,
+                input.stickY,
+                input.touches,
+            )
+        }
     }
 
     /**

@@ -67,6 +67,51 @@ buffer must read it **after** the ROM loads — `kessel_player_screen_dim(p)`,
 `KesselVm.screenDim()`. Reading it earlier silently yields 128 and tears a
 240×240 game across the buffer.
 
+### Input: one struct, three surfaces
+
+A frame's input is **one `device::Input`** — buttons, an analog stick, four
+touch points — not three arguments. They are one thing: the state of the
+player's hands at a frame boundary, and a snapshot that replayed the buttons but
+not the stick would be a *plausibly* wrong replay, which is the failure mode this
+machine exists to avoid. `From<u8>` keeps the common case honest, so a digital
+game is still `run_frame(BTN_A)` at every layer.
+
+Three things follow:
+
+- **The stick is signed 8.8 fixed** (`±STICK_FULL`), the same shape the trig
+  device returns, and `stick_x`/`stick_y` type as `Ty::Int` in luax for the same
+  reason `sin`/`cos` do. Without that a full-left deflection compares as 65280
+  and every stick-steered game steers one way only.
+- **Touch coordinates are console pixels.** Each host undoes its own letterbox
+  and upscale before the VM sees them — `window_to_console` in `play.rs`,
+  `consoleTouch` in `Blit.kt`, both the exact inverse of that host's blit and
+  both tested beside it. A game never learns the window size.
+- **A touch slot is a finger's identity.** Press/release edges are computed per
+  slot, so a host that renumbers its fingers between frames reports a release and
+  a press that never happened. Reading a slot that does not exist gives an empty
+  one rather than wrapping onto a real finger — the same do-nothing rule as an
+  off-screen `pset` and an out-of-range note argument.
+
+  This is why Android keys slots off `PointerId` (`TouchTracker`) rather than
+  position-in-list. Compacting the list is the obvious implementation and it is
+  wrong in a way nothing crashes on: lift the first of two fingers and the
+  second slides into slot 0, so the VM sees one finger teleport and another
+  release. A finger that wanders into the letterbox keeps its slot and reports
+  *up*, for the same reason — the alternative hands its slot to someone else.
+
+**The four direction bits are whatever the ROM says they are.** Labelling
+`left`/`right`/`up`/`down` in `controls` declares them plain keys and a host
+draws a button row (`games/popn.lua`); `dpad = true` alongside a label is a
+diagnostic, because the two are claims about the same four bits that mean
+opposite things. `Controls::dir_layout()` is the single resolved answer, carried
+in the JSON as `dir_layout` — three hosts re-deriving the rule is three chances
+to disagree about one ROM.
+
+This is deliberately **not** a wider gamepad. Eight bits is eight labelled keys,
+which covers the layouts this console is for; widening `gamepad` to `u16` would
+touch the attach protocol, the C ABI, every host's plumbing and every
+`buttons_from_names` caller to buy one more key.
+
 The load-bearing rule: **`kessel-vm` is host-free.** It does no I/O beyond the
 files under its working directory, synthesizes no audio, and touches no GPU.
 Drawing is a software rasterizer into an indexed framebuffer; sound is an event
@@ -106,7 +151,7 @@ Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 | `src/audio.rs` | The cpal output stream for `kessel run`, and the lock-free queue the game thread feeds it. `render_block` is the callback body, factored out so it is testable without a sound card. |
 | `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). `Source` picks local vs. attached. |
 | `src/attach/session.rs` | Session files in the cache dir: publish, list, discover. Directory is a parameter, never read from env inside logic — the tests run in parallel. |
-| `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. Each TICK response carries its own `dim`. |
+| `src/attach/protocol.rs` | The binary HELLO/TICK framing between `mcp` and an attached `play`. A TICK request carries the whole `Input`; each TICK response carries its own `dim`. |
 | `src/attach/server.rs` | Loopback listener inside `kessel mcp`; each TICK locks the shared console. |
 | `src/attach/client.rs` | `AttachClient` — background tick thread, latest-frame slot. |
 
@@ -354,9 +399,10 @@ additions rather than a rewrite.
 | `game/GameCatalog.kt` | The library, read from `assets/`. |
 | `game/GameEngine.kt` | The 60 Hz thread. Draws to a `Surface`; publishes only pause/halt to Compose. |
 | `game/AudioPlayer.kt` | The audio thread: an `AudioTrack` in `ENCODING_PCM_FLOAT`, fed from a direct `ByteBuffer` the native synth renders into. `write` blocks, which is what clocks the loop — there is no timer. |
-| `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. |
-| `ui/GameSurface.kt` | The `SurfaceView` the engine draws into. |
-| `ui/Gamepad.kt` | Geometry-driven touch pad — one `pointerInput` hit-tests every pointer, which is what makes multi-touch and d-pad diagonals work. |
+| `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. `consoleTouch` is its inverse. |
+| `game/TouchTracker.kt` | Pointer id → console touch slot, held for a finger's whole life. Plain types only, so the sequences that break slot identity are testable off-device. |
+| `ui/GameSurface.kt` | The `SurfaceView` the engine draws into, plus the pointer overlay that reports fingers when the ROM declares `touch`. |
+| `ui/Gamepad.kt` | Geometry-driven touch pad — one `pointerInput` hit-tests every pointer, which is what makes multi-touch and d-pad diagonals work. Draws a d-pad, a labelled button row, or a thumbstick, from the ROM's `dir_layout`/`stick`. |
 
 **Frames never enter Compose.** The screen is a `SurfaceView`, not an `Image`,
 and this is the one place the app deliberately isn't Compose. A producer thread
@@ -469,7 +515,10 @@ kessel/
   over the MCP surface — the thing that actually has to work for a real host.
 - `blit` in `play.rs` is tested separately (channel order, integer upscale,
   letterboxing, undersized window) because a wrong stride there produces a
-  plausible-but-wrong picture rather than a crash.
+  plausible-but-wrong picture rather than a crash. Its inverse
+  (`window_to_console`, and `consoleTouch` in `Blit.kt`) is tested beside it for
+  exactly the same reason: a margin left out puts a game's cursor a few pixels
+  from the player's finger on every window size but the one it was tried at.
 
 ## Troubleshooting
 

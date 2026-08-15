@@ -20,11 +20,50 @@ data class Controls(
     val b: String? = null,
     val start: String? = null,
     val select: String? = null,
+    /**
+     * Labels for the four direction bits when the game uses them as plain
+     * buttons — the pop'n-music shape. Non-null here means [dirLayout] is
+     * [DirLayout.BUTTONS].
+     */
+    val left: String? = null,
+    val right: String? = null,
+    val up: String? = null,
+    val down: String? = null,
+    /** What the analog stick does, or null when the game never reads it. */
+    val stick: String? = null,
+    /** What touching the screen does, or null when the game never reads it. */
+    val touch: String? = null,
     /** Physical button that pauses, by name (e.g. `"START"`). */
     val pause: String = "START",
 ) {
     /** The gamepad bit that pauses, or 0 if the ROM names no known button. */
     val pauseBit: Int get() = Buttons.byName(pause)
+
+    /**
+     * How to present the four direction bits.
+     *
+     * The VM decides this and sends it as `dir_layout`, rather than each host
+     * re-deriving it from `dpad` plus four labels — three hosts guessing
+     * separately is three chances to disagree about one ROM.
+     */
+    val dirLayout: DirLayout
+        get() = when {
+            directionButtons.isNotEmpty() -> DirLayout.BUTTONS
+            dpad -> DirLayout.DPAD
+            else -> DirLayout.NONE
+        }
+
+    /**
+     * The labelled direction bits, in pad order, as (bit, label) pairs. Empty
+     * unless the ROM labelled at least one.
+     */
+    val directionButtons: List<Pair<Int, String>>
+        get() = buildList {
+            left?.let { add(Buttons.LEFT to it) }
+            down?.let { add(Buttons.DOWN to it) }
+            up?.let { add(Buttons.UP to it) }
+            right?.let { add(Buttons.RIGHT to it) }
+        }
 
     /**
      * The action buttons to draw, in pad order, as (bit, label) pairs.
@@ -56,6 +95,12 @@ data class Controls(
                 b = o.label("b"),
                 start = o.label("start"),
                 select = o.label("select"),
+                left = o.label("left"),
+                right = o.label("right"),
+                up = o.label("up"),
+                down = o.label("down"),
+                stick = o.label("stick"),
+                touch = o.label("touch"),
                 pause = o.optString("pause", "START").ifBlank { "START" },
             )
         } catch (_: Exception) {
@@ -66,4 +111,16 @@ data class Controls(
         private fun JSONObject.label(key: String): String? =
             if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
     }
+}
+
+/** How a host should present the four direction bits. Mirrors `luax::DirLayout`. */
+enum class DirLayout {
+    /** A d-pad — the default, and what every directional game gets. */
+    DPAD,
+
+    /** Four plain buttons in a row, each with its own label. */
+    BUTTONS,
+
+    /** The game ignores those bits; draw nothing. */
+    NONE,
 }

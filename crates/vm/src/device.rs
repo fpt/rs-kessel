@@ -8,7 +8,7 @@
 //! |-----|---------|-----------|
 //! | 0x0 | system  | 0 halt · 1 pal-index (0..255, commits) · 2 pal-r · 3 pal-g · 4 pal-b |
 //! | 0x1 | screen  | 0 vector · 1 x · 2 y · 3 color · 4 pixel · 5 sprite · 6 cls · 7 cam-x · 8 cam-y · 9 flags · a blit-id · b tileset-base · c glyph(code) · d hspan(x2) · e sprite-bank |
-//! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) — all read |
+//! | 0x2 | gamepad | 0 buttons · 1 pressed (edge) · 2 released (edge) · 3 stick-x · 4 stick-y — all read |
 //! | 0x3 | rng     | 0 next (read) / set-seed (write) |
 //! | 0x4 | storage | 0 addr · 1 read · 2 write |
 //! | 0x5 | debug   | 0 ent-x · 1 ent-y · 2 ent-commit(tag) |
@@ -19,6 +19,7 @@
 //! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 //! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
+//! | 0xd | touch   | 0 slot (write) / count (read) · 1 x · 2 y · 3 state (bit0 down, bit1 pressed, bit2 released) |
 
 /// Screen edge length for [`VideoMode::Classic128`].
 pub const CLASSIC_DIM: usize = 128;
@@ -86,6 +87,80 @@ pub const BTN_A: u8 = 0x10;
 pub const BTN_B: u8 = 0x20;
 pub const BTN_START: u8 = 0x40;
 pub const BTN_SELECT: u8 = 0x80;
+
+/// Full analog deflection, in the same signed 8.8 fixed point the trig device
+/// returns (256 = 1.0). A stick reads as `-STICK_FULL..=STICK_FULL` on each
+/// axis, so `x = x + stick_x() * speed / 256` is the same arithmetic a game
+/// already writes for `cos(a) * speed / 256`.
+pub const STICK_FULL: i16 = 256;
+
+/// How many simultaneous touch points the console reports.
+///
+/// Four, because that is what a pair of thumbs and a stray finger produce and
+/// what fits in a snapshot without thought. It is a *console* limit, not a
+/// hardware one: a host that sees more fingers drops the extras rather than
+/// reshuffling the slots underneath a game.
+pub const MAX_TOUCHES: usize = 4;
+
+/// One touch point, in **console pixels** — the host has already undone its own
+/// letterboxing and upscale, so a game compares these against the coordinates it
+/// draws with and never learns the window size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Touch {
+    pub x: u16,
+    pub y: u16,
+    pub down: bool,
+}
+
+/// Everything a host hands the machine for one frame.
+///
+/// This is one struct rather than three arguments because the three are one
+/// thing: the state of the player's hands at a frame boundary. A snapshot that
+/// replays the buttons but not the stick would be a *plausibly* wrong replay,
+/// which is the failure mode this machine exists to avoid.
+///
+/// `From<u8>` keeps the common case honest — `run_frame(BTN_A)` means "buttons
+/// only, everything else at rest", which is exactly what a digital game wants.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Input {
+    pub buttons: u8,
+    /// Analog stick, signed 8.8 fixed in `-STICK_FULL..=STICK_FULL`.
+    pub stick_x: i16,
+    pub stick_y: i16,
+    /// Touch points by **slot**. A host must keep one finger in one slot for
+    /// that finger's whole life — the press/release edges are computed per slot,
+    /// so a host that renumbers its fingers between frames reports a release and
+    /// a press that never happened.
+    pub touches: [Touch; MAX_TOUCHES],
+}
+
+impl From<u8> for Input {
+    fn from(buttons: u8) -> Self {
+        Input {
+            buttons,
+            ..Input::default()
+        }
+    }
+}
+
+impl Input {
+    /// Buttons held, with everything analog at rest.
+    pub fn buttons(buttons: u8) -> Input {
+        Input::from(buttons)
+    }
+
+    /// The same input with `buttons` replaced — for the pause button, which the
+    /// host masks out before the game ever sees the frame.
+    pub fn with_buttons(self, buttons: u8) -> Input {
+        Input { buttons, ..self }
+    }
+
+    /// True when nothing analog is being reported, so a caller can skip
+    /// describing it. Buttons are *not* consulted: they have their own record.
+    pub fn analog_is_at_rest(&self) -> bool {
+        self.stick_x == 0 && self.stick_y == 0 && self.touches.iter().all(|t| !t.down)
+    }
+}
 
 /// The 3×5 pixel rows for one glyph (ASCII `code`), top to bottom. Each row is
 /// 3 bits — bit 2 is the leftmost column. Covers `A-Z` (lowercase folds up),
@@ -294,6 +369,16 @@ pub struct Devices {
     /// Gamepad bitfield from the *previous* frame, for edge detection
     /// (`btnp`/`btnr`).
     pub prev_gamepad: u8,
+    /// Analog stick this frame, signed 8.8 fixed (see [`STICK_FULL`]).
+    pub stick_x: i16,
+    pub stick_y: i16,
+    /// Touch points this frame, by slot.
+    pub touches: [Touch; MAX_TOUCHES],
+    /// Which slots were down on the *previous* frame, for the touch equivalent
+    /// of `btnp`/`btnr`. Only the flag is kept: a game asking where a finger
+    /// *was* is asking a question about its own state, and every game that
+    /// needs it already stores the position it acted on.
+    prev_touch_down: [bool; MAX_TOUCHES],
     /// Frames elapsed since power-on (wraps at 65536; drives blink/timers).
     pub frame_count: u16,
     /// The frame vector the game installed via `screen/vector`; 0 = none.
@@ -359,6 +444,8 @@ pub struct Devices {
     scale_fp: u16,
     // trig device (page 0xc): latched angle (0..255 = a full turn)
     trig_angle: u16,
+    // touch device (page 0xd): which slot the next x/y/state read describes
+    touch_slot: u16,
 }
 
 impl Default for Devices {
@@ -383,6 +470,10 @@ impl Devices {
             palette: DEFAULT_PALETTE,
             gamepad: 0,
             prev_gamepad: 0,
+            stick_x: 0,
+            stick_y: 0,
+            touches: [Touch::default(); MAX_TOUCHES],
+            prev_touch_down: [false; MAX_TOUCHES],
             frame_count: 0,
             frame_vector: 0,
             halt_requested: false,
@@ -420,6 +511,7 @@ impl Devices {
             sprn_h: 0,
             scale_fp: 256,
             trig_angle: 0,
+            touch_slot: 0,
         }
     }
 
@@ -433,6 +525,11 @@ impl Devices {
             (0x2, 0x1) => (self.gamepad & !self.prev_gamepad) as u16,
             // just-released this frame (falling edge): held before, not now.
             (0x2, 0x2) => (!self.gamepad & self.prev_gamepad) as u16,
+            // Analog stick, signed 8.8 fixed as two's-complement — the same
+            // shape the trig device returns, so one `* v / 256` idiom covers
+            // both.
+            (0x2, 0x3) => self.stick_x as u16,
+            (0x2, 0x4) => self.stick_y as u16,
             (0x3, 0x0) => self.next_rand(),
             // time device: frames since power-on.
             (0x8, 0x0) => self.frame_count,
@@ -440,8 +537,30 @@ impl Devices {
             // trig device: sin/cos of the latched angle, signed 8.8 fixed.
             (0xc, 0x0) => trig_fp(self.trig_angle, false),
             (0xc, 0x1) => trig_fp(self.trig_angle, true),
+            // Touch device: how many slots are down, then the latched slot's
+            // position and edges. An out-of-range slot reads as an empty one —
+            // the same do-nothing answer an off-screen `pset` gets, and the only
+            // one that cannot make a game act on a finger nobody put down.
+            (0xd, 0x0) => self.touches.iter().filter(|t| t.down).count() as u16,
+            (0xd, 0x1) => self.touch(self.touch_slot).map_or(0, |t| t.x),
+            (0xd, 0x2) => self.touch(self.touch_slot).map_or(0, |t| t.y),
+            (0xd, 0x3) => self.touch_state(self.touch_slot),
             _ => 0,
         }
+    }
+
+    /// The latched slot, or `None` when the ROM named one that does not exist.
+    fn touch(&self, slot: u16) -> Option<&Touch> {
+        self.touches.get(slot as usize)
+    }
+
+    /// `bit0` down · `bit1` pressed this frame · `bit2` released this frame.
+    fn touch_state(&self, slot: u16) -> u16 {
+        let Some(t) = self.touch(slot) else {
+            return 0;
+        };
+        let was = self.prev_touch_down[slot as usize];
+        (t.down as u16) | ((t.down && !was) as u16) << 1 | ((!t.down && was) as u16) << 2
     }
 
     /// Write a device register (`DEO`). `mem` is the VM's main memory, needed by
@@ -618,6 +737,11 @@ impl Devices {
                     self.trig_angle = val;
                 }
             }
+            // Touch device: latch which slot the next x/y/state read describes.
+            // Stored unclamped — the reads treat an impossible slot as an empty
+            // one, which is a truthful answer, where clamping would hand back
+            // some *other* finger's position.
+            0xd if reg == 0x0 => self.touch_slot = val,
             _ => {}
         }
     }
@@ -686,11 +810,18 @@ impl Devices {
     }
 
     /// Clear the per-frame reported state (entities + console output) and
-    /// advance per-frame input/timing: the previous gamepad snapshot (for
-    /// `btnp`/`btnr` edge detection) and the frame counter.
-    pub fn begin_frame(&mut self, buttons: u8) {
+    /// advance per-frame input/timing: the previous gamepad and touch snapshots
+    /// (for `btnp`/`btnr` and the touch edges) and the frame counter.
+    pub fn begin_frame(&mut self, input: impl Into<Input>) {
+        let input = input.into();
         self.prev_gamepad = self.gamepad;
-        self.gamepad = buttons;
+        self.gamepad = input.buttons;
+        for (was, now) in self.prev_touch_down.iter_mut().zip(self.touches.iter()) {
+            *was = now.down;
+        }
+        self.touches = input.touches;
+        self.stick_x = input.stick_x.clamp(-STICK_FULL, STICK_FULL);
+        self.stick_y = input.stick_y.clamp(-STICK_FULL, STICK_FULL);
         self.frame_count = self.frame_count.wrapping_add(1);
         self.entities.clear();
         self.console.clear();
@@ -1008,6 +1139,113 @@ mod tests {
                 y: 110
             }]
         );
+    }
+
+    /// The stick reads back as two's complement, so a game declaring the value
+    /// `int` sees a negative number rather than a very large positive one.
+    #[test]
+    fn the_stick_reads_back_signed() {
+        let mut d = Devices::new();
+        d.begin_frame(Input {
+            stick_x: -STICK_FULL,
+            stick_y: 128,
+            ..Input::default()
+        });
+        assert_eq!(d.read(0x23) as i16, -STICK_FULL);
+        assert_eq!(d.read(0x24) as i16, 128);
+    }
+
+    /// A host that reports more than full deflection must not be able to make a
+    /// game move faster than its own maths allows for.
+    #[test]
+    fn the_stick_is_clamped_to_full_deflection() {
+        let mut d = Devices::new();
+        d.begin_frame(Input {
+            stick_x: 30_000,
+            stick_y: -30_000,
+            ..Input::default()
+        });
+        assert_eq!(d.read(0x23) as i16, STICK_FULL);
+        assert_eq!(d.read(0x24) as i16, -STICK_FULL);
+    }
+
+    /// Select a slot, then read it — the trig device's shape, applied to touch.
+    #[test]
+    fn touch_slots_report_position_and_count() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        let mut input = Input::default();
+        input.touches[0] = Touch {
+            x: 10,
+            y: 20,
+            down: true,
+        };
+        input.touches[2] = Touch {
+            x: 200,
+            y: 5,
+            down: true,
+        };
+        d.begin_frame(input);
+
+        assert_eq!(d.read(0xd0), 2, "two fingers are down");
+        d.write(0xd0, 2, &mem);
+        assert_eq!((d.read(0xd1), d.read(0xd2)), (200, 5));
+        d.write(0xd0, 1, &mem);
+        assert_eq!(
+            (d.read(0xd1), d.read(0xd2), d.read(0xd3)),
+            (0, 0, 0),
+            "an empty slot reads as empty"
+        );
+    }
+
+    /// Press and release are per slot and last exactly one frame — the touch
+    /// equivalent of `btnp`/`btnr`, and what makes a tap distinguishable from a
+    /// finger that has been resting there for a second.
+    #[test]
+    fn touch_edges_last_one_frame() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        let down = |x, y| {
+            let mut i = Input::default();
+            i.touches[0] = Touch { x, y, down: true };
+            i
+        };
+
+        d.write(0xd0, 0, &mem);
+        d.begin_frame(down(4, 4));
+        assert_eq!(d.read(0xd3), 0b011, "down + pressed");
+
+        d.begin_frame(down(5, 5));
+        assert_eq!(d.read(0xd3), 0b001, "still down, no longer a new press");
+
+        d.begin_frame(Input::default());
+        assert_eq!(d.read(0xd3), 0b100, "released");
+
+        d.begin_frame(Input::default());
+        assert_eq!(d.read(0xd3), 0, "and the release does not repeat");
+    }
+
+    /// A slot the console does not have reads as an empty one rather than
+    /// wrapping onto a real finger. Same rule as an off-screen `pset`: the only
+    /// answer that cannot make a game act on something the player never did.
+    #[test]
+    fn an_impossible_touch_slot_reads_empty() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        let mut input = Input::default();
+        input.touches[0] = Touch {
+            x: 77,
+            y: 88,
+            down: true,
+        };
+        d.begin_frame(input);
+
+        d.write(0xd0, 9999, &mem);
+        assert_eq!((d.read(0xd1), d.read(0xd2), d.read(0xd3)), (0, 0, 0));
+        // The real finger is still reachable — the guard is a range, not a
+        // blanket refusal.
+        d.write(0xd0, 0, &mem);
+        assert_eq!((d.read(0xd1), d.read(0xd2)), (77, 88));
     }
 
     #[test]

@@ -109,6 +109,11 @@ fun PlayScreen(
                     engine = engine,
                     contentDescription = "${game.title} screen",
                     modifier = Modifier.fillMaxSize(),
+                    // Only a ROM that says it reads touches gets a pointer
+                    // handler over its screen. Otherwise every game would eat
+                    // taps meant for whatever the system draws on top.
+                    touchable = state.controls.touch != null,
+                    screenDim = state.screenDim,
                 )
                 if (state.halted) {
                     Banner("Game over — tap back to return")
@@ -123,6 +128,7 @@ fun PlayScreen(
                     .fillMaxWidth()
                     .weight(1f),
                 onButtons = engine::setButtons,
+                onStick = engine::setStick,
             )
         }
     }

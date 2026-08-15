@@ -1,6 +1,8 @@
 package dev.kessel
 
 import dev.kessel.game.ScreenRect
+import dev.kessel.game.OFF_SCREEN
+import dev.kessel.game.consoleTouch
 import dev.kessel.game.destRect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -47,6 +49,41 @@ class BlitTest {
         assertEquals(128, r.width)
         assertTrue("origin must not go negative", r.left >= 0 && r.top >= 0)
     }
+
+    @Test
+    fun `a touch unprojects to the console pixel under the finger`() {
+        // 512-wide surface, 128 console: 4×, no letterbox horizontally.
+        assertEquals(2 to 3, unpack(consoleTouch(9f, 13f, 512, 512, 128)))
+        assertEquals(0 to 0, unpack(consoleTouch(0f, 0f, 512, 512, 128)))
+        assertEquals(127 to 127, unpack(consoleTouch(511f, 511f, 512, 512, 128)))
+    }
+
+    @Test
+    fun `a touch is unprojected through the letterbox, not around it`() {
+        // 1080×640 for a 128 console: 5× = 640, so 220 px of margin each side.
+        // The exact inverse of `destRect`, which is the point.
+        val r = destRect(128, 1080, 640)
+        assertEquals(220, r.left)
+        assertEquals(0 to 0, unpack(consoleTouch(220f, 0f, 1080, 640, 128)))
+        assertEquals(1 to 0, unpack(consoleTouch(225f, 0f, 1080, 640, 128)))
+        // Inside the margin is not the screen. Clamping instead would make a
+        // game react to a tap that missed it.
+        assertEquals(OFF_SCREEN, consoleTouch(219f, 0f, 1080, 640, 128))
+        assertEquals(OFF_SCREEN, consoleTouch(861f, 0f, 1080, 640, 128))
+    }
+
+    @Test
+    fun `a finger dragged off the view is off screen, not wrapped inside it`() {
+        // Compose reports negative coordinates during a drag past the edge, and
+        // an unsigned-looking conversion would land them back in the picture.
+        assertEquals(OFF_SCREEN, consoleTouch(-5f, 10f, 512, 512, 128))
+        assertEquals(OFF_SCREEN, consoleTouch(10f, -5f, 512, 512, 128))
+        assertEquals(OFF_SCREEN, consoleTouch(10f, 10f, 512, 512, 0))
+    }
+
+    /** Undo `consoleTouch`'s packing, for readable assertions. */
+    private fun unpack(packed: Int): Pair<Int, Int> =
+        if (packed == OFF_SCREEN) -1 to -1 else (packed shr 16) to (packed and 0xFFFF)
 
     @Test
     fun `degenerate inputs produce an empty rect rather than an exception`() {
