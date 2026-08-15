@@ -122,9 +122,14 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTick(
 ///
 /// `touches` is a flat `[x, y, down] * MAX_TOUCHES` array the caller **owns and
 /// reuses**. A `KesselTouch[]` would be a JNI object array — an allocation and a
-/// per-element call, sixty times a second, to move twelve integers. Anything
-/// shorter than the full array simply leaves the remaining slots empty rather
-/// than being an error: a host with one finger down should not have to pad.
+/// per-element call, sixty times a second, to move twelve integers.
+///
+/// A **short** array is fine and leaves the remaining slots empty: that is a
+/// well-formed call saying less, and a host with one finger down should not have
+/// to pad. A **null or unreadable** array is not — it is a call this side cannot
+/// interpret, so the frame is skipped rather than advanced with every finger
+/// apparently lifted. Turning a broken host call into a valid-looking input
+/// frame is how a JNI bug reaches the player as a game bug.
 #[no_mangle]
 pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTickInput(
     env: JNIEnv,
@@ -135,15 +140,25 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTickInput(
     stick_y: jint,
     touches: JIntArray,
 ) {
-    // Read the array before entering `catch_unwind`: the JNI call needs `env`,
-    // and a closure that captures it mutably is not what should be running
-    // inside an unwind guard.
+    // Read the array before entering `catch_unwind`: the JNI calls need `env`,
+    // and they are not what should be running inside an unwind guard.
+    //
+    // Every failure path below clears the pending JNI exception first. Leaving
+    // one pending is worse than the call that raised it: the *next* JNI call
+    // the JVM makes, anywhere, is the one that misbehaves.
     let mut raw = [0i32; KESSEL_MAX_TOUCHES * 3];
-    let len = env
-        .get_array_length(&touches)
-        .unwrap_or(0)
-        .clamp(0, raw.len() as i32) as usize;
+    if touches.is_null() {
+        return;
+    }
+    let len = match env.get_array_length(&touches) {
+        Ok(n) => (n.max(0) as usize).min(raw.len()),
+        Err(_) => {
+            let _ = env.exception_clear();
+            return;
+        }
+    };
     if len > 0 && env.get_int_array_region(&touches, 0, &mut raw[..len]).is_err() {
+        let _ = env.exception_clear();
         return;
     }
 
@@ -166,7 +181,7 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTickInput(
 
     // Same reasoning as `playerTick`: unwinding into the JVM is UB, and a VM bug
     // should freeze the game on its last frame rather than take the app down.
-    let _ = catch_unwind(AssertUnwindSafe(|| {
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
         crate::kessel_player_tick_input(handle as *mut KesselPlayer, &input)
     }));
 }

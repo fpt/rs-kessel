@@ -92,6 +92,13 @@ Three things follow:
   one rather than wrapping onto a real finger — the same do-nothing rule as an
   off-screen `pset` and an out-of-range note argument.
 
+  This is why Android keys slots off `PointerId` (`TouchTracker`) rather than
+  position-in-list. Compacting the list is the obvious implementation and it is
+  wrong in a way nothing crashes on: lift the first of two fingers and the
+  second slides into slot 0, so the VM sees one finger teleport and another
+  release. A finger that wanders into the letterbox keeps its slot and reports
+  *up*, for the same reason — the alternative hands its slot to someone else.
+
 **The four direction bits are whatever the ROM says they are.** Labelling
 `left`/`right`/`up`/`down` in `controls` declares them plain keys and a host
 draws a button row (`games/popn.lua`); `dpad = true` alongside a label is a
@@ -392,7 +399,8 @@ additions rather than a rewrite.
 | `game/GameCatalog.kt` | The library, read from `assets/`. |
 | `game/GameEngine.kt` | The 60 Hz thread. Draws to a `Surface`; publishes only pause/halt to Compose. |
 | `game/AudioPlayer.kt` | The audio thread: an `AudioTrack` in `ENCODING_PCM_FLOAT`, fed from a direct `ByteBuffer` the native synth renders into. `write` blocks, which is what clocks the loop — there is no timer. |
-| `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. |
+| `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. `consoleTouch` is its inverse. |
+| `game/TouchTracker.kt` | Pointer id → console touch slot, held for a finger's whole life. Plain types only, so the sequences that break slot identity are testable off-device. |
 | `ui/GameSurface.kt` | The `SurfaceView` the engine draws into, plus the pointer overlay that reports fingers when the ROM declares `touch`. |
 | `ui/Gamepad.kt` | Geometry-driven touch pad — one `pointerInput` hit-tests every pointer, which is what makes multi-touch and d-pad diagonals work. Draws a d-pad, a labelled button row, or a thumbstick, from the ROM's `dir_layout`/`stick`. |
 

@@ -6,15 +6,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.kessel.game.GameEngine
-import dev.kessel.game.OFF_SCREEN
-import dev.kessel.game.consoleTouch
-import dev.kessel.vm.MAX_TOUCHES
+import dev.kessel.game.TouchTracker
 
 /**
  * The console's screen: a [SurfaceView] the game thread draws into directly.
@@ -66,6 +64,9 @@ fun GameSurface(
         )
 
         if (touchable && screenDim > 0) {
+            // Slot assignment is state that outlives one event — a finger has
+            // to keep its slot across every event of its life. See TouchTracker.
+            val tracker = remember(screenDim) { TouchTracker() }
             Box(
                 Modifier
                     .fillMaxSize()
@@ -73,16 +74,19 @@ fun GameSurface(
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
-                                // Slot = position among the pointers Compose is
-                                // tracking, which it keeps stable for a finger's
-                                // whole life. That stability is the contract the
-                                // VM's press/release edges depend on.
-                                engine.setTouches(
-                                    touchArray(event.changes, size.width, size.height, screenDim)
-                                )
+                                tracker.begin(size.width, size.height, screenDim)
                                 for (change in event.changes) {
+                                    // Lifted pointers are offered too: that is
+                                    // what frees their slot for the next finger.
+                                    tracker.offer(
+                                        change.id.value,
+                                        change.position.x,
+                                        change.position.y,
+                                        change.pressed,
+                                    )
                                     if (change.pressed) change.consume()
                                 }
+                                engine.setTouches(tracker.finish())
                             }
                         }
                     }
@@ -101,35 +105,3 @@ fun GameSurface(
     }
 }
 
-/**
- * The pressed pointers as the flat `[x, y, down] * MAX_TOUCHES` array the
- * engine wants, in console pixels — or null when no finger is on the screen.
- *
- * A pointer's **index in this list is its slot**, and Compose keeps a given
- * finger at a stable index for its whole life. That is precisely the contract
- * the VM's per-slot press/release edges rely on: renumbering fingers between
- * frames would report a release and a press that never happened.
- *
- * A finger over the letterbox is dropped rather than clamped onto the edge —
- * clamping would have a game react to a tap that missed its screen.
- */
-private fun touchArray(
-    changes: List<PointerInputChange>,
-    width: Int,
-    height: Int,
-    dim: Int,
-): IntArray? {
-    var slot = 0
-    var out: IntArray? = null
-    for (change in changes) {
-        if (!change.pressed || slot >= MAX_TOUCHES) continue
-        val packed = consoleTouch(change.position.x, change.position.y, width, height, dim)
-        if (packed == OFF_SCREEN) continue
-        val array = out ?: IntArray(MAX_TOUCHES * 3).also { out = it }
-        array[slot * 3] = packed shr 16
-        array[slot * 3 + 1] = packed and 0xFFFF
-        array[slot * 3 + 2] = 1
-        slot++
-    }
-    return out
-}
