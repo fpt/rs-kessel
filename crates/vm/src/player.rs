@@ -87,8 +87,8 @@ impl VmPlayer {
     /// no-op until a ROM is loaded. The ROM's pause button (from its `controls`
     /// metadata, default START) freezes and resumes the game — see
     /// [`is_paused`](Self::is_paused).
-    pub fn tick(&self, buttons: u8) {
-        self.tick_collecting(buttons, &mut |_| {});
+    pub fn tick(&self, input: impl Into<crate::device::Input>) {
+        self.tick_collecting(input, &mut |_| {});
     }
 
     /// Advance one frame and hand each sound it asked for to `sink`.
@@ -101,7 +101,11 @@ impl VmPlayer {
     /// Nothing is emitted for a frame that did not run — while paused the
     /// device's log still holds the *last* frame's triggers, and replaying them
     /// every frame would turn a pause into a stuck note.
-    pub fn tick_collecting(&self, buttons: u8, sink: &mut dyn FnMut(kessel_audio::AudioEvent)) {
+    pub fn tick_collecting(
+        &self,
+        input: impl Into<crate::device::Input>,
+        sink: &mut dyn FnMut(kessel_audio::AudioEvent),
+    ) {
         let mut c = self.inner.lock();
         if !c.rom_loaded {
             return;
@@ -112,7 +116,7 @@ impl VmPlayer {
             sink(ev);
         }
         let before = c.frame;
-        c.play_tick(buttons);
+        c.play_tick(input);
         if c.frame == before {
             return; // paused
         }
@@ -189,7 +193,7 @@ impl VmPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::{VideoMode, BTN_RIGHT, CLASSIC_DIM};
+    use crate::device::{BTN_RIGHT, CLASSIC_DIM};
 
     const MOVER: &str = r#"
         local player_x = 32

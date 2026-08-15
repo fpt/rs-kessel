@@ -96,10 +96,13 @@ kessel run games/tetris.lua    # L/R move, A rotates, Down soft-drops
 kessel run games/platform.lua  # arrows move, A jumps and wall-jumps
 kessel run games/outrun.lua    # pseudo-3D road racer
 kessel run games/spectrum.lua  # 240x240, the 256-colour palette, sprite banks
+kessel run games/popn.lua      # six keys, no d-pad at all
+kessel run games/paint.lua     # drag to draw; arrows steer the brush
 ```
 
 Arrows or WASD for the d-pad, `Z`/`X` for A/B, Return for START, Shift for
-SELECT. `R` reloads the file from disk so you can edit and re-run without
+SELECT. The arrows also deflect the **analog stick**, and dragging the mouse is
+touch slot 0, so a game written for either is playable on a keyboard. `R` reloads the file from disk so you can edit and re-run without
 leaving the window; Esc quits.
 
 ### Play the game an agent is building

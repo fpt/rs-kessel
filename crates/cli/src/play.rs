@@ -17,12 +17,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use kessel_vm::device::{
-    BTN_A, BTN_B, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SELECT, BTN_START, BTN_UP,
+    Input, Touch, BTN_A, BTN_B, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_SELECT, BTN_START, BTN_UP,
+    STICK_FULL,
 };
 use kessel_vm::VmPlayer;
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -60,13 +61,13 @@ impl Source {
     }
 
     /// Advance one frame, handing any sound it asked for to `sink`. For
-    /// `Attached` this only *records* the buttons — the client's worker thread
+    /// `Attached` this only *records* the input — the client's worker thread
     /// owns the round trip, so the event loop never blocks on the agent, and
     /// the sound belongs to the agent's console rather than this process.
-    fn tick(&self, buttons: u8, sink: &mut dyn FnMut(kessel_audio::AudioEvent)) {
+    fn tick(&self, input: Input, sink: &mut dyn FnMut(kessel_audio::AudioEvent)) {
         match self {
-            Source::Local { player, .. } => player.tick_collecting(buttons, sink),
-            Source::Attached(c) => c.set_buttons(buttons),
+            Source::Local { player, .. } => player.tick_collecting(input, sink),
+            Source::Attached(c) => c.set_input(input),
         }
     }
 
@@ -148,6 +149,8 @@ fn run_window(source: Source) -> Result<(), String> {
 
     let mut app = App {
         buttons: 0,
+        cursor: None,
+        cursor_down: false,
         window: None,
         surface: None,
         next_frame: Instant::now(),
@@ -207,6 +210,13 @@ struct App {
     #[cfg(feature = "audio")]
     audio_epoch: u64,
     buttons: u8,
+    /// The cursor's last position in *window* pixels, or `None` when it has
+    /// left. Kept unprojected because the window can be resized between a move
+    /// and the frame that reads it.
+    cursor: Option<(f64, f64)>,
+    /// Whether the primary mouse button is down. A desktop has one pointer, so
+    /// it feeds touch slot 0 and the other three stay empty.
+    cursor_down: bool,
     window: Option<std::sync::Arc<Window>>,
     surface: Option<softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>>,
     next_frame: Instant,
@@ -276,6 +286,35 @@ impl App {
                 w.set_title(&title);
             }
             self.shown_title = title;
+        }
+    }
+
+    /// This frame's whole input: the held buttons, a stick derived from them,
+    /// and the mouse as touch slot 0.
+    ///
+    /// The stick comes off the *keyboard* rather than a physical pad, so a game
+    /// authored for analog control is playable on any machine that can run this
+    /// window. It is a deliberate approximation — the deflection is always full
+    /// — and the alternative was a stick-steered game that simply does not
+    /// respond on a laptop.
+    fn input(&self) -> Input {
+        let mut touches = [Touch::default(); kessel_vm::device::MAX_TOUCHES];
+        if let (Some((cx, cy)), true) = (self.cursor, self.cursor_down) {
+            if let Some(window) = &self.window {
+                let size = window.inner_size();
+                if let Some((x, y)) =
+                    window_to_console(cx, cy, size.width, size.height, self.dim)
+                {
+                    touches[0] = Touch { x, y, down: true };
+                }
+            }
+        }
+        let (stick_x, stick_y) = stick_from_keys(self.buttons);
+        Input {
+            buttons: self.buttons,
+            stick_x,
+            stick_y,
+            touches,
         }
     }
 
@@ -368,6 +407,21 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = Some((position.x, position.y));
+            }
+            // A cursor that has left the window is not hovering at the last
+            // place it was seen. Without this a game keeps tracking a pointer
+            // parked over someone else's window.
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor = None;
+                self.cursor_down = false;
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == MouseButton::Left {
+                    self.cursor_down = state == ElementState::Pressed;
+                }
+            }
             _ => {}
         }
     }
@@ -382,13 +436,15 @@ impl ApplicationHandler for App {
         }
         self.next_frame = now + FRAME_TIME;
 
+        let input = self.input();
+
         // Forward this frame's sound to the device. The closure runs on the
         // game thread and only pushes into a lock-free queue, so a busy audio
         // callback can never stall the tick (or the window).
         #[cfg(feature = "audio")]
         {
             let audio = self.audio.as_ref();
-            self.source.tick(self.buttons, &mut |ev| {
+            self.source.tick(input, &mut |ev| {
                 if let Some(a) = audio {
                     a.send(ev);
                 }
@@ -396,7 +452,7 @@ impl ApplicationHandler for App {
             self.check_audio_epoch();
         }
         #[cfg(not(feature = "audio"))]
-        self.source.tick(self.buttons, &mut |_| {});
+        self.source.tick(input, &mut |_| {});
 
         self.sync_title();
         if let Some(window) = &self.window {
@@ -433,6 +489,55 @@ fn blit(dst: &mut [u32], dst_w: u32, dst_h: u32, src: &[u8], dim: u32) {
             dst[dst_row + (ox + x) as usize] =
                 (src[s] as u32) << 16 | (src[s + 1] as u32) << 8 | (src[s + 2] as u32);
         }
+    }
+}
+
+/// Undo [`blit`]: turn a position in window pixels into one in console pixels,
+/// or `None` when it lands in the letterbox rather than on the screen.
+///
+/// This has to be the exact inverse of the blit, and is a separate tested
+/// function for the same reason `blit` is: an off-by-a-margin here puts a
+/// game's cursor a few pixels from the player's finger, which reads as a
+/// sloppy game rather than a wrong transform.
+fn window_to_console(x: f64, y: f64, win_w: u32, win_h: u32, dim: u32) -> Option<(u16, u16)> {
+    if dim == 0 {
+        return None;
+    }
+    let scale = (win_w / dim).min(win_h / dim).max(1);
+    let draw = dim * scale;
+    let ox = win_w.saturating_sub(draw) / 2;
+    let oy = win_h.saturating_sub(draw) / 2;
+
+    // Negative coordinates exist — a drag can leave the window — and casting
+    // one to u32 would wrap it into the picture.
+    if x < ox as f64 || y < oy as f64 {
+        return None;
+    }
+    let cx = (x as u32 - ox) / scale;
+    let cy = (y as u32 - oy) / scale;
+    (cx < dim && cy < dim).then_some((cx as u16, cy as u16))
+}
+
+/// Derive an analog stick from the held direction bits.
+///
+/// A diagonal is normalized rather than reported as full deflection on both
+/// axes: a game that moves by `stick_x() * speed / 256` would otherwise travel
+/// √2 times faster on the diagonal, which is the classic eight-way movement bug
+/// the analog port exists to avoid.
+fn stick_from_keys(buttons: u8) -> (i16, i16) {
+    let axis = |neg, pos| match (buttons & neg != 0, buttons & pos != 0) {
+        (true, false) => -1i16,
+        (false, true) => 1,
+        _ => 0,
+    };
+    let (x, y) = (axis(BTN_LEFT, BTN_RIGHT), axis(BTN_UP, BTN_DOWN));
+    if x != 0 && y != 0 {
+        // 181 = round(256 / √2) — the same value the trig device returns for
+        // sin(45°), so a keyboard diagonal and an angled velocity agree.
+        const DIAGONAL: i16 = 181;
+        (x * DIAGONAL, y * DIAGONAL)
+    } else {
+        (x * STICK_FULL, y * STICK_FULL)
     }
 }
 
@@ -485,6 +590,61 @@ mod tests {
 
         let all = BTN_LEFT | BTN_RIGHT | BTN_UP | BTN_DOWN | BTN_A | BTN_B | BTN_START | BTN_SELECT;
         assert_eq!(bound, all, "some console button has no key");
+    }
+
+    /// The pointer transform must be the exact inverse of the blit, or a game's
+    /// cursor sits a few pixels from the player's finger on every window size
+    /// but the one it was tried at.
+    #[test]
+    fn window_to_console_inverts_the_blit() {
+        // 4× scale, no letterbox: window (9,13) is console (2,3).
+        assert_eq!(window_to_console(9.0, 13.0, 512, 512, 128), Some((2, 3)));
+        // Same window, centred with a margin: 5 wide for a 1-px console at 3×
+        // puts the image at x=1..4, so window x=1 is console x=0.
+        assert_eq!(window_to_console(1.0, 0.0, 5, 3, 1), Some((0, 0)));
+        // The letterbox is not the screen.
+        assert_eq!(window_to_console(0.0, 0.0, 5, 3, 1), None);
+        assert_eq!(window_to_console(4.5, 0.0, 5, 3, 1), None);
+    }
+
+    /// A drag can leave the window, and winit reports negative coordinates for
+    /// it. Casting one to an unsigned type would land it back inside the
+    /// picture — a cursor that teleports to the far corner.
+    #[test]
+    fn window_to_console_refuses_coordinates_outside_the_window() {
+        assert_eq!(window_to_console(-3.0, 10.0, 512, 512, 128), None);
+        assert_eq!(window_to_console(10.0, -3.0, 512, 512, 128), None);
+        assert_eq!(window_to_console(9000.0, 10.0, 512, 512, 128), None);
+        assert_eq!(window_to_console(1.0, 1.0, 512, 512, 0), None, "no ROM yet");
+    }
+
+    /// A keyboard diagonal must not travel faster than a cardinal one. This is
+    /// the classic eight-way movement bug, and an analog port that reproduced
+    /// it would be worse than no analog port.
+    #[test]
+    fn a_keyboard_diagonal_is_normalized() {
+        assert_eq!(stick_from_keys(0), (0, 0));
+        assert_eq!(stick_from_keys(BTN_LEFT), (-STICK_FULL, 0));
+        assert_eq!(stick_from_keys(BTN_DOWN), (0, STICK_FULL));
+
+        let (x, y) = stick_from_keys(BTN_RIGHT | BTN_UP);
+        assert_eq!((x, y), (181, -181));
+        // 181² + 181² ≈ 256², i.e. the same speed as one axis at full throw.
+        let len2 = (x as i32).pow(2) + (y as i32).pow(2);
+        let full2 = (STICK_FULL as i32).pow(2);
+        assert!(
+            (len2 - full2).abs() < full2 / 50,
+            "diagonal is {len2} against {full2} for a cardinal"
+        );
+    }
+
+    /// Opposite keys held at once cancel rather than picking one arbitrarily —
+    /// the same thing the d-pad bits do when a player rolls a thumb across the
+    /// pad.
+    #[test]
+    fn opposing_keys_centre_the_stick() {
+        assert_eq!(stick_from_keys(BTN_LEFT | BTN_RIGHT), (0, 0));
+        assert_eq!(stick_from_keys(BTN_UP | BTN_DOWN), (0, 0));
     }
 
     /// Channel order is the bug that would show as a plausible-but-wrong picture

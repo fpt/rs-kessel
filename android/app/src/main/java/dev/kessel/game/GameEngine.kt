@@ -7,6 +7,8 @@ import android.graphics.Rect
 import android.view.SurfaceHolder
 import dev.kessel.vm.Controls
 import dev.kessel.vm.KesselVm
+import dev.kessel.vm.STICK_FULL
+import dev.kessel.vm.VmInput
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +24,12 @@ import java.util.concurrent.locks.LockSupport
  */
 data class PlayState(
     val controls: Controls = Controls(),
+    /**
+     * Screen edge length, known only once the ROM is loaded — its `screen { … }`
+     * block picks it. Needed by the UI so a touch on the screen can be
+     * unprojected into console pixels; 0 until [GameEngine.start] succeeds.
+     */
+    val screenDim: Int = 0,
     val paused: Boolean = false,
     /** The machine halted or faulted — game over, or a crash. */
     val halted: Boolean = false,
@@ -63,6 +71,38 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
     /** Written by the UI thread, read by the game loop; hence volatile. */
     @Volatile
     private var buttons: Int = 0
+
+    /**
+     * Analog stick deflection, signed 8.8 fixed, packed into one Int as
+     * `(x shl 16) or (y and 0xFFFF)`.
+     *
+     * Packed rather than two volatile fields for the reason the attach client
+     * uses a mutex: the two axes are one value, and a loop that read x from one
+     * gesture and y from the next would report a direction the thumb was never
+     * at. One volatile Int makes the pair atomic without a lock on the touch
+     * path.
+     */
+    @Volatile
+    private var stick: Int = 0
+
+    /**
+     * Touch points from the screen, flat `[x, y, down] * MAX_TOUCHES` in
+     * console pixels.
+     *
+     * Published as a whole array reference rather than mutated in place: the UI
+     * thread builds a new one per gesture change and swaps it, so the game loop
+     * always reads a complete, self-consistent set of fingers. Games that read
+     * touch are rare enough that a small array per gesture event costs nothing
+     * — this is not a per-frame allocation.
+     */
+    @Volatile
+    private var touches: IntArray? = null
+
+    /**
+     * The loop's own input, reused every frame. Only the game thread touches
+     * it, which is what keeps the 60 Hz path allocation-free.
+     */
+    private val input = VmInput()
 
     /**
      * A one-frame button pulse, for taps that must not depend on how long a
@@ -113,6 +153,25 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         buttons = mask
     }
 
+    /**
+     * Analog stick deflection, signed 8.8 fixed (±[STICK_FULL] is full throw).
+     * Called from the UI thread as the thumb moves.
+     */
+    fun setStick(x: Int, y: Int) {
+        stick = (x shl 16) or (y and 0xFFFF)
+    }
+
+    /**
+     * Touch points on the game screen, in console pixels: a flat
+     * `[x, y, down] * MAX_TOUCHES` array, or null for "no fingers".
+     *
+     * The caller hands over ownership — do not keep mutating the array after
+     * passing it, or the game thread will read a half-updated gesture.
+     */
+    fun setTouches(points: IntArray?) {
+        touches = points
+    }
+
     /** Press [mask] for exactly one frame, whatever the fingers are doing. */
     fun pulse(mask: Int) {
         pulse = pulse or mask
@@ -145,7 +204,7 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
         val dim = vm.screenDim()
         scratch = Bitmap.createBitmap(dim, dim, Bitmap.Config.ARGB_8888)
         src.set(0, 0, dim, dim)
-        _state.value = PlayState(controls = vm.controls())
+        _state.value = PlayState(controls = vm.controls(), screenDim = dim)
 
         // After the load, because the synth needs the ROM's instruments — and
         // before the game thread, so the first frame's sound has somewhere to
@@ -206,8 +265,7 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
     private fun loop() {
         var deadline = System.nanoTime()
         while (running) {
-            val held = buttons or consumePulse()
-            vm.tick(held)
+            vm.tick(readInput())
             render()
             publishState()
 
@@ -221,6 +279,33 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
                 deadline = System.nanoTime()
             }
         }
+    }
+
+    /**
+     * Gather this frame's input into the loop's own [VmInput].
+     *
+     * Each volatile is read exactly once, so the frame sees one coherent
+     * snapshot even if a thumb moves halfway through.
+     */
+    private fun readInput(): VmInput {
+        input.buttons = buttons or consumePulse()
+
+        val packed = stick
+        // Sign-extend the low half: the pack drops everything above 16 bits,
+        // and a raw `and 0xFFFF` would turn full-left (-256) into +65280.
+        input.stickX = packed shr 16
+        input.stickY = (packed shl 16) shr 16
+
+        val points = touches
+        if (points == null) {
+            input.clearTouches()
+        } else {
+            points.copyInto(input.touches, endIndex = minOf(points.size, input.touches.size))
+            // Anything the publisher did not fill is stale from the last
+            // gesture; a shorter array must not leave a finger down.
+            for (i in points.size until input.touches.size) input.touches[i] = 0
+        }
+        return input
     }
 
     /** Take the pending pulse and clear it, so it lasts exactly one frame. */

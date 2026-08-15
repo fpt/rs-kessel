@@ -10,6 +10,7 @@
 //! here instead. The renderer already produces every number needed; this is the
 //! guard that reads them.
 
+use kessel_vm::device::Input;
 use kessel_vm::VmConsole;
 
 /// Same list, same reason as `games_compile.rs`: `include_str!` means renaming a
@@ -20,8 +21,10 @@ const GAMES: &[(&str, &str)] = &[
     ("brick.lua", include_str!("../../../games/brick.lua")),
     ("mover.lua", include_str!("../../../games/mover.lua")),
     ("outrun.lua", include_str!("../../../games/outrun.lua")),
+    ("paint.lua", include_str!("../../../games/paint.lua")),
     ("piano.lua", include_str!("../../../games/piano.lua")),
     ("platform.lua", include_str!("../../../games/platform.lua")),
+    ("popn.lua", include_str!("../../../games/popn.lua")),
     ("rogue.lua", include_str!("../../../games/rogue.lua")),
     ("shooter.lua", include_str!("../../../games/shooter.lua")),
     ("snake.lua", include_str!("../../../games/snake.lua")),
@@ -56,7 +59,8 @@ fn loaded(name: &str, src: &str) -> VmConsole {
 fn every_game_renders_clean_audio() {
     for (name, src) in GAMES {
         let mut c = loaded(name, src);
-        let script: Vec<(u8, u64)> = (0..300).map(|f| (INPUTS[f % INPUTS.len()], 1)).collect();
+        let script: Vec<(Input, u64)> =
+            (0..300).map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1)).collect();
         let r = c
             .render_audio(&script)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -116,7 +120,8 @@ fn the_games_with_sound_are_audible() {
         let mut c = loaded(name, src);
         // The same rotation as above, not just "hold A": a coin in a platformer
         // has to be walked to before it can be collected.
-        let script: Vec<(u8, u64)> = (0..300).map(|f| (INPUTS[f % INPUTS.len()], 1)).collect();
+        let script: Vec<(Input, u64)> =
+            (0..300).map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1)).collect();
         let r = c.render_audio(&script).unwrap();
         assert!(
             !r.summary.events.is_empty(),
@@ -141,7 +146,7 @@ fn a_game_without_sound_is_silent() {
         .filter(|(_, src)| !src.contains("\ninstrument "))
     {
         let mut c = loaded(name, src);
-        let r = c.render_audio(&[(0, 120)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 120)]).unwrap();
         assert_eq!(
             r.summary.peak, 0.0,
             "{name} declares no instruments but made a sound"

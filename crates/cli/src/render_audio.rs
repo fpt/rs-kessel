@@ -124,7 +124,7 @@ pub fn run(args: Args) -> Result<(), String> {
     }
     console.load_rom(&name)?;
 
-    let render = console.render_audio(&[(args.buttons, args.frames)])?;
+    let render = console.render_audio(&[(args.buttons.into(), args.frames)])?;
     print!("{}", render.summary.report());
 
     let bytes = render.to_wav();

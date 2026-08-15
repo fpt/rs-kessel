@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use kessel_vm::Shared;
 
-use super::protocol::{Frame, Hello, MSG_HELLO, MSG_TICK, PROTOCOL_VERSION};
+use super::protocol::{Frame, Hello, Tick, MSG_HELLO, MSG_TICK, PROTOCOL_VERSION};
 use super::session::Session;
 
 /// A published listener. Dropping it removes the session file, so a clean exit
@@ -180,11 +180,10 @@ fn serve_player(console: &Shared, stream: TcpStream, taken: &AtomicBool) {
                     eprintln!("kessel mcp: attach TICK before HELLO from {peer}, dropping");
                     break;
                 }
-                let mut buttons = [0u8; 1];
-                if reader.read_exact(&mut buttons).is_err() {
+                let Ok(request) = Tick::read(&mut reader) else {
                     break;
-                }
-                let frame = tick(console, buttons[0]);
+                };
+                let frame = tick(console, request.input);
                 if frame.write(&mut writer).is_err() {
                     break;
                 }
@@ -207,10 +206,10 @@ fn serve_player(console: &Shared, stream: TcpStream, taken: &AtomicBool) {
 ///
 /// The lock is held for exactly this and released before the frame goes out on
 /// the wire, so a slow socket never blocks a tool call.
-fn tick(console: &Shared, buttons: u8) -> Frame {
+fn tick(console: &Shared, input: kessel_vm::device::Input) -> Frame {
     let mut c = console.lock();
     if c.rom_loaded {
-        c.play_tick(buttons);
+        c.play_tick(input);
         Frame {
             has_rom: true,
             paused: c.is_paused(),
@@ -235,6 +234,7 @@ fn tick(console: &Shared, buttons: u8) -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kessel_vm::device::Input;
     use kessel_vm::VmConsole;
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn tick_without_a_rom_yields_a_blank_frame() {
         let c = console();
-        let f = tick(&c, 0);
+        let f = tick(&c, Input::default());
         assert!(!f.has_rom);
         assert_eq!(f.rgba.len(), 128 * 128 * 4);
         assert!(f.rgba.iter().all(|b| *b == 0));
@@ -299,7 +299,7 @@ mod tests {
             .unwrap();
 
         let before = shared.lock().frame;
-        let f = tick(&shared, 0);
+        let f = tick(&shared, Input::default());
         assert!(f.has_rom);
         let after = shared.lock().frame;
         assert_eq!(after, before + 1, "attach tick must advance the shared VM");

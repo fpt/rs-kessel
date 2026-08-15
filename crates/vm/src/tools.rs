@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 
 use crate::tool::{ImageContent, ToolResult, VmTool, VmToolError};
 
+use crate::device::{Input, Touch, MAX_TOUCHES, STICK_FULL};
+
 use super::{buttons_from_names, VmConsole};
 
 /// A console shared between everything that drives it. Exported because a host
@@ -332,40 +334,32 @@ impl VmTool for RunFrame {
     }
     fn description(&self) -> &str {
         "Advance the game one frame with the given buttons held (LEFT, RIGHT, UP, \
-         DOWN, A, B, START, SELECT). Returns the observation JSON: frame, cycles, \
-         framebuffer_hash, changed_pixels_bbox, console, fault, vm{pc,data_stack,\
+         DOWN, A, B, START, SELECT), plus an optional analog stick and touch \
+         points. Returns the observation JSON: frame, cycles, framebuffer_hash, \
+         changed_pixels_bbox, console, fault, vm{pc,data_stack,\
          return_stack_depth}, and game-reported entities."
     }
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {
+            "properties": with_analog_props(json!({
                 "buttons": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Buttons held this frame, e.g. [\"LEFT\"]"
                 }
-            }
+            }))
         })
     }
     fn call(&self, args: Value) -> Result<ToolResult, VmToolError> {
-        let names: Vec<String> = args
-            .get("buttons")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let bits = buttons_from_names(&names);
+        let input = input_from_args(&args);
         let mut c = self.0.lock();
         if !c.rom_loaded {
             return Ok(ToolResult::text(
                 "no ROM loaded — call vm_load_rom first".into(),
             ));
         }
-        let obs = c.run_frame(bits);
+        let obs = c.run_frame(input);
         Ok(ToolResult::text(obs.to_json().to_string()))
     }
 }
@@ -382,33 +376,112 @@ const MAX_BATCH_FRAMES: u64 = 1800;
 ///
 /// One reader rather than two: a render whose inputs behaved differently from a
 /// run would make "it sounded wrong" mean "you pressed something else".
-fn script_segments(args: &Value, default_frames: u64) -> Vec<(u8, u64)> {
-    let held = |v: Option<&Value>| -> u8 {
-        let names: Vec<String> = v
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        buttons_from_names(&names)
-    };
+fn script_segments(args: &Value, default_frames: u64) -> Vec<(Input, u64)> {
     match args.get("script").and_then(|v| v.as_array()) {
         Some(items) => items
             .iter()
             .map(|seg| {
                 (
-                    held(seg.get("buttons")),
+                    input_from_args(seg),
                     seg.get("frames").and_then(|v| v.as_u64()).unwrap_or(1),
                 )
             })
             .collect(),
         None => vec![(
-            held(args.get("buttons")),
+            input_from_args(args),
             u64_arg(args, "frames", default_frames),
         )],
     }
+}
+
+/// One segment's `buttons` / `stick` / `touch` arguments as an [`Input`].
+///
+/// The agent drives the same three surfaces a player does. Without this it
+/// could write a stick-steered or touch-driven game and then have no way to
+/// test it — which would make those inputs unreachable from the loop this
+/// console exists to serve.
+fn input_from_args(args: &Value) -> Input {
+    let names: Vec<String> = args
+        .get("buttons")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let full = STICK_FULL as i64;
+    let axis = |v: Option<&Value>| -> i16 {
+        v.and_then(|v| v.as_i64()).unwrap_or(0).clamp(-full, full) as i16
+    };
+    let stick = args.get("stick").and_then(|v| v.as_array());
+
+    let mut touches = [Touch::default(); MAX_TOUCHES];
+    if let Some(points) = args.get("touch").and_then(|v| v.as_array()) {
+        // Extra points are dropped rather than wrapped around: a fifth finger
+        // overwriting slot 0 would move a finger the caller never moved.
+        for (slot, p) in points.iter().take(touches.len()).enumerate() {
+            let pair = p.as_array();
+            let coord = |i: usize| -> u16 {
+                pair.and_then(|a| a.get(i))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                    .min(u16::MAX as u64) as u16
+            };
+            touches[slot] = Touch {
+                x: coord(0),
+                y: coord(1),
+                down: true,
+            };
+        }
+    }
+
+    Input {
+        buttons: buttons_from_names(&names),
+        stick_x: axis(stick.and_then(|a| a.first())),
+        stick_y: axis(stick.and_then(|a| a.get(1))),
+        touches,
+    }
+}
+
+/// The `stick` / `touch` half of an input schema, shared by every tool that
+/// takes one. One definition, so the agent never sees two spellings of the same
+/// argument.
+fn analog_schema_props() -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "stick",
+            json!({
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Analog stick as [x, y], signed 8.8 fixed point: -256 is full \
+                                left/up, 0 centred, 256 full right/down. Omit for a game that \
+                                does not read it."
+            }),
+        ),
+        (
+            "touch",
+            json!({
+                "type": "array",
+                "description": "Touch points held, as [[x, y], …] in console pixels — slot 0 \
+                                first, up to 4. A point's slot is its identity: keep one finger \
+                                at one index across frames or the game sees a release and a \
+                                press that never happened.",
+                "items": {"type": "array", "items": {"type": "integer"}}
+            }),
+        ),
+    ]
+}
+
+/// Merge [`analog_schema_props`] into an existing `properties` object.
+fn with_analog_props(mut properties: Value) -> Value {
+    if let Some(map) = properties.as_object_mut() {
+        for (k, v) in analog_schema_props() {
+            map.insert(k.to_string(), v);
+        }
+    }
+    properties
 }
 
 struct RunFrames(Shared);
@@ -428,21 +501,21 @@ impl VmTool for RunFrames {
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {
+            "properties": with_analog_props(json!({
                 "script": {
                     "type": "array",
                     "description": "Input segments played in order, e.g. \
                                     [{\"buttons\":[\"RIGHT\"],\"frames\":30},{\"buttons\":[\"A\"],\"frames\":2}]",
                     "items": {
                         "type": "object",
-                        "properties": {
+                        "properties": with_analog_props(json!({
                             "buttons": {
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Buttons held for this segment (LEFT, RIGHT, UP, DOWN, A, B, START, SELECT)"
                             },
                             "frames": {"type": "integer", "description": "Frames to hold them for (default 1)"}
-                        }
+                        }))
                     }
                 },
                 "frames": {
@@ -458,7 +531,7 @@ impl VmTool for RunFrames {
                     "type": "boolean",
                     "description": "Also return the final screen as a PNG (default false — ask for it when you need to SEE the result, not just its numbers)."
                 }
-            }
+            }))
         })
     }
     fn call(&self, args: Value) -> Result<ToolResult, VmToolError> {

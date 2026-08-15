@@ -8,7 +8,7 @@
 //! Sources are embedded with `include_str!` (compile-time, CWD-independent) so
 //! the test binary itself fails to build if a game file is renamed or removed.
 
-use kessel_vm::{assembler, luax, VmConsole};
+use kessel_vm::{assembler, device, luax, VmConsole};
 
 fn assert_game_ok(name: &str, src: &str) {
     // --- compile (luax) ---
@@ -649,8 +649,10 @@ const GAMES: &[(&str, &str)] = &[
     ("brick.lua", include_str!("../../../games/brick.lua")),
     ("mover.lua", include_str!("../../../games/mover.lua")),
     ("outrun.lua", include_str!("../../../games/outrun.lua")),
+    ("paint.lua", include_str!("../../../games/paint.lua")),
     ("piano.lua", include_str!("../../../games/piano.lua")),
     ("platform.lua", include_str!("../../../games/platform.lua")),
+    ("popn.lua", include_str!("../../../games/popn.lua")),
     ("rogue.lua", include_str!("../../../games/rogue.lua")),
     ("shooter.lua", include_str!("../../../games/shooter.lua")),
     ("snake.lua", include_str!("../../../games/snake.lua")),
@@ -806,6 +808,139 @@ games_ok! {
     tetris_ok => "tetris",
     sokoban_ok => "sokoban",
     piano_ok => "piano",
+    popn_ok => "popn",
+    paint_ok => "paint",
+}
+
+/// `popn.lua` is the reference for a pad with **no directions**: the four
+/// direction bits are labelled keys, and a host must lay them out as a row.
+///
+/// The guard is that the metadata and the game agree. A ROM whose `controls`
+/// said "d-pad" while `update` treated LEFT as a piano key would compile, run,
+/// and be unplayable on the one host that draws its pad from the metadata.
+#[test]
+fn popn_declares_a_button_row_and_scores_on_those_keys() {
+    use kessel_vm::luax::DirLayout;
+
+    const GAME: &str = include_str!("../../../games/popn.lua");
+    let compiled = luax::compile(GAME);
+    assert!(compiled.ok(), "{:?}", compiled.diagnostics);
+    assert_eq!(
+        compiled.controls.dir_layout(),
+        DirLayout::Buttons,
+        "popn must present its direction bits as plain keys"
+    );
+    assert_eq!(compiled.controls.left.as_deref(), Some("red"));
+    assert!(
+        compiled.controls.a.is_some() && compiled.controls.b.is_some(),
+        "popn's two action keys must be labelled too"
+    );
+
+    let mut c = VmConsole::new();
+    c.write_source("popn.lua", GAME).unwrap();
+    c.assemble("popn.lua").unwrap();
+    c.load_rom("popn.lua").unwrap();
+
+    // Mash every key every other frame. A press with nothing under it is a
+    // whiff, so over 300 frames of a chart this has to land some hits — and
+    // `score` is reported as tag 2 nowhere, so read it through the sound
+    // instead: a hit plays a note, a whiff plays an sfx.
+    let all = device::BTN_LEFT
+        | device::BTN_DOWN
+        | device::BTN_UP
+        | device::BTN_RIGHT
+        | device::BTN_A
+        | device::BTN_B;
+    let mut notes = 0;
+    for f in 0..300u32 {
+        let obs = c.run_frame(if f % 2 == 0 { all } else { 0 });
+        assert!(obs.fault.is_none(), "popn faulted on frame {f}");
+        notes += obs
+            .sound
+            .iter()
+            .filter(|e| matches!(e, kessel_audio::AudioEvent::Play { .. }))
+            .count();
+    }
+    assert!(
+        notes > 0,
+        "mashing every key for 300 frames never caught a single note"
+    );
+}
+
+/// `paint.lua` is the reference for the analog surfaces, and the only game that
+/// reads them — so this is the one test that proves a touch and a stick
+/// deflection reach a running ROM at all.
+#[test]
+fn paint_reads_the_stick_and_the_touchscreen() {
+    use kessel_vm::device::{Input, Touch};
+
+    const GAME: &str = include_str!("../../../games/paint.lua");
+    let mut c = VmConsole::new();
+    c.write_source("paint.lua", GAME).unwrap();
+    c.assemble("paint.lua").unwrap();
+    c.load_rom("paint.lua").unwrap();
+
+    // The brush starts centred and reports itself as entity tag 1.
+    let start = c.run_frame(Input::default()).entities[0];
+
+    // Full deflection right and down for a few frames must move it.
+    let push = |x, y| Input {
+        stick_x: x,
+        stick_y: y,
+        ..Input::default()
+    };
+    let mut moved = start;
+    for _ in 0..5 {
+        moved = c.run_frame(push(device::STICK_FULL, device::STICK_FULL)).entities[0];
+    }
+    assert!(
+        moved.x > start.x && moved.y > start.y,
+        "the stick did not move the brush: {start:?} -> {moved:?}"
+    );
+
+    // ...and the other way, which is the direction that breaks when a signed
+    // deflection is read as an unsigned word: -256 arrives as 0xFF00, and a
+    // game that divides it unsigned lurches 255 pixels instead of stepping one.
+    let mut back = moved;
+    for _ in 0..5 {
+        back = c.run_frame(push(-device::STICK_FULL, -device::STICK_FULL)).entities[0];
+    }
+    assert!(
+        back.x < moved.x && back.y < moved.y,
+        "a negative deflection did not move the brush back: {moved:?} -> {back:?}"
+    );
+    assert!(
+        moved.x - back.x <= 40 && moved.y - back.y <= 40,
+        "five frames of full deflection moved the brush {} px — a sign was read \
+         as a magnitude somewhere",
+        moved.x - back.x
+    );
+
+    // A finger paints where it lands. Take the hash before and after: the game
+    // draws onto a canvas it never clears, so a touch that reached the ROM has
+    // to change pixels.
+    let before = c.run_frame(Input::default()).framebuffer_hash;
+    let finger = Input {
+        touches: [
+            Touch {
+                x: 30,
+                y: 200,
+                down: true,
+            },
+            Touch::default(),
+            Touch::default(),
+            Touch::default(),
+        ],
+        ..Input::default()
+    };
+    let after = c.run_frame(finger);
+    assert_ne!(
+        before, after.framebuffer_hash,
+        "a touch at (30,200) painted nothing"
+    );
+    // ...and it is reported back, so an agent can see what it pressed.
+    let json = after.to_json();
+    assert_eq!(json["touches"][0]["x"], 30, "observation: {json}");
 }
 
 /// piano.lua is the reference for the note-level sound API, so catching a note

@@ -23,11 +23,11 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use jni::objects::{JByteBuffer, JClass, JString};
+use jni::objects::{JByteBuffer, JClass, JIntArray, JString};
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 
-use crate::KesselPlayer;
+use crate::{KesselInput, KesselPlayer, KesselTouch, KESSEL_MAX_TOUCHES};
 
 /// Reconstitute a handle from the `long` Kotlin holds, or `None` for 0.
 ///
@@ -115,6 +115,59 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTick(
     // freezes on its last frame instead of the process dying under the user.
     let _ = catch_unwind(AssertUnwindSafe(|| {
         crate::kessel_player_tick(handle as *mut KesselPlayer, buttons as u8)
+    }));
+}
+
+/// Advance one frame with buttons, an analog stick, and touch points.
+///
+/// `touches` is a flat `[x, y, down] * MAX_TOUCHES` array the caller **owns and
+/// reuses**. A `KesselTouch[]` would be a JNI object array — an allocation and a
+/// per-element call, sixty times a second, to move twelve integers. Anything
+/// shorter than the full array simply leaves the remaining slots empty rather
+/// than being an error: a host with one finger down should not have to pad.
+#[no_mangle]
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTickInput(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    buttons: jint,
+    stick_x: jint,
+    stick_y: jint,
+    touches: JIntArray,
+) {
+    // Read the array before entering `catch_unwind`: the JNI call needs `env`,
+    // and a closure that captures it mutably is not what should be running
+    // inside an unwind guard.
+    let mut raw = [0i32; KESSEL_MAX_TOUCHES * 3];
+    let len = env
+        .get_array_length(&touches)
+        .unwrap_or(0)
+        .clamp(0, raw.len() as i32) as usize;
+    if len > 0 && env.get_int_array_region(&touches, 0, &mut raw[..len]).is_err() {
+        return;
+    }
+
+    let mut input = KesselInput {
+        buttons: buttons as u8,
+        stick_x: stick_x as i16,
+        stick_y: stick_y as i16,
+        touches: [KesselTouch::default(); KESSEL_MAX_TOUCHES],
+    };
+    for (slot, t) in input.touches.iter_mut().enumerate() {
+        let at = slot * 3;
+        if at + 2 < len {
+            *t = KesselTouch {
+                x: raw[at].clamp(0, u16::MAX as i32) as u16,
+                y: raw[at + 1].clamp(0, u16::MAX as i32) as u16,
+                down: raw[at + 2] != 0,
+            };
+        }
+    }
+
+    // Same reasoning as `playerTick`: unwinding into the JVM is UB, and a VM bug
+    // should freeze the game on its last frame rather than take the app down.
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        crate::kessel_player_tick_input(handle as *mut KesselPlayer, &input)
     }));
 }
 

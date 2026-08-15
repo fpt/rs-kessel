@@ -8,13 +8,15 @@
 
 use std::io::{BufReader, BufWriter, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::protocol::{Frame, Hello, MSG_HELLO, MSG_TICK, PROTOCOL_VERSION};
+use kessel_vm::device::Input;
+
+use super::protocol::{Frame, Hello, Tick, MSG_HELLO, PROTOCOL_VERSION};
 use super::session::Session;
 
 /// Time between ticks the worker asks for. The console is defined at 60 Hz.
@@ -23,8 +25,12 @@ const TICK_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// A live attachment to a running `kessel mcp`.
 pub struct AttachClient {
     dim: u32,
-    /// Buttons the UI thread wants held; read by the worker each tick.
-    buttons: Arc<AtomicU8>,
+    /// What the UI thread wants sent with the next tick; read by the worker.
+    ///
+    /// A mutex rather than the atomic this used to be: an `Input` is buttons,
+    /// a stick and four touch points, and tearing them apart across two frames
+    /// would report a finger at a position it was never at.
+    input: Arc<Mutex<Input>>,
     /// Most recent frame from the server. `None` until the first arrives.
     latest: Arc<Mutex<Option<Frame>>>,
     connected: Arc<AtomicBool>,
@@ -71,14 +77,14 @@ impl AttachClient {
             ));
         }
 
-        let buttons = Arc::new(AtomicU8::new(0));
+        let input = Arc::new(Mutex::new(Input::default()));
         let latest = Arc::new(Mutex::new(None));
         let connected = Arc::new(AtomicBool::new(true));
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let client = AttachClient {
             dim: hello.dim as u32,
-            buttons: buttons.clone(),
+            input: input.clone(),
             latest: latest.clone(),
             connected: connected.clone(),
             shutdown: shutdown.clone(),
@@ -87,12 +93,10 @@ impl AttachClient {
         std::thread::spawn(move || {
             let mut next = std::time::Instant::now();
             while !shutdown.load(Ordering::Relaxed) {
-                let held = buttons.load(Ordering::Relaxed);
-                if writer
-                    .write_all(&[MSG_TICK, held])
-                    .and_then(|_| writer.flush())
-                    .is_err()
-                {
+                let tick = Tick {
+                    input: *input.lock(),
+                };
+                if tick.write(&mut writer).is_err() {
                     break;
                 }
                 // Blocks for as long as the agent holds the console. That is
@@ -132,10 +136,10 @@ impl AttachClient {
         }
     }
 
-    /// Record the buttons to send with the next tick. Cheap: the UI thread only
+    /// Record the input to send with the next tick. Cheap: the UI thread only
     /// ever stores here, and the worker reads.
-    pub fn set_buttons(&self, buttons: u8) {
-        self.buttons.store(buttons, Ordering::Relaxed);
+    pub fn set_input(&self, input: Input) {
+        *self.input.lock() = input;
     }
 
     pub fn is_connected(&self) -> bool {
@@ -216,7 +220,7 @@ mod tests {
         })));
         let client = AttachClient {
             dim: 2,
-            buttons: Arc::new(AtomicU8::new(0)),
+            input: Arc::new(Mutex::new(Input::default())),
             latest: latest.clone(),
             connected: Arc::new(AtomicBool::new(true)),
             shutdown: Arc::new(AtomicBool::new(false)),

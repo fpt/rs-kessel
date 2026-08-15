@@ -3,7 +3,7 @@
 //! halt the machine) rather than panicking, so a buggy ROM the model wrote can
 //! be observed and debugged instead of taking the process down.
 
-use super::device::{Devices, VideoMode};
+use super::device::{Devices, Input, VideoMode};
 use super::isa::Op;
 
 /// Flat memory size (64 KiB). `pc` and all addresses are `u16`, so memory
@@ -109,9 +109,13 @@ impl Vm {
         self.run_vector(ROM_ORIGIN, cap())
     }
 
-    /// Run the installed frame vector for one frame with `buttons` held.
-    pub fn run_frame(&mut self, buttons: u8, cap_cycles: u64) -> RunOutcome {
-        self.devices.begin_frame(buttons);
+    /// Run the installed frame vector for one frame with `input` applied.
+    ///
+    /// `impl Into<Input>` all the way down, so a digital game reads
+    /// `run_frame(BTN_A, …)` at every layer and only an analog one has to build
+    /// a struct.
+    pub fn run_frame(&mut self, input: impl Into<Input>, cap_cycles: u64) -> RunOutcome {
+        self.devices.begin_frame(input.into());
         let vector = self.devices.frame_vector;
         if vector == 0 || self.halted {
             return RunOutcome::Completed;

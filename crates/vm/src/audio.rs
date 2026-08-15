@@ -253,9 +253,13 @@ impl VmConsole {
     /// **This advances the machine**, exactly like `run_frame` — it is the same
     /// call, with a synth listening. Snapshot first if you want the state back.
     ///
-    /// `segments` is `(buttons, frames)` pairs, so a render can follow an input
-    /// script: a sound that only fires when you press A needs A pressed.
-    pub fn render_audio(&mut self, segments: &[(u8, u64)]) -> Result<AudioRender, String> {
+    /// `segments` is `(input, frames)` pairs, so a render can follow an input
+    /// script: a sound that only fires when you press A needs A pressed — and a
+    /// sound that only fires when a finger lands needs the finger.
+    pub fn render_audio(
+        &mut self,
+        segments: &[(crate::device::Input, u64)],
+    ) -> Result<AudioRender, String> {
         if !self.rom_loaded {
             return Err("no ROM loaded — call load_rom first".to_string());
         }
@@ -285,14 +289,14 @@ impl VmConsole {
         }
 
         let mut frame = 0u64;
-        'outer: for (bits, count) in segments {
+        'outer: for (input, count) in segments {
             for _ in 0..*count {
                 if frame >= MAX_RENDER_FRAMES {
                     summary.stopped_early =
                         Some(format!("frame cap ({MAX_RENDER_FRAMES}) reached"));
                     break 'outer;
                 }
-                let obs = self.run_frame(*bits);
+                let obs = self.run_frame(*input);
                 // Timestamps are relative to the render, which always starts at
                 // sample zero; the *trace* uses the console's own counter.
                 let at = engine.frame_at(frame);
@@ -351,6 +355,7 @@ impl VmConsole {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::Input;
 
     const GAME: &str = r#"
 instrument blip {
@@ -380,7 +385,7 @@ function draw() cls(0) end
     #[test]
     fn a_render_reports_what_the_game_triggered() {
         let mut c = console(GAME);
-        let r = c.render_audio(&[(0, 30)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 30)]).unwrap();
         assert_eq!(r.summary.frames, 30);
         assert_eq!(r.summary.events.len(), 1);
         // The console counts frames from 1, and `vm_run_frames` reports the
@@ -400,7 +405,7 @@ function draw() cls(0) end
     #[test]
     fn a_silent_game_says_why_it_is_silent() {
         let mut c = console("function update() end\nfunction draw() cls(0) end");
-        let r = c.render_audio(&[(0, 10)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 10)]).unwrap();
         assert_eq!(r.summary.peak, 0.0);
         assert!(r.summary.events.is_empty());
         let text = r.summary.report();
@@ -420,7 +425,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 10)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 10)]).unwrap();
         assert_eq!(r.summary.unknown_sfx, 1);
         assert_eq!(r.summary.events[0].name, None);
         let text = r.summary.report();
@@ -439,7 +444,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 40)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 40)]).unwrap();
         assert_eq!(r.summary.events.len(), 1);
         assert_eq!(r.summary.events[0].kind, "music");
         assert_eq!(r.summary.events[0].name.as_deref(), Some("theme"));
@@ -463,7 +468,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 40)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 40)]).unwrap();
         let kinds: Vec<&str> = r.summary.events.iter().map(|e| e.kind).collect();
         assert_eq!(kinds, ["music", "music_stop"]);
     }
@@ -477,7 +482,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 10)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 10)]).unwrap();
         assert_eq!(r.summary.unknown_track, 1);
         let text = r.summary.report();
         assert!(
@@ -501,7 +506,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 30)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 30)]).unwrap();
         assert_eq!(r.summary.events.len(), 1, "the init() trigger was dropped");
         assert_eq!(r.summary.events[0].kind, "music");
         assert_eq!(r.summary.events[0].frame, 0);
@@ -524,7 +529,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 30)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 30)]).unwrap();
         assert_eq!(r.summary.events.len(), 1);
         assert_eq!(r.summary.events[0].kind, "play");
         assert_eq!(r.summary.events[0].name.as_deref(), Some("piano 67"));
@@ -552,7 +557,7 @@ function draw() cls(0) end
         };
         // Held: still sounding at the end of a long render.
         let mut held = console(&src(""));
-        let r = held.render_audio(&[(0, 90)]).unwrap();
+        let r = held.render_audio(&[(Input::default(), 90)]).unwrap();
         let spf = kessel_audio::samples_per_frame(r.summary.sample_rate) as usize;
         let last = &r.samples[r.samples.len() - spf * 2..];
         assert!(
@@ -562,7 +567,7 @@ function draw() cls(0) end
 
         // Released: silent well before the end.
         let mut released = console(&src("if t == 20 then note_off(0) end"));
-        let r = released.render_audio(&[(0, 90)]).unwrap();
+        let r = released.render_audio(&[(Input::default(), 90)]).unwrap();
         let kinds: Vec<&str> = r.summary.events.iter().map(|e| e.kind).collect();
         assert_eq!(kinds, ["note_on", "note_off"]);
         let last = &r.samples[r.samples.len() - spf * 2..];
@@ -589,7 +594,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 20)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 20)]).unwrap();
         assert_eq!(r.summary.bad_note_args, 1);
         assert!(r.summary.events.is_empty(), "a bad note reached the synth");
         assert_eq!(r.summary.peak, 0.0);
@@ -609,7 +614,7 @@ function draw() cls(0) end
             function draw() cls(0) end
             "#,
         );
-        let r = c.render_audio(&[(0, 10)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 10)]).unwrap();
         assert_eq!(r.summary.notes_dropped, 1);
         assert_eq!(r.summary.peak, 0.0);
         assert!(r
@@ -620,8 +625,8 @@ function draw() cls(0) end
 
     #[test]
     fn a_render_is_reproducible() {
-        let one = console(GAME).render_audio(&[(0, 30)]).unwrap();
-        let two = console(GAME).render_audio(&[(0, 30)]).unwrap();
+        let one = console(GAME).render_audio(&[(Input::default(), 30)]).unwrap();
+        let two = console(GAME).render_audio(&[(Input::default(), 30)]).unwrap();
         assert_eq!(one.samples, two.samples);
         assert_eq!(one.summary, two.summary);
     }
@@ -635,13 +640,17 @@ function draw() cls(0) end
             function update() if btnp(A) then sfx(shoot) end end
             function draw() cls(0) end
         "#;
-        let idle = console(src).render_audio(&[(0, 20)]).unwrap();
+        let idle = console(src).render_audio(&[(Input::default(), 20)]).unwrap();
         assert!(idle.summary.events.is_empty());
         assert_eq!(idle.summary.peak, 0.0);
 
         const A: u8 = crate::device::BTN_A;
         let pressed = console(src)
-            .render_audio(&[(0, 5), (A, 5), (0, 10)])
+            .render_audio(&[
+                (Input::default(), 5),
+                (Input::from(A), 5),
+                (Input::default(), 10),
+            ])
             .unwrap();
         assert_eq!(pressed.summary.events.len(), 1);
         assert!(pressed.summary.peak > 0.1);
@@ -650,13 +659,13 @@ function draw() cls(0) end
     #[test]
     fn rendering_needs_a_rom() {
         let mut c = VmConsole::new();
-        assert!(c.render_audio(&[(0, 10)]).is_err());
+        assert!(c.render_audio(&[(Input::default(), 10)]).is_err());
     }
 
     #[test]
     fn the_wav_is_well_formed() {
         let mut c = console(GAME);
-        let r = c.render_audio(&[(0, 6)]).unwrap();
+        let r = c.render_audio(&[(Input::default(), 6)]).unwrap();
         let wav = r.to_wav();
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");

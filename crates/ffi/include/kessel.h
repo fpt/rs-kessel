@@ -54,8 +54,43 @@ void kessel_player_free(KesselPlayer *p);
  */
 char *kessel_player_load(KesselPlayer *p, const char *source, const char *name);
 
+/* How many touch slots KesselInput carries. */
+#define KESSEL_MAX_TOUCHES 4
+
+/* Full analog deflection, in signed 8.8 fixed point (256 = 1.0). */
+#define KESSEL_STICK_FULL 256
+
+/* One touch point, in console pixels — the host has already undone its own
+ * letterboxing and upscale, so these are the coordinates the game draws with. */
+typedef struct {
+  uint16_t x;
+  uint16_t y;
+  bool down;
+} KesselTouch;
+
+/*
+ * Everything the console reads for one frame.
+ *
+ * `touches` is indexed by slot, and a slot is a finger's identity for its whole
+ * life: the console derives press/release edges per slot, so a host that
+ * renumbers its fingers between frames reports a release and a press the player
+ * never made.
+ */
+typedef struct {
+  uint8_t buttons;
+  int16_t stick_x; /* -KESSEL_STICK_FULL .. KESSEL_STICK_FULL */
+  int16_t stick_y;
+  KesselTouch touches[KESSEL_MAX_TOUCHES];
+} KesselInput;
+
 /* Advance one frame with `buttons` held. No-op until a ROM is loaded. */
 void kessel_player_tick(KesselPlayer *p, uint8_t buttons);
+
+/*
+ * Advance one frame with the full input. A NULL `input` means "nothing held",
+ * the same as kessel_player_tick(p, 0) — the frame still runs.
+ */
+void kessel_player_tick_input(KesselPlayer *p, const KesselInput *input);
 
 /*
  * Screen edge length in pixels; a frame is dim*dim*4 bytes.
