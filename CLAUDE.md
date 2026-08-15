@@ -99,6 +99,30 @@ Three things follow:
   release. A finger that wanders into the letterbox keeps its slot and reports
   *up*, for the same reason — the alternative hands its slot to someone else.
 
+**Gestures are recognized in the device layer, never in a host.** `swipe`,
+`touch_dx/dy` and `touch_frames` are computed in `begin_frame` from touch state
+the console already owns, which is what makes one recorded frame mean the same
+thing on every host and under replay. It also means the mouse, a finger and an
+agent's scripted `touch:` argument all produce gestures for free.
+
+Four decisions there, taken against how iOS and Android do it (`docs/VM_CONTROLS.md`
+has the full comparison) and not worth re-litigating:
+
+- **A swipe fires mid-gesture**, the frame the threshold is crossed — iOS's
+  `UISwipeGestureRecognizer` timing, not Android's `onFling`, which waits for the
+  lift so it can compute velocity. A console wants the board to move *as* you
+  swipe.
+- **One press is one swipe.** Otherwise a finger held past the threshold
+  re-reports the same direction every frame.
+- **The device exposes the signed delta, not the origin.** A game already has the
+  current position, so a delta gives the origin back for free (`x - dx`) *and*
+  avoids the trap; exposing the origin would leave every swipe game subtracting
+  two `u16`s and wrapping on a leftward drag. `touch_dx`/`touch_dy` therefore
+  type as `Ty::Int`, same as the stick.
+- **The threshold is `dim / 8`**, screen-relative, so the gesture is the same
+  *physical* size on both screens. Velocity is deliberately not a built-in gate —
+  `touch_frames` makes it computable, and a fling threshold is per-game feel.
+
 **The four direction bits are whatever the ROM says they are.** Labelling
 `left`/`right`/`up`/`down` in `controls` declares them plain keys and a host
 draws a button row (`games/popn.lua`); `dpad = true` alongside a label is a

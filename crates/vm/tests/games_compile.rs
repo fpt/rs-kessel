@@ -867,6 +867,63 @@ fn popn_declares_a_button_row_and_scores_on_those_keys() {
     );
 }
 
+/// `2048.lua` is the swipe reference: a drag must move the board exactly as an
+/// arrow press does, and must do it **once** per gesture.
+///
+/// The recognizer lives in the VM rather than in each host, so this test is
+/// also what proves `kessel run`'s mouse, Android's fingers and an agent's
+/// scripted `touch:` argument all get the same gesture — they are the same
+/// three lines of touch state underneath.
+#[test]
+fn game_2048_slides_on_a_swipe_exactly_once() {
+    use kessel_vm::device::{Input, Touch};
+
+    const GAME: &str = include_str!("../../../games/2048.lua");
+    const INITIAL_SPAWNS: &str = "  spawn_tile()\n  spawn_tile()";
+
+    // A row of four 2s: one leftward move merges them into two 4s, so the
+    // board's response to a swipe is unambiguous.
+    let merge_board = GAME.replace(
+        INITIAL_SPAWNS,
+        "  cells[0] = 2  cells[1] = 2  cells[2] = 2  cells[3] = 2",
+    );
+    let mut c = VmConsole::new();
+    c.write_source("2048.lua", &merge_board).unwrap();
+    c.assemble("2048.lua").unwrap();
+    c.load_rom("2048.lua").unwrap();
+
+    let finger = |x: u16| {
+        let mut i = Input::default();
+        i.touches[0] = Touch {
+            x,
+            y: 64,
+            down: true,
+        };
+        i
+    };
+    // Tiles are reported as entities, so the count is how the board is read.
+    let tiles = |c: &mut VmConsole, i: Input| c.run_frame(i).entities.len();
+
+    let before = tiles(&mut c, Input::default());
+    c.run_frame(finger(90)); // press — cannot have travelled yet
+    let after = tiles(&mut c, finger(50)); // 40 px left, past the 16 px threshold
+    assert!(
+        after < before,
+        "a leftward swipe did not merge the row: {before} tiles -> {after}"
+    );
+
+    // Dragging further in the same press must not slide the board again — one
+    // press is one move, or a slow drag would run the whole game.
+    let settled = tiles(&mut c, finger(20));
+    for x in [16u16, 12, 8] {
+        assert_eq!(
+            tiles(&mut c, finger(x)),
+            settled,
+            "the board moved twice in one gesture"
+        );
+    }
+}
+
 /// `paint.lua` is the reference for the analog surfaces, and the only game that
 /// reads them — so this is the one test that proves a touch and a stick
 /// deflection reach a running ROM at all.

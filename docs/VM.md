@@ -9,6 +9,10 @@ The `vm_*` tools reach an agent over MCP: `kessel mcp` serves them on stdio, so
 any MCP-capable agent can drive the loop. `kessel run <file>` opens the same
 console in a window for a human.
 
+Two companion documents: [**VM_CONTROLS.md**](VM_CONTROLS.md) for input —
+buttons, the analog stick, touch, gestures and the `controls { … }` metadata —
+and [**AUDIO.md**](AUDIO.md) for the synth.
+
 ## Machine
 
 - 16-bit stack machine. Data stack + return stack, 256 `u16` cells each.
@@ -96,11 +100,8 @@ Port byte = `(device << 4) | register`.
 | `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
 | `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id (scaled tile at screen x/y) |
 | `0xc0` | in/out | trig: write angle (0..255 = a turn) → read sin; `0xc1` reads cos. Signed 8.8 fixed (-256..256) |
-| `0x20` | in  | gamepad buttons bitfield (held) |
-| `0x21` `0x22` | in | gamepad edges: just-pressed / just-released this frame |
-| `0x23` `0x24` | in | analog stick x / y, signed 8.8 fixed (-256..256), 0 centred |
-| `0xd0` | in/out | touch: read the number of fingers down / write to select a slot |
-| `0xd1` `0xd2` `0xd3` | in | the selected slot's x, y (console pixels) and state (bit0 down, bit1 pressed, bit2 released) |
+| `0x20`–`0x24` | in | gamepad buttons, edges, and the analog stick — see [VM_CONTROLS.md](VM_CONTROLS.md) |
+| `0xd0`–`0xd7` | in/out | touch points and gestures — see [VM_CONTROLS.md](VM_CONTROLS.md) |
 | `0x30` | in/out | rng: read next `u16` / write to set the seed |
 | `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
 | `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop |
@@ -110,39 +111,9 @@ Port byte = `(device << 4) | register`.
 | `0x50` `0x51` `0x52` | out | debug entity: x, y, commit(tag) — reported in the observation |
 | `0x60` | out | console: write a byte to the text buffer |
 
-Gamepad bits: `LEFT 0x01 RIGHT 0x02 UP 0x04 DOWN 0x08 A 0x10 B 0x20 START 0x40
-SELECT 0x80`.
-
-### Analog input
-
-Two surfaces sit beside the buttons, and both are **optional** — a ROM that
-never reads them sees the console it always saw.
-
-**The stick** (`0x23`/`0x24`) is signed 8.8 fixed in `[-256, 256]`, the same
-scale and the same `int` type `sin`/`cos` return. Which means the same caveat:
-`/` is unsigned, so branch on the sign before dividing the magnitude. The
-console never applies a deadzone — that is a host's decision about its own
-hardware, and a game that wants one compares against a threshold it chose.
-
-**Touch** (`0xd0`–`0xd3`) reports up to **four** points, in *console pixels*.
-The host has already undone its own letterboxing and upscale, so these are the
-coordinates the game draws with; a game never learns the window size. Select a
-slot by writing `0xd0`, then read it — the trig device's shape.
-
-A point's **slot is its identity** for that finger's whole life. Press and
-release edges are computed per slot, so a host that renumbers its fingers
-between frames reports a release and a press that never happened. Reading a slot
-the console does not have gives an empty one rather than wrapping onto a real
-finger — the same do-nothing answer an off-screen `pset` gets.
-
-What each host provides:
-
-| host | stick | touch |
-|------|-------|-------|
-| `kessel run` | the direction keys, diagonals normalized to ±181 so they aren't √2 faster | the mouse, as slot 0 |
-| Android | an on-screen thumbstick, when the ROM declares `stick` | fingers on the game surface, when the ROM declares `touch` |
-| `vm_run_frame(s)` | the `stick: [x, y]` argument | the `touch: [[x, y], …]` argument |
-| `kessel attach` | whatever the attached window has | the same |
+Input has its own document: [**VM_CONTROLS.md**](VM_CONTROLS.md) covers the
+button bits, the analog stick, touch, gestures, the `controls { … }` metadata,
+and what each host provides.
 
 ### Colour
 
@@ -463,20 +434,10 @@ end
     sign and divide the magnitude, e.g.
     `if s < 0 then d = 0 - ((0 - s) / 40) else d = s / 40 end` (see the bobbing
     sun in `outrun.lua`).
-- **Input & timing:** `btn(mask)→0/1` (held), `btnp(mask)→0/1` (pressed *this*
-  frame — the rising edge), `btnr(mask)→0/1` (released this frame). Use `btnp`
-  for jumps, menu steps and fire-on-press so the model doesn't have to track the
-  previous frame's buttons by hand. `frame_count()→word` gives frames since
+- **Input:** `btn`/`btnp`/`btnr(mask)→0/1` (held / pressed this frame /
+  released this frame), the analog stick, touch, and `swipe`. Full reference in
+  [**VM_CONTROLS.md**](VM_CONTROLS.md). `frame_count()→word` gives frames since
   power-on (wraps at 65536) for blink/timers/periodic spawns.
-- **Analog input:** `stick_x()→int` / `stick_y()→int` are the analog stick,
-  signed 8.8 fixed in `[-256, 256]` — same scale, same type, and same unsigned-`/`
-  caveat as `sin`/`cos` above. `touch_count()→word` is how many fingers are
-  down; `touch_x(slot)` / `touch_y(slot)` give one finger's position in **console
-  pixels** (0..3, already unprojected by the host), and
-  `touch_down|pressed|released(slot)→0/1` are the held/edge predicates, the touch
-  equivalents of `btn`/`btnp`/`btnr`. `paint.lua` is the worked example. A slot
-  is a finger's identity, so `touch_pressed(0)` means "the finger in slot 0
-  landed this frame", not "some finger landed".
 - **Arrays:** `len(arr)→word` is the array's declared length (a compile-time
   constant) — write `for i = 0, len(bullets)-1 do` so the loop follows the array
   size instead of a hand-written bound. `clear(x)` zeroes a record or whole array
@@ -496,54 +457,12 @@ end
   luax has no runtime strings. `number(n, x, y, color)` draws an integer in
   decimal. For scores, titles, and `GAME OVER` — reset `camera(0,0)` first if the
   world is scrolled. See the HUD in `games/shooter.lua`.
-- **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT`.
+- **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT` — also the values
+  `swipe()` reports.
 - **Controls metadata:** an optional top-level `controls { … }` block records the
-  game's input layout **as ROM metadata** — a host UI (on-screen buttons, help
-  text, a smartphone virtual pad) reads it instead of guessing from source
-  comments. It is **irrelevant to VM execution**; the machine only ever sees the
-  raw gamepad bitfield.
-  ```lua
-  controls {
-    dpad = true       -- is the movement pad used
-    a = "jump"        -- action labels for the A / B / Start / Select buttons
-    b = "dash"
-    stick = "aim"     -- the analog stick is read, and what for
-    touch = "draw"    -- the game reads raw touches on the screen
-    pause = START     -- which physical button pauses (default START)
-  }
-  ```
-  Keys: `dpad` (bool), `a`/`b`/`start`/`select` and `left`/`right`/`up`/`down`
-  (a `"..."` label), `stick`/`touch` (a `"..."` label), and `pause` (a button
-  name). Entries are separated by whitespace (commas optional). Every game has a
-  **pause** binding by default (`START`) even with no block, so the host always
-  has a pause control to offer — the play window freezes/resumes the game on that
-  button and shows "PAUSED" in the title. `VmPlayer.controls_json()` hands the
-  whole layout to the host as JSON.
-
-  **Buttons instead of a d-pad.** Labelling the four direction bits says they are
-  plain keys rather than a direction, and a host lays them out as a row — the
-  pop'n-music shape, where nothing on the pad means "up":
-
-  ```lua
-  controls {
-    dpad  = false
-    left  = "red"    down = "green"  up = "blue"  right = "yellow"
-    a     = "white"  b    = "black"
-    pause = START
-  }
-  ```
-
-  `dpad = true` together with a direction label is a **diagnostic**, not a silent
-  winner: the two are claims about the same four bits that mean opposite things.
-  The JSON carries the resolved answer as `dir_layout` (`"dpad"` / `"buttons"` /
-  `"none"`), so every host draws the same pad rather than re-deriving the rule
-  three times. `games/popn.lua` is the worked example, and note what it has to
-  get right: the lane order on screen must match the order a host lays the keys
-  out (`left`, `down`, `up`, `right`, then `a`, `b`).
-
-  `stick` and `touch` are declarations for the host in the same way. The ports
-  work regardless; declaring them is what gets a thumbstick drawn on a phone and
-  what tells the app to route screen touches to the game rather than eating them.
+  game's input layout as ROM metadata, so a host UI can label and lay out a pad
+  without guessing. Irrelevant to VM execution. See
+  [**VM_CONTROLS.md**](VM_CONTROLS.md).
 - Comments: `--` line, `--[[ … ]]` block.
 
 ### Tutorial snippets
@@ -610,7 +529,8 @@ kessel run games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerat
 ```
 
 The `games/` set doubles as worked luax examples spanning the builtins:
-`2048` (array transforms + edge-triggered grid input), `snake` (record arrays +
+`2048` (array transforms + edge-triggered grid input, and the **swipe**
+reference — `swipe()` and `btnp` folded into one `direction()`), `snake` (record arrays +
 grid movement), `brick` (signed `int` velocity + AABB brick hits + a
 `len`-bounded pool init), `shooter` (entity pools driven by `len` +
 `clear`-reset pools + `rect_overlap`), `tetris` (bitmask pieces, runtime
@@ -634,20 +554,13 @@ forces).
 
 ### Controls
 
-| Key | Button |
-|-----|--------|
-| Arrows / WASD | D-pad — and the analog stick, at full deflection |
-| `Z` or `J` (or Space) | A |
-| `X` or `K` | B |
-| Return | START |
-| Shift | SELECT |
-| Mouse drag | touch slot 0 |
-| `R` | reload the file from disk |
-| Esc | quit |
+Arrows or WASD for the d-pad (which also deflect the analog stick), `Z`/`X` for
+A/B, Return for START, Shift for SELECT, and a mouse drag is touch slot 0. Full
+key table and what each host provides: [**VM_CONTROLS.md**](VM_CONTROLS.md).
 
 `R` recompiles the source and restarts the game, so you can keep the window open
-while editing. Pressing the ROM's **pause** button (from its `controls` metadata,
-default `START` = Return) freezes the game.
+while editing; Esc quits. Pressing the ROM's **pause** button (from its
+`controls` metadata, default `START` = Return) freezes the game.
 
 ### Attaching to an agent's session
 

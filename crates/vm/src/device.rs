@@ -19,7 +19,7 @@
 //! | 0xa | sprn    | 0 base-id · 1 w · 2 h · 3 draw (w×h block at screen x/y) |
 //! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
-//! | 0xd | touch   | 0 slot (write) / count (read) · 1 x · 2 y · 3 state (bit0 down, bit1 pressed, bit2 released) |
+//! | 0xd | touch   | 0 slot (write) / count (read) · 1 x · 2 y · 3 state (bit0 down, bit1 pressed, bit2 released) · 4 swipe · 5 dx · 6 dy · 7 frames held |
 
 /// Screen edge length for [`VideoMode::Classic128`].
 pub const CLASSIC_DIM: usize = 128;
@@ -111,6 +111,47 @@ pub struct Touch {
     pub y: u16,
     pub down: bool,
 }
+
+/// One touch slot's gesture, tracked by the console across frames.
+///
+/// The platforms this borrows from split gestures in two: a discrete flick
+/// (`UISwipeGestureRecognizer`, `GestureDetector.onFling`) that reports only a
+/// direction, and a continuous drag (`UIPanGestureRecognizer`, `onScroll`) that
+/// reports displacement. This is both, because on a 60 Hz console they are the
+/// same three numbers — where the press began, how far it has come, and how long
+/// it has been going.
+///
+/// The console keeps the **origin** and hands out a *signed* delta rather than
+/// the reverse. A game already knows the current position from `touch_x`, so a
+/// delta gives it the origin back for free (`x - dx`) — while exposing the
+/// origin instead would leave every swipe game subtracting two `u16`s and
+/// wrapping on any leftward drag. That trap is the whole reason this lives in
+/// the device.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Gesture {
+    /// Where this press landed, in console pixels.
+    origin: (u16, u16),
+    /// Frames this press has been held, saturating rather than wrapping — a
+    /// finger resting for eighteen minutes should not read as freshly landed.
+    frames: u16,
+    /// The direction already reported for this press, so one press is one
+    /// swipe. Without it a finger held past the threshold would re-report the
+    /// same direction every frame for as long as it stayed down.
+    fired: u8,
+    /// The direction to report *this frame only* — the discrete half.
+    swipe: u8,
+}
+
+/// How far a finger must travel to count as a swipe, as a fraction of the
+/// screen: `dim / SWIPE_DIVISOR`, so 16 px on Classic128 and 30 on
+/// Extended240.
+///
+/// Screen-relative rather than a fixed pixel count because the two screens are
+/// the same physical size — a fixed count would make the gesture feel shorter on
+/// the denser one. Android reaches the same place from the other direction with
+/// `ViewConfiguration.getScaledTouchSlop`, which is in dp precisely so it means
+/// one physical distance.
+const SWIPE_DIVISOR: usize = 8;
 
 /// Everything a host hands the machine for one frame.
 ///
@@ -375,10 +416,11 @@ pub struct Devices {
     /// Touch points this frame, by slot.
     pub touches: [Touch; MAX_TOUCHES],
     /// Which slots were down on the *previous* frame, for the touch equivalent
-    /// of `btnp`/`btnr`. Only the flag is kept: a game asking where a finger
-    /// *was* is asking a question about its own state, and every game that
-    /// needs it already stores the position it acted on.
+    /// of `btnp`/`btnr`.
     prev_touch_down: [bool; MAX_TOUCHES],
+    /// Per-slot gesture state: where the current press began, how long it has
+    /// been held, and which way it has been judged to have swiped.
+    gestures: [Gesture; MAX_TOUCHES],
     /// Frames elapsed since power-on (wraps at 65536; drives blink/timers).
     pub frame_count: u16,
     /// The frame vector the game installed via `screen/vector`; 0 = none.
@@ -474,6 +516,7 @@ impl Devices {
             stick_y: 0,
             touches: [Touch::default(); MAX_TOUCHES],
             prev_touch_down: [false; MAX_TOUCHES],
+            gestures: [Gesture::default(); MAX_TOUCHES],
             frame_count: 0,
             frame_vector: 0,
             halt_requested: false,
@@ -545,6 +588,14 @@ impl Devices {
             (0xd, 0x1) => self.touch(self.touch_slot).map_or(0, |t| t.x),
             (0xd, 0x2) => self.touch(self.touch_slot).map_or(0, |t| t.y),
             (0xd, 0x3) => self.touch_state(self.touch_slot),
+            // The gesture half, on the *same* latched slot as the three above —
+            // a swipe's direction and its distance have to describe one finger,
+            // or a two-finger game reads one thumb's direction against the
+            // other's travel.
+            (0xd, 0x4) => self.gesture(self.touch_slot).map_or(0, |g| g.swipe as u16),
+            (0xd, 0x5) => self.drag(self.touch_slot).0 as u16,
+            (0xd, 0x6) => self.drag(self.touch_slot).1 as u16,
+            (0xd, 0x7) => self.gesture(self.touch_slot).map_or(0, |g| g.frames),
             _ => 0,
         }
     }
@@ -552,6 +603,90 @@ impl Devices {
     /// The latched slot, or `None` when the ROM named one that does not exist.
     fn touch(&self, slot: u16) -> Option<&Touch> {
         self.touches.get(slot as usize)
+    }
+
+    fn gesture(&self, slot: u16) -> Option<&Gesture> {
+        self.gestures.get(slot as usize)
+    }
+
+    /// Displacement from where this press began, **signed**, in console pixels.
+    ///
+    /// Signed for the same reason the stick and `sin`/`cos` are: a leftward drag
+    /// is a negative number, and a game computing it from two `u16` positions
+    /// would wrap instead. A slot that is not down reads `(0, 0)` rather than
+    /// the last drag it made — a finger that has lifted has no displacement,
+    /// and a stale one would have a game keep steering after the player let go.
+    fn drag(&self, slot: u16) -> (i16, i16) {
+        let (Some(t), Some(g)) = (self.touch(slot), self.gesture(slot)) else {
+            return (0, 0);
+        };
+        if !t.down {
+            return (0, 0);
+        }
+        (
+            t.x.wrapping_sub(g.origin.0) as i16,
+            t.y.wrapping_sub(g.origin.1) as i16,
+        )
+    }
+
+    /// Advance every slot's gesture for a new frame of touch input.
+    ///
+    /// Runs in `begin_frame`, over state the console already owns, which is what
+    /// makes a swipe identical on every host and exact under snapshot/replay. A
+    /// host-side recognizer would make one recorded frame mean different things
+    /// depending on who replayed it.
+    fn track_gestures(&mut self) {
+        let threshold = (self.dim / SWIPE_DIVISOR) as i32;
+        for (slot, g) in self.gestures.iter_mut().enumerate() {
+            let now = self.touches[slot];
+            let was = self.prev_touch_down[slot];
+
+            // A swipe lasts exactly the frame it is recognized on, like the
+            // gamepad's press edge.
+            g.swipe = 0;
+
+            if !now.down {
+                *g = Gesture::default();
+                continue;
+            }
+            if !was {
+                // Press edge: a finger that has only just landed cannot have
+                // travelled, so this frame starts the gesture and reports
+                // nothing.
+                *g = Gesture {
+                    origin: (now.x, now.y),
+                    ..Gesture::default()
+                };
+                continue;
+            }
+
+            g.frames = g.frames.saturating_add(1);
+            if g.fired != 0 {
+                continue;
+            }
+
+            let dx = now.x as i32 - g.origin.0 as i32;
+            let dy = now.y as i32 - g.origin.1 as i32;
+            if dx.abs() < threshold && dy.abs() < threshold {
+                continue;
+            }
+            // Dominant axis only — never a diagonal. Every game that wants this
+            // wants one of four answers, and a tie going to X keeps a perfectly
+            // diagonal drag deterministic rather than dependent on rounding.
+            let dir = if dx.abs() >= dy.abs() {
+                if dx < 0 {
+                    BTN_LEFT
+                } else {
+                    BTN_RIGHT
+                }
+            } else if dy < 0 {
+                BTN_UP
+            } else {
+                BTN_DOWN
+            };
+            g.swipe = dir;
+            g.fired = dir;
+        }
     }
 
     /// `bit0` down · `bit1` pressed this frame · `bit2` released this frame.
@@ -820,6 +955,9 @@ impl Devices {
             *was = now.down;
         }
         self.touches = input.touches;
+        // After the touches land and before anything reads them: the recognizer
+        // needs this frame's positions against last frame's down flags.
+        self.track_gestures();
         self.stick_x = input.stick_x.clamp(-STICK_FULL, STICK_FULL);
         self.stick_y = input.stick_y.clamp(-STICK_FULL, STICK_FULL);
         self.frame_count = self.frame_count.wrapping_add(1);
@@ -1223,6 +1361,175 @@ mod tests {
 
         d.begin_frame(Input::default());
         assert_eq!(d.read(0xd3), 0, "and the release does not repeat");
+    }
+
+    /// Drag one finger through `path`, returning what slot 0's gesture
+    /// registers read at each step: `(swipe, dx, dy, frames)`.
+    fn drag_path(d: &mut Devices, path: &[(u16, u16)]) -> Vec<(u16, i16, i16, u16)> {
+        let mem = [0u8; 8];
+        d.write(0xd0, 0, &mem); // latch slot 0
+        path.iter()
+            .map(|&(x, y)| {
+                let mut i = Input::default();
+                i.touches[0] = Touch { x, y, down: true };
+                d.begin_frame(i);
+                (
+                    d.read(0xd4),
+                    d.read(0xd5) as i16,
+                    d.read(0xd6) as i16,
+                    d.read(0xd7),
+                )
+            })
+            .collect()
+    }
+
+    /// The threshold is a fraction of the screen, so the *same* drag is a swipe
+    /// on Classic and merely a drag on Extended. That is the point: the screens
+    /// are the same physical size, so a gesture should be the same fraction of
+    /// it rather than the same pixel count.
+    #[test]
+    fn the_swipe_threshold_scales_with_the_screen() {
+        assert_eq!(CLASSIC_DIM / SWIPE_DIVISOR, 16);
+        assert_eq!(EXTENDED_DIM / SWIPE_DIVISOR, 30);
+
+        // 20 px right: past Classic's 16, short of Extended's 30.
+        let steps = [(40, 40), (60, 40)];
+        let mut classic = Devices::new();
+        assert_eq!(drag_path(&mut classic, &steps)[1].0, BTN_RIGHT as u16);
+        let mut extended = Devices::with_mode(VideoMode::Extended240);
+        assert_eq!(drag_path(&mut extended, &steps)[1].0, 0);
+    }
+
+    /// A swipe is recognized *mid-gesture*, the frame the finger passes the
+    /// threshold — iOS's `UISwipeGestureRecognizer` timing rather than Android's
+    /// `onFling`, which waits for the lift. A console wants the board to move as
+    /// you swipe, not after you let go.
+    #[test]
+    fn a_swipe_fires_once_mid_gesture_not_on_release() {
+        let mut d = Devices::new();
+        let seen = drag_path(
+            &mut d,
+            &[
+                (60, 60), // press: no travel yet
+                (70, 60), // 10 px — under the 16 px threshold
+                (80, 60), // 20 px — recognized here
+                (95, 60), // still dragging: one press is one swipe
+            ],
+        );
+        assert_eq!(seen[0].0, 0, "a landing finger cannot have swiped");
+        assert_eq!(seen[1].0, 0, "under the threshold");
+        assert_eq!(seen[2].0, BTN_RIGHT as u16, "recognized while still down");
+        assert_eq!(seen[3].0, 0, "one press is one swipe");
+
+        // Lifting reports nothing extra — the swipe already happened.
+        d.begin_frame(Input::default());
+        assert_eq!(d.read(0xd4), 0);
+    }
+
+    /// Each of the four directions, by dominant axis. Never a diagonal: every
+    /// game that wants a swipe wants one of four answers.
+    #[test]
+    fn a_swipe_reports_the_dominant_axis_as_a_button_bit() {
+        for (to, expect) in [
+            ((20, 60), BTN_LEFT),
+            ((100, 60), BTN_RIGHT),
+            ((60, 20), BTN_UP),
+            ((60, 100), BTN_DOWN),
+            // Mostly right, slightly up: the dominant axis wins outright.
+            ((100, 50), BTN_RIGHT),
+        ] {
+            let mut d = Devices::new();
+            let seen = drag_path(&mut d, &[(60, 60), to]);
+            assert_eq!(
+                seen[1].0, expect as u16,
+                "dragging from (60,60) to {to:?} should report {expect:#04x}"
+            );
+        }
+    }
+
+    /// An exactly diagonal drag has to resolve *somewhere* deterministically,
+    /// or the same replayed frame gives two answers.
+    #[test]
+    fn a_perfectly_diagonal_swipe_breaks_the_tie_toward_x() {
+        let mut d = Devices::new();
+        let seen = drag_path(&mut d, &[(60, 60), (90, 90)]);
+        assert_eq!(seen[1].0, BTN_RIGHT as u16);
+    }
+
+    /// The continuous half: displacement from the origin, signed, plus how long
+    /// the press has lasted. This is what a game needs that a bare direction
+    /// cannot give it — and it is signed so a leftward drag does not wrap.
+    #[test]
+    fn a_drag_reports_signed_displacement_and_its_age() {
+        let mut d = Devices::new();
+        let seen = drag_path(&mut d, &[(60, 60), (50, 70), (30, 90)]);
+
+        assert_eq!((seen[0].1, seen[0].2), (0, 0), "the origin is the origin");
+        assert_eq!((seen[1].1, seen[1].2), (-10, 10), "left and down of it");
+        assert_eq!((seen[2].1, seen[2].2), (-30, 30));
+
+        assert_eq!(seen[0].3, 0, "a landing finger is zero frames old");
+        assert_eq!((seen[1].3, seen[2].3), (1, 2));
+    }
+
+    /// A game already has the current position, so a signed delta hands back the
+    /// origin for free — which is why the delta is what the device exposes.
+    #[test]
+    fn the_origin_is_recoverable_from_position_and_delta() {
+        let mut d = Devices::new();
+        drag_path(&mut d, &[(60, 60), (30, 90)]);
+        let (x, y) = (d.read(0xd1) as i32, d.read(0xd2) as i32);
+        let (dx, dy) = (d.read(0xd5) as i16 as i32, d.read(0xd6) as i16 as i32);
+        assert_eq!((x - dx, y - dy), (60, 60));
+    }
+
+    /// Lifting ends the gesture outright: a released finger has no displacement,
+    /// and a stale one would have a game keep steering after the player let go.
+    #[test]
+    fn releasing_clears_the_drag_and_starts_a_new_gesture() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0xd0, 0, &mem);
+        drag_path(&mut d, &[(60, 60), (30, 60)]);
+        assert_eq!(d.read(0xd5) as i16, -30);
+
+        d.begin_frame(Input::default());
+        assert_eq!((d.read(0xd5) as i16, d.read(0xd6) as i16), (0, 0));
+        assert_eq!(d.read(0xd7), 0, "frames reset with the gesture");
+
+        // A fresh press swipes again — "one press is one swipe", not "one swipe
+        // ever".
+        let again = drag_path(&mut d, &[(60, 60), (100, 60)]);
+        assert_eq!(again[1].0, BTN_RIGHT as u16);
+    }
+
+    /// Gestures are per slot, so two thumbs can swipe opposite ways at once.
+    /// A screen-level swipe register would have made one of them disappear.
+    #[test]
+    fn two_fingers_swipe_independently() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        let frame = |d: &mut Devices, a: (u16, u16), b: (u16, u16)| {
+            let mut i = Input::default();
+            i.touches[0] = Touch {
+                x: a.0,
+                y: a.1,
+                down: true,
+            };
+            i.touches[1] = Touch {
+                x: b.0,
+                y: b.1,
+                down: true,
+            };
+            d.begin_frame(i);
+        };
+        frame(&mut d, (60, 60), (60, 60));
+        frame(&mut d, (100, 60), (20, 60));
+
+        d.write(0xd0, 0, &mem);
+        assert_eq!((d.read(0xd4), d.read(0xd5) as i16), (BTN_RIGHT as u16, 40));
+        d.write(0xd0, 1, &mem);
+        assert_eq!((d.read(0xd4), d.read(0xd5) as i16), (BTN_LEFT as u16, -40));
     }
 
     /// A slot the console does not have reads as an empty one rather than

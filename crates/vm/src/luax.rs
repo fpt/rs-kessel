@@ -1573,6 +1573,10 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "touch_down" => (1, true),
         "touch_pressed" => (1, true),
         "touch_released" => (1, true),
+        "swipe" => (1, true),
+        "touch_dx" => (1, true),
+        "touch_dy" => (1, true),
+        "touch_frames" => (1, true),
         "frame_count" => (0, true),
         "sin" => (1, true),
         "cos" => (1, true),
@@ -2463,12 +2467,13 @@ impl Compiler {
                     Ty::Word
                 }
             }
-            // sin/cos and the stick axes return a signed 8.8 fixed value; the
-            // rest are unsigned. Without this a game would compare a full-left
-            // deflection (-256, delivered as 0xFF00) as a large positive
-            // number, and every stick-steered game would only steer one way.
+            // sin/cos, the stick axes and the drag deltas are signed; the rest
+            // are unsigned. Without this a game would compare a full-left
+            // deflection (-256, delivered as 0xFF00) as a large positive number,
+            // and every stick-steered game would only steer one way — the same
+            // trap a leftward drag falls into.
             Expr::Call(name, ..) => match name.as_str() {
-                "sin" | "cos" | "stick_x" | "stick_y" => Ty::Int,
+                "sin" | "cos" | "stick_x" | "stick_y" | "touch_dx" | "touch_dy" => Ty::Int,
                 _ => Ty::Word,
             },
         }
@@ -2694,6 +2699,13 @@ impl Compiler {
             "touch_down" => "#d0 DEO #d3 DEI #01 AND #00 NE",
             "touch_pressed" => "#d0 DEO #d3 DEI #02 AND #00 NE",
             "touch_released" => "#d0 DEO #d3 DEI #04 AND #00 NE",
+            // The gesture half. `swipe` reports a LEFT/RIGHT/UP/DOWN bit on the
+            // one frame it is recognized; the drag registers are the continuous
+            // side underneath it.
+            "swipe" => "#d0 DEO #d4 DEI",
+            "touch_dx" => "#d0 DEO #d5 DEI", // ( slot ) -> signed px from origin
+            "touch_dy" => "#d0 DEO #d6 DEI",
+            "touch_frames" => "#d0 DEO #d7 DEI",
             "frame_count" => "#80 DEI", // frames since power-on (wraps at 65536)
             "sin" => "#c0 DEO #c0 DEI", // ( angle ) -> signed 8.8 fixed sin
             "cos" => "#c0 DEO #c1 DEI", // ( angle ) -> signed 8.8 fixed cos
@@ -4393,6 +4405,51 @@ mod tests {
         // Held, not newly pressed.
         let o = c.run_frame(input);
         assert!(!o.entities.iter().any(|e| e.tag == 99));
+    }
+
+    /// The gesture builtins, through the compiler: a swipe reports a direction
+    /// bit that compares against the button constants a game already has, and
+    /// the drag delta is signed so a leftward drag is negative rather than
+    /// 65506.
+    #[test]
+    fn swipe_and_drag_reach_a_game() {
+        let src = r#"
+            function update() end
+            function draw()
+              if swipe(0) == LEFT then entity(1, 0, 7) end
+              local dx: int = touch_dx(0)
+              if dx < 0 then entity(2, 0, 8) end
+              entity(touch_frames(0), 0, 9)
+            end
+        "#;
+        let mut c = load(src);
+
+        let at = |x: u16| {
+            let mut i = crate::device::Input::default();
+            i.touches[0] = crate::device::Touch {
+                x,
+                y: 60,
+                down: true,
+            };
+            i
+        };
+
+        c.run_frame(at(60)); // press
+        let o = c.run_frame(at(30)); // 30 px left — past the 16 px threshold
+        assert!(
+            o.entities.iter().any(|e| e.tag == 7),
+            "a leftward drag did not report LEFT: {:?}",
+            o.entities
+        );
+        assert!(
+            o.entities.iter().any(|e| e.tag == 8),
+            "touch_dx did not read as negative — the sign was lost"
+        );
+        assert_eq!(
+            o.entities.iter().find(|e| e.tag == 9).unwrap().x,
+            1,
+            "one frame of travel"
+        );
     }
 
     #[test]

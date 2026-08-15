@@ -1,11 +1,21 @@
 -- 2048.lua — slide matching numbered tiles together to reach 2048. Arrow keys
--- move every tile once per press; A (Z key) starts a new game.
+-- move every tile once per press, or **swipe** the board; A (Z key) starts a
+-- new game.
 --
---   kessel run games/2048.lua
+--   kessel run games/2048.lua        (drag with the mouse to swipe)
+--
+-- The swipe reference. `swipe(slot)` reports a `LEFT`/`RIGHT`/`UP`/`DOWN` bit on
+-- the one frame a finger passes the distance threshold — the same constants
+-- `btnp` takes, so the two input paths below collapse into one `direction()`.
+--
+-- Note the `touch` declaration: the ports work regardless, but a host only
+-- routes screen touches to a game that asks for them, so a swipe game that
+-- forgets this line works on a keyboard and does nothing on a phone.
 
 controls {
   dpad = true
   a = "new game"
+  touch = "swipe to slide"
   pause = START
 }
 
@@ -292,16 +302,35 @@ function init()
   spawn_tile()
 end
 
+-- This frame's move, from either input, as a direction bit — or 0.
+--
+-- One function because a swipe and a `btnp` are the same event here: both are
+-- edges that fire once, and both report the same four constants. A board that
+-- tracked them separately would need two "did I already move this frame" flags.
+--
+-- Only slot 0 is read. A second finger on a puzzle board is a stray thumb, not
+-- a second move.
+function direction()
+  local s = swipe(0)
+  if s ~= 0 then return s end
+  if btnp(LEFT) then return LEFT end
+  if btnp(RIGHT) then return RIGHT end
+  if btnp(UP) then return UP end
+  if btnp(DOWN) then return DOWN end
+  return 0
+end
+
 function update()
   if anim_timer > 0 then anim_timer = anim_timer - 1 end
   if btnp(A) then init()  return end
   if state ~= 0 then return end
 
+  local dir = direction()
   local acted = 0
-  if btnp(LEFT) then move_left()  anim_dir = 1  acted = 1
-  elseif btnp(RIGHT) then move_right()  anim_dir = 2  acted = 1
-  elseif btnp(UP) then move_up()  anim_dir = 3  acted = 1
-  elseif btnp(DOWN) then move_down()  anim_dir = 4  acted = 1 end
+  if dir == LEFT then move_left()  anim_dir = 1  acted = 1
+  elseif dir == RIGHT then move_right()  anim_dir = 2  acted = 1
+  elseif dir == UP then move_up()  anim_dir = 3  acted = 1
+  elseif dir == DOWN then move_down()  anim_dir = 4  acted = 1 end
 
   if acted == 1 then
     anim_timer = 4
