@@ -220,10 +220,7 @@ pub extern "C" fn kessel_player_tick(p: *mut KesselPlayer, buttons: u8) {
 /// only read, never retained — the caller keeps owning it, and is expected to
 /// reuse one struct rather than build a fresh one sixty times a second.
 #[no_mangle]
-pub unsafe extern "C" fn kessel_player_tick_input(
-    p: *mut KesselPlayer,
-    input: *const KesselInput,
-) {
+pub unsafe extern "C" fn kessel_player_tick_input(p: *mut KesselPlayer, input: *const KesselInput) {
     let handle = handle!(p, ());
     let input = match unsafe { input.as_ref() } {
         Some(i) => kessel_vm::device::Input::from(i),

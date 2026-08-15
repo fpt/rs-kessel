@@ -157,7 +157,11 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerTickInput(
             return;
         }
     };
-    if len > 0 && env.get_int_array_region(&touches, 0, &mut raw[..len]).is_err() {
+    if len > 0
+        && env
+            .get_int_array_region(&touches, 0, &mut raw[..len])
+            .is_err()
+    {
         let _ = env.exception_clear();
         return;
     }

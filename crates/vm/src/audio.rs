@@ -625,8 +625,12 @@ function draw() cls(0) end
 
     #[test]
     fn a_render_is_reproducible() {
-        let one = console(GAME).render_audio(&[(Input::default(), 30)]).unwrap();
-        let two = console(GAME).render_audio(&[(Input::default(), 30)]).unwrap();
+        let one = console(GAME)
+            .render_audio(&[(Input::default(), 30)])
+            .unwrap();
+        let two = console(GAME)
+            .render_audio(&[(Input::default(), 30)])
+            .unwrap();
         assert_eq!(one.samples, two.samples);
         assert_eq!(one.summary, two.summary);
     }
@@ -640,7 +644,9 @@ function draw() cls(0) end
             function update() if btnp(A) then sfx(shoot) end end
             function draw() cls(0) end
         "#;
-        let idle = console(src).render_audio(&[(Input::default(), 20)]).unwrap();
+        let idle = console(src)
+            .render_audio(&[(Input::default(), 20)])
+            .unwrap();
         assert!(idle.summary.events.is_empty());
         assert_eq!(idle.summary.peak, 0.0);
 

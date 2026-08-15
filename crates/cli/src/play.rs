@@ -302,9 +302,7 @@ impl App {
         if let (Some((cx, cy)), true) = (self.cursor, self.cursor_down) {
             if let Some(window) = &self.window {
                 let size = window.inner_size();
-                if let Some((x, y)) =
-                    window_to_console(cx, cy, size.width, size.height, self.dim)
-                {
+                if let Some((x, y)) = window_to_console(cx, cy, size.width, size.height, self.dim) {
                     touches[0] = Touch { x, y, down: true };
                 }
             }

@@ -891,7 +891,9 @@ fn paint_reads_the_stick_and_the_touchscreen() {
     };
     let mut moved = start;
     for _ in 0..5 {
-        moved = c.run_frame(push(device::STICK_FULL, device::STICK_FULL)).entities[0];
+        moved = c
+            .run_frame(push(device::STICK_FULL, device::STICK_FULL))
+            .entities[0];
     }
     assert!(
         moved.x > start.x && moved.y > start.y,
@@ -903,7 +905,9 @@ fn paint_reads_the_stick_and_the_touchscreen() {
     // game that divides it unsigned lurches 255 pixels instead of stepping one.
     let mut back = moved;
     for _ in 0..5 {
-        back = c.run_frame(push(-device::STICK_FULL, -device::STICK_FULL)).entities[0];
+        back = c
+            .run_frame(push(-device::STICK_FULL, -device::STICK_FULL))
+            .entities[0];
     }
     assert!(
         back.x < moved.x && back.y < moved.y,

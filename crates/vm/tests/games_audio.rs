@@ -59,8 +59,9 @@ fn loaded(name: &str, src: &str) -> VmConsole {
 fn every_game_renders_clean_audio() {
     for (name, src) in GAMES {
         let mut c = loaded(name, src);
-        let script: Vec<(Input, u64)> =
-            (0..300).map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1)).collect();
+        let script: Vec<(Input, u64)> = (0..300)
+            .map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1))
+            .collect();
         let r = c
             .render_audio(&script)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -120,8 +121,9 @@ fn the_games_with_sound_are_audible() {
         let mut c = loaded(name, src);
         // The same rotation as above, not just "hold A": a coin in a platformer
         // has to be walked to before it can be collected.
-        let script: Vec<(Input, u64)> =
-            (0..300).map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1)).collect();
+        let script: Vec<(Input, u64)> = (0..300)
+            .map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1))
+            .collect();
         let r = c.render_audio(&script).unwrap();
         assert!(
             !r.summary.events.is_empty(),

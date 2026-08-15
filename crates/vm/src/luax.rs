@@ -2689,17 +2689,17 @@ impl Compiler {
             // Touch: latch the slot, then read. Same shape as the trig device —
             // one register selects, the next answers.
             "touch_count" => "#d0 DEI",
-            "touch_x" => "#d0 DEO #d1 DEI",         // ( slot ) -> console px
-            "touch_y" => "#d0 DEO #d2 DEI",         // ( slot ) -> console px
+            "touch_x" => "#d0 DEO #d1 DEI", // ( slot ) -> console px
+            "touch_y" => "#d0 DEO #d2 DEI", // ( slot ) -> console px
             "touch_down" => "#d0 DEO #d3 DEI #01 AND #00 NE",
             "touch_pressed" => "#d0 DEO #d3 DEI #02 AND #00 NE",
             "touch_released" => "#d0 DEO #d3 DEI #04 AND #00 NE",
-            "frame_count" => "#80 DEI",     // frames since power-on (wraps at 65536)
-            "sin" => "#c0 DEO #c0 DEI",     // ( angle ) -> signed 8.8 fixed sin
-            "cos" => "#c0 DEO #c1 DEI",     // ( angle ) -> signed 8.8 fixed cos
-            "sfx" => "#90 DEO",             // ( id ) trigger a sound effect
-            "music" => "#91 DEO",           // ( id ) start a music track
-            "music_stop" => "#00 #92 DEO",  // stop music
+            "frame_count" => "#80 DEI", // frames since power-on (wraps at 65536)
+            "sin" => "#c0 DEO #c0 DEI", // ( angle ) -> signed 8.8 fixed sin
+            "cos" => "#c0 DEO #c1 DEI", // ( angle ) -> signed 8.8 fixed cos
+            "sfx" => "#90 DEO",         // ( id ) trigger a sound effect
+            "music" => "#91 DEO",       // ( id ) start a music track
+            "music_stop" => "#00 #92 DEO", // stop music
             // The note ports latch and commit on the register holding the
             // call's FIRST argument, which a stack machine hands back last —
             // the same shape as `pal` above.
@@ -4351,7 +4351,11 @@ mod tests {
             stick_x: -crate::device::STICK_FULL,
             ..Default::default()
         };
-        assert_eq!(c.run_frame(left).entities[0].x, 1, "-256 must read negative");
+        assert_eq!(
+            c.run_frame(left).entities[0].x,
+            1,
+            "-256 must read negative"
+        );
         let right = crate::device::Input {
             stick_x: crate::device::STICK_FULL,
             ..Default::default()

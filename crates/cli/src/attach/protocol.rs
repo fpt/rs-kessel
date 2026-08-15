@@ -392,7 +392,10 @@ mod tests {
             assert_eq!(op[0], MSG_TICK);
             assert_eq!(Tick::read(&mut r).unwrap().input.buttons, buttons);
         }
-        assert!(r.is_empty(), "the two ticks did not consume the whole buffer");
+        assert!(
+            r.is_empty(),
+            "the two ticks did not consume the whole buffer"
+        );
     }
 
     /// A peer claiming a different slot count is speaking another protocol.
