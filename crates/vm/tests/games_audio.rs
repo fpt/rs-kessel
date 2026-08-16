@@ -10,7 +10,7 @@
 //! here instead. The renderer already produces every number needed; this is the
 //! guard that reads them.
 
-use kessel_vm::device::Input;
+use kessel_vm::device::{Input, Touch};
 use kessel_vm::VmConsole;
 
 /// Same list, same reason as `games_compile.rs`: `include_str!` means renaming a
@@ -120,10 +120,22 @@ fn the_games_with_sound_are_audible() {
     {
         let mut c = loaded(name, src);
         // The same rotation as above, not just "hold A": a coin in a platformer
-        // has to be walked to before it can be collected.
-        let script: Vec<(Input, u64)> = (0..300)
-            .map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1))
-            .collect();
+        // has to be walked to before it can be collected. piano.lua is the one
+        // exception — it has no buttons that make sound at all, only touch, so
+        // it gets a finger held on a key instead of the shared button rotation.
+        let script: Vec<(Input, u64)> = if *name == "piano.lua" {
+            let mut key = Input::default();
+            key.touches[0] = Touch {
+                x: 4,
+                y: 200,
+                down: true,
+            };
+            vec![(key, 300)]
+        } else {
+            (0..300)
+                .map(|f| (Input::from(INPUTS[f % INPUTS.len()]), 1))
+                .collect()
+        };
         let r = c.render_audio(&script).unwrap();
         assert!(
             !r.summary.events.is_empty(),

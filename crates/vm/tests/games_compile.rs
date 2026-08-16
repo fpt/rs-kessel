@@ -1004,15 +1004,15 @@ fn paint_reads_the_stick_and_the_touchscreen() {
     assert_eq!(json["touches"][0]["x"], 30, "observation: {json}");
 }
 
-/// piano.lua is the reference for the note-level sound API, so catching a note
-/// must actually emit a `play` for that lane's pitch.
-///
-/// The catcher starts in lane 2 and the pattern drops a note there, so an idle
-/// run catches one without any input — which is what makes this checkable
-/// without scripting the whole game.
+/// piano.lua is the reference for the held-note API (`note_on`/`note_off`),
+/// so a finger landing on a key must start a note on that finger's own
+/// channel, sliding onto a different key must retune rather than stack a
+/// second note, and lifting must release it — all without ever touching the
+/// fire-and-forget `play()` path.
 #[test]
-fn piano_plays_the_note_it_catches() {
+fn piano_holds_and_releases_notes_under_a_finger() {
     use kessel_audio::AudioEvent;
+    use kessel_vm::device::{Input, Touch};
 
     const PIANO: &str = include_str!("../../../games/piano.lua");
     let mut c = VmConsole::new();
@@ -1020,23 +1020,109 @@ fn piano_plays_the_note_it_catches() {
     assert!(c.assemble("piano.lua").unwrap().ok());
     c.load_rom("piano.lua").unwrap();
 
-    // The music starts in `init()`, before any frame.
-    assert_eq!(c.take_reset_sound(), [AudioEvent::PlayMusic { id: 0 }]);
+    // No music, no autoplay — this instrument only ever sounds because a
+    // finger asked it to.
+    assert_eq!(c.take_reset_sound(), []);
 
-    let mut played = Vec::new();
-    for _ in 0..300 {
-        let obs = c.run_frame(0);
-        for ev in &obs.sound {
-            if let AudioEvent::Play { note, inst, .. } = ev {
-                played.push((*inst, *note));
-            }
+    fn touch_at(x: u16, y: u16) -> Input {
+        Input {
+            touches: [
+                Touch { x, y, down: true },
+                Touch::default(),
+                Touch::default(),
+                Touch::default(),
+            ],
+            ..Input::default()
         }
     }
-    assert!(!played.is_empty(), "nothing was ever caught");
-    // Lane 2 of a C major pentatonic is E — instrument 0 is `piano`.
+
+    // The leftmost white key (C4 = 60). y = 200 sits below the black keys'
+    // reach (BLACK_H = 90 from KB_Y = 70, i.e. below 160), so a touch there
+    // can only ever land on a white key. `vel_for_y`'s own formula, away
+    // from a magic number: 90 + (200-70) * 130 / 150 = 202.
+    const VEL: u8 = 202;
+    let obs = c.run_frame(touch_at(4, 200));
+    assert_eq!(
+        obs.sound,
+        [AudioEvent::NoteOn {
+            chan: 0,
+            inst: 0,
+            note: 60,
+            vel: VEL,
+        }],
+        "landing on the C key did not start it on channel 0"
+    );
+
+    // Holding still must not retrigger the note.
+    let held = c.run_frame(touch_at(4, 200));
+    assert!(held.sound.is_empty(), "a held key retriggered: {:?}", held.sound);
+
+    // Sliding onto the next white key (D4 = 62) retunes: the old note off,
+    // the new one on, both on the same channel.
+    let slid = c.run_frame(touch_at(4 + 24, 200));
+    assert_eq!(
+        slid.sound,
+        [
+            AudioEvent::NoteOff { chan: 0 },
+            AudioEvent::NoteOn {
+                chan: 0,
+                inst: 0,
+                note: 62,
+                vel: VEL,
+            },
+        ],
+        "sliding onto D did not retune channel 0: {:?}",
+        slid.sound
+    );
+
+    // Lifting the finger releases it.
+    let lifted = c.run_frame(Input::default());
+    assert_eq!(
+        lifted.sound,
+        [AudioEvent::NoteOff { chan: 0 }],
+        "lifting the finger did not release the note"
+    );
+}
+
+/// A and B shift the whole keybed an octave, and — since a key shown at one
+/// pitch must never keep sounding at another — the shift has to release
+/// whatever was held first.
+#[test]
+fn piano_octave_shift_releases_held_notes_and_retunes_the_keybed() {
+    use kessel_audio::AudioEvent;
+    use kessel_vm::device;
+    use kessel_vm::device::{Input, Touch};
+
+    const PIANO: &str = include_str!("../../../games/piano.lua");
+    let mut c = VmConsole::new();
+    c.write_source("piano.lua", PIANO).unwrap();
+    assert!(c.assemble("piano.lua").unwrap().ok());
+    c.load_rom("piano.lua").unwrap();
+
+    fn touch_and_button(x: u16, y: u16, btn: u8) -> Input {
+        let mut i: Input = btn.into();
+        i.touches[0] = Touch { x, y, down: true };
+        i
+    }
+
+    // Press the C key and hold it through the octave-up press.
+    c.run_frame(touch_and_button(4, 150, 0));
+    let shifted = c.run_frame(touch_and_button(4, 150, device::BTN_B));
     assert!(
-        played.iter().all(|(inst, note)| *inst == 0 && *note == 64),
-        "caught the wrong pitch: {played:?}"
+        shifted
+            .sound
+            .iter()
+            .any(|e| matches!(e, AudioEvent::NoteOff { chan: 0 })),
+        "octave up did not release the held note: {:?}",
+        shifted.sound
+    );
+    assert!(
+        shifted.sound.iter().any(|e| matches!(
+            e,
+            AudioEvent::NoteOn { chan: 0, note: 72, .. }
+        )),
+        "octave up did not restart the same key a fifth-octave up (C5 = 72): {:?}",
+        shifted.sound
     );
 }
 
@@ -1068,3 +1154,4 @@ fn spectrum_uses_the_extended_screen_and_high_colours() {
         "the extended framebuffer is blank"
     );
 }
+

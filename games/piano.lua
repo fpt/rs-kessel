@@ -1,194 +1,208 @@
--- piano.lua — a falling-note catcher. Notes drop down five lanes of a piano
--- roll; move left and right to catch them, and each catch PLAYS its note.
+-- piano.lua — a genuine keyboard you play with your fingers (or the mouse,
+-- which stands in as touch slot 0 on a machine with no touchscreen).
 --
 --   kessel run games/piano.lua
---   kessel render-audio games/piano.lua --frames 400 -o piano.wav
 --
--- The lanes are a C major pentatonic scale, so any order you catch them in is
--- consonant — the game cannot make you play a wrong note, only a quiet one.
+-- Ten white keys — C up to the E past the octave, "an octave and a few extra
+-- keys" — and the seven black keys between them. Touch reports up to four
+-- fingers, so chords work for real: `note_on` puts each finger's note on its
+-- own channel, and the channel it picks is that finger's own touch slot. A
+-- key stays lit and sounding for exactly as long as the finger that pressed
+-- it stays down — drag across the keys and it retunes like a real glissando,
+-- lift and it releases. Nothing here times out or fires-and-forgets; this is
+-- the reference for the held-note API (`note_on`/`note_off`), the way
+-- `popn.lua` is the reference for a button row with no directions.
+--
+-- A and B shift the whole keyboard down/up an octave. A shift releases every
+-- held note first — otherwise a key could keep ringing at a pitch the screen
+-- no longer shows for it, which is exactly the kind of plausibly-wrong state
+-- this console exists to avoid.
+
+screen { mode = Extended240 }
 
 controls {
-  dpad = true       -- left/right move between lanes
+  dpad  = false
+  touch = "play"
+  a     = "octave down"
+  b     = "octave up"
   pause = START
 }
 
--- Shared room. Small and bright: this is an instrument, not a cathedral.
+-- Small and bright: this is an instrument, not a cathedral.
 fx {
   reverb_size = 110
   reverb_damping = 110
 }
 
--- The note you play by catching. A plucked triangle with a little room on it.
+-- attack/decay/sustain/release all matter here, unlike a fire-and-forget
+-- `play()` — a finger held down sits in the sustain stage, and lifting it is
+-- what triggers the release tail.
 instrument piano {
   wave = triangle
-  attack = 0  decay = 260  sustain = 0
-  filter = lpf  cutoff = 190
-  reverb = 70
+  attack = 4  decay = 140  sustain = 130  release = 200
+  filter = lpf  cutoff = 210
+  reverb = 40
   volume = 150
 }
 
--- The bassline under it all, and a soft pulse on the off-beats.
-instrument bass {
-  wave = square
-  attack = 0  decay = 150  sustain = 40  release = 60
-  filter = lpf  cutoff = 120
-  volume = 95
-}
+local DIM = 240
 
-instrument tick {
-  wave = noise
-  attack = 0  decay = 40  sustain = 0
-  pitch_env = -10  pitch_decay = 25
-  volume = 55
-}
+-- Keybed geometry. 240 / 10 divides exactly, so every white key is the same
+-- width with no rounding remainder on the last one.
+local NUM_WHITE = 10
+local WHITE_W = 24
+local KB_Y = 70
+local KB_H = 150
+local BLACK_W = 14
+local BLACK_H = 90
 
--- A missed note: a dull thud, deliberately unmusical.
-instrument thud {
-  wave = noise
-  attack = 0  decay = 130  sustain = 0
-  pitch_env = -24  pitch_decay = 70
-  filter = lpf  cutoff = 70
-  volume = 110
-}
+local NONE = 255          -- key_at's "no key here" answer
 
-sfx miss { inst = thud  notes = "40" }
+-- Octave shift is stored as the note C plays, not as a signed count — every
+-- value it can ever hold is positive, so the clamp is a plain unsigned
+-- compare and nothing here needs `int`.
+local MIN_BASE = 36        -- C2
+local MAX_BASE = 84        -- C6
 
--- Music runs on the audio clock, so the backing never stutters no matter what
--- the game is doing.
-track groove {
-  tempo = 12
-  vel = 130
-  bass = "36 - - 43 - - 41 - - 43 - -"
-  tick = ". 60 . . 60 . . 60 . . 60 ."
-}
+local base_note = 60       -- C4, the octave a fresh boot starts on
 
--- The catcher is 16 wide, so it is two tiles — and `sprn` draws a block of
--- CONTIGUOUS ids, so these two must stay adjacent and stay in this order.
-sprite catcher_l {
-  ........
-  ...7777.
-  ..7bbbbb
-  .7bbbbbb
-  .7bbbbbb
-  ..7bbbbb
-  ...7777.
-  ........
-}
-
-sprite catcher_r {
-  ........
-  7777....
-  bbbbb7..
-  bbbbbb7.
-  bbbbbb7.
-  bbbbb7..
-  7777....
-  ........
-}
-
-sprite notespr {
-  ..aaaa..
-  .aaaaaa.
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  .aaaaaa.
-  ..aaaa..
-}
-
-record Note { lane, y, alive }
-
-local LANES = 5
-local LANE_W = 24
-local LANE_X = 4          -- left edge of lane 0
-local CATCH_Y = 104       -- top of the catcher's row
-local FALL = 2            -- pixels per frame
-
-local notes: array(8, Note)
-local lane = 2            -- where the catcher is
-local score = 0
-local missed = 0
-local step = 0            -- position in `pattern`
-local timer = 0           -- frames until the next spawn
-local flash = 0           -- frames left of the catch flash
-
--- The melody, as lane numbers. 9 is a rest. Read together with `groove` above:
--- the bass is in C, and these are the pentatonic degrees over it.
-local pattern: array(16, byte)
+-- Per touch-slot state: is this finger holding a key, and which note. The
+-- slot itself doubles as the note's channel, so a finger's identity and its
+-- sound's identity are the same number.
+local active: array(4, byte)
+local held: array(4, byte)
 
 function init()
-  clear(notes)
-  lane = 2
-  score = 0
-  missed = 0
-  step = 0
-  timer = 0
-  flash = 0
-
-  pattern[0] = 0   pattern[1] = 2   pattern[2] = 4   pattern[3] = 9
-  pattern[4] = 3   pattern[5] = 9   pattern[6] = 1   pattern[7] = 9
-  pattern[8] = 4   pattern[9] = 3   pattern[10] = 2  pattern[11] = 9
-  pattern[12] = 0  pattern[13] = 1  pattern[14] = 9  pattern[15] = 9
-
-  music(groove)
+  clear(active)
+  clear(held)
+  base_note = 60
 end
 
--- Lane -> MIDI note. C major pentatonic: C D E G A.
-function pitch(l)
-  if l == 0 then return 60 end
-  if l == 1 then return 62 end
-  if l == 2 then return 64 end
-  if l == 3 then return 67 end
-  return 69
+-- White key index -> pitch class within one octave (C D E F G A B).
+function white_pitch_class(i)
+  local p = i % 7
+  if p == 0 then return 0 end
+  if p == 1 then return 2 end
+  if p == 2 then return 4 end
+  if p == 3 then return 5 end
+  if p == 4 then return 7 end
+  if p == 5 then return 9 end
+  return 11
 end
 
-function lane_x(l)
-  return LANE_X + l * LANE_W
+-- White key index -> semitone offset from `base_note`, folding in a full
+-- octave for every seven white keys crossed.
+function white_offset(i)
+  return white_pitch_class(i) + (i / 7) * 12
 end
 
-function spawn(l)
-  for i = 0, len(notes) - 1 do
-    if notes[i].alive == 0 then
-      notes[i].lane = l
-      notes[i].y = 0
-      notes[i].alive = 1
-      return
+-- Does a black key sit between white key `i` and `i + 1`? Every white-key
+-- boundary has one except E-F and B-C.
+function has_black(i)
+  local p = i % 7
+  if p == 2 then return 0 end
+  if p == 6 then return 0 end
+  return 1
+end
+
+-- The black key between white keys `i` and `i + 1` is that white key's sharp.
+function black_offset(i)
+  return white_offset(i) + 1
+end
+
+-- Which note, if any, is under a touch at (x, y)? Black keys are checked
+-- first — they are drawn on top and are only reachable near the top of the
+-- keybed, so a touch there must win over the white key underneath it.
+function key_at(x, y)
+  if x >= DIM then return NONE end
+  if y < KB_Y or y >= KB_Y + KB_H then return NONE end
+
+  if y < KB_Y + BLACK_H then
+    for i = 0, NUM_WHITE - 2 do
+      if has_black(i) == 1 then
+        local bx = (i + 1) * WHITE_W - BLACK_W / 2
+        if x >= bx and x < bx + BLACK_W then
+          return base_note + black_offset(i)
+        end
+      end
+    end
+  end
+
+  return base_note + white_offset(x / WHITE_W)
+end
+
+-- Strike velocity from where on the key the finger landed: near the top is a
+-- light touch, near the bottom is a hard one. A real piano reads how fast the
+-- hammer moved; a touchscreen has no such thing to read, so position stands
+-- in for it.
+function vel_for_y(y)
+  local rel = y - KB_Y
+  return 90 + rel * 130 / KB_H
+end
+
+-- Every note any finger is currently holding, off — used before an octave
+-- shift so nothing keeps ringing at a pitch the keybed no longer shows.
+function release_all()
+  for s = 0, 3 do
+    if active[s] == 1 then
+      note_off(s)
+      active[s] = 0
     end
   end
 end
 
-function update()
-  -- Move, one lane per press: this is a rhythm game, not a slider.
-  if btnp(LEFT) and lane > 0 then lane = lane - 1 end
-  if btnp(RIGHT) and lane < LANES - 1 then lane = lane + 1 end
-
-  -- Spawn on the beat, following the pattern.
-  if timer == 0 then
-    timer = 24
-    if pattern[step] < LANES then spawn(pattern[step]) end
-    step = step + 1
-    if step == len(pattern) then step = 0 end
+function octave_down()
+  if base_note > MIN_BASE then
+    release_all()
+    base_note = base_note - 12
   end
-  timer = timer - 1
+end
 
-  if flash > 0 then flash = flash - 1 end
+function octave_up()
+  if base_note < MAX_BASE then
+    release_all()
+    base_note = base_note + 12
+  end
+end
 
-  for i = 0, len(notes) - 1 do
-    if notes[i].alive == 1 then
-      notes[i].y = notes[i].y + FALL
-      if notes[i].y >= CATCH_Y and notes[i].lane == lane then
-        -- Caught. Velocity rises with a run, so a good streak gets louder.
-        notes[i].alive = 0
-        score = score + 1
-        flash = 6
-        play(piano, pitch(notes[i].lane), min(140 + score * 6, 255), 40)
+-- Is `note` currently sounding under any finger? Only ever 0-4 fingers to
+-- check, so a linear scan per key drawn is nothing.
+function key_is_active(note)
+  for s = 0, 3 do
+    if active[s] == 1 and held[s] == note then return 1 end
+  end
+  return 0
+end
+
+function update()
+  if btnp(A) then octave_down() end
+  if btnp(B) then octave_up() end
+
+  for s = 0, 3 do
+    if touch_down(s) then
+      local tx = touch_x(s)
+      local ty = touch_y(s)
+      local n = key_at(tx, ty)
+      if n == NONE then
+        if active[s] == 1 then
+          note_off(s)
+          active[s] = 0
+        end
+      elseif active[s] == 0 then
+        note_on(s, piano, n, vel_for_y(ty))
+        active[s] = 1
+        held[s] = n
+      elseif n ~= held[s] then
+        -- The finger slid onto a different key: retune rather than
+        -- restart, so a fast glissando still reads as one continuous drag.
+        note_off(s)
+        note_on(s, piano, n, vel_for_y(ty))
+        held[s] = n
       end
-      if notes[i].y > 120 then
-        notes[i].alive = 0
-        missed = missed + 1
-        sfx(miss)
-      end
+      entity(tx, ty, s)
+    elseif active[s] == 1 then
+      note_off(s)
+      active[s] = 0
     end
   end
 end
@@ -196,39 +210,32 @@ end
 function draw()
   cls(1)
 
-  -- The roll: a dotted divider down each lane edge, and a bar across the
-  -- catch row. The active lane is brighter, so you can see where you are
-  -- before the note gets there.
-  for l = 0, LANES do
-    local x = LANE_X + l * LANE_W - 2
-    for y = 0, 25 do
-      pset(x, y * 5, 5)
-    end
-  end
-  for l = 0, LANES - 1 do
-    local x = lane_x(l)
-    local shade = 5
-    if l == lane then shade = 12 end
-    hline(x, x + LANE_W - 4, CATCH_Y + 10, shade)
-  end
-
-  for i = 0, len(notes) - 1 do
-    if notes[i].alive == 1 then
-      local nx = lane_x(notes[i].lane) + 8
-      spr(notespr, nx, notes[i].y, 0)
-      entity(nx, notes[i].y, 1)
+  -- White keys first. Each is drawn one px narrower than its slot, so the
+  -- background shows through as a seam between keys with no separate divider
+  -- pass needed.
+  for i = 0, NUM_WHITE - 1 do
+    local x0 = i * WHITE_W
+    local c = 7
+    if key_is_active(base_note + white_offset(i)) == 1 then c = 10 end
+    for y = KB_Y, KB_Y + KB_H - 1 do
+      hline(x0 + 1, x0 + WHITE_W - 2, y, c)
     end
   end
 
-  local cx = lane_x(lane) + 4
-  sprn(catcher_l, cx, CATCH_Y, 2, 1, 0)
-  if flash > 0 then
-    hline(cx - 2, cx + 17, CATCH_Y - 3, 10)
+  -- Black keys on top, shorter and narrower, centred on the boundary between
+  -- the two white keys they sit above.
+  for i = 0, NUM_WHITE - 2 do
+    if has_black(i) == 1 then
+      local bx = (i + 1) * WHITE_W - BLACK_W / 2
+      local c = 0
+      if key_is_active(base_note + black_offset(i)) == 1 then c = 9 end
+      for y = KB_Y, KB_Y + BLACK_H - 1 do
+        hline(bx, bx + BLACK_W - 1, y, c)
+      end
+    end
   end
-  entity(cx, CATCH_Y, 0)
 
-  text("SCORE", 2, 2, 7)
-  number(score, 40, 2, 7)
-  text("MISS", 82, 2, 8)
-  number(missed, 116, 2, 8)
+  text("PIANO", 4, 4, 7)
+  text("OCT", 180, 4, 6)
+  number(base_note / 12 - 1, 206, 4, 10)
 end
