@@ -47,6 +47,7 @@ import dev.kessel.vm.KesselVm
 fun PlayScreen(
     game: Game,
     source: String,
+    libraries: Map<String, String>,
     onBack: () -> Unit,
 ) {
     // The console and its loop are owned by this screen. Leaving it joins the
@@ -55,7 +56,7 @@ fun PlayScreen(
     // whole VmConsole per game they open.
     val engine = remember(game) { GameEngine(KesselVm()) }
     DisposableEffect(game) {
-        engine.start(source, game.fileName)
+        engine.start(source, game.fileName, libraries)
         onDispose { engine.close() }
     }
 

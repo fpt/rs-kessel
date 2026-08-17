@@ -98,6 +98,7 @@ kessel run games/outrun.lua    # pseudo-3D road racer
 kessel run games/spectrum.lua  # 240x240, the 256-colour palette, sprite banks
 kessel run games/popn.lua      # six keys, no d-pad at all
 kessel run games/paint.lua     # drag to draw; arrows steer the brush
+kessel run games/swarm.lua     # dodge the sparks; #include over games/lib/
 ```
 
 Arrows or WASD for the d-pad, `Z`/`X` for A/B, Return for START, Shift for
@@ -187,6 +188,11 @@ The `games/` directory doubles as worked luax examples covering the whole
 language — sprite declarations, tilemaps and `solid()` collision, entity pools,
 edge-triggered input, fixed-point trig. Point a model at them.
 
+A game that outgrows one file uses `#include "lib/motion.lua"`, which splices
+another source's declarations in at the directive — PICO-8's spelling, not Lua's
+`require`, since there is no module value for `require` to return here. Shared
+sources live in `games/lib/`; `games/swarm.lua` is the worked example.
+
 ## Write a game
 
 ```lua
@@ -231,6 +237,7 @@ crates/cli/    kessel — the binary. `mcp` (stdio server) and `play` (winit win
 crates/ffi/    kessel-ffi — the C ABI and JNI bindings, for hosts that aren't Rust.
 android/       The Android app: plain Kotlin + Compose over the same VM.
 games/         Sample games, and the luax reference corpus.
+games/lib/     Shared sources games reach with `#include` — not games themselves.
 docs/VM.md     Machine, instruction set, devices, luax, and the agent loop.
 docs/VM_CONTROLS.md  Buttons, analog stick, touch, gestures, `controls` metadata.
 docs/AUDIO.md  Synth architecture, the event surface, and what was left out.

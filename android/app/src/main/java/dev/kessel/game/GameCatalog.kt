@@ -25,20 +25,50 @@ object GameCatalog {
     private val SOURCE_EXTENSIONS = setOf("lua", "ux", "asm")
 
     /**
+     * Where shared sources live, both in `games/` and in the APK. A game reaches
+     * them by name — `#include "lib/motion.lua"` — so this string is half of a
+     * path that appears in the corpus and cannot be renamed on its own.
+     */
+    const val LIB_DIR = "lib"
+
+    /**
      * Every game in the APK, alphabetically by title.
      *
      * Asset roots also hold whatever the toolchain put there, so this filters by
-     * extension rather than assuming everything at the root is a game.
+     * extension rather than assuming everything at the root is a game. That is
+     * also what keeps `lib/` out of the library screen: it is a directory, so it
+     * has no extension to match.
      */
     fun list(assets: AssetManager): List<Game> =
         (assets.list("") ?: emptyArray())
-            .filter { it.substringAfterLast('.', "").lowercase() in SOURCE_EXTENSIONS }
+            .filter { isSource(it) }
             .map { Game(fileName = it, title = titleOf(it)) }
             .sortedBy { it.title }
 
     /** Read a game's source out of the APK. */
     fun source(assets: AssetManager, game: Game): String =
         assets.open(game.fileName).bufferedReader().use { it.readText() }
+
+    /**
+     * The shared sources under `lib/`, keyed by the path a game `#include`s.
+     *
+     * Handed to the console before a game is loaded — the VM cannot open an
+     * asset itself, so every file a game might include has to be pushed across
+     * first. All of them, not the ones a given game names: finding that out
+     * would mean parsing the source here, which is the compiler's job and would
+     * be a second, worse implementation of it.
+     */
+    fun libraries(assets: AssetManager): Map<String, String> =
+        (assets.list(LIB_DIR) ?: emptyArray())
+            .filter { isSource(it) }
+            .associate { name ->
+                val path = "$LIB_DIR/$name"
+                path to assets.open(path).bufferedReader().use { it.readText() }
+            }
+
+    /** Is this asset something the VM can compile? */
+    internal fun isSource(fileName: String): Boolean =
+        fileName.substringAfterLast('.', "").lowercase() in SOURCE_EXTENSIONS
 
     /**
      * `outrun.lua` -> `Outrun`, `2048.lua` -> `2048`.

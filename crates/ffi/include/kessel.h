@@ -45,12 +45,27 @@ KesselPlayer *kessel_player_new(void);
 void kessel_player_free(KesselPlayer *p);
 
 /*
+ * Add a source to the console's workspace without loading it, so a game loaded
+ * afterwards can #include "..." it. This is how a host with no filesystem — an
+ * iOS bundle, Android's AssetManager — makes a shared library file reachable:
+ * hand over each one, then load the game.
+ *
+ * Returns NULL on success, or an owned string for kessel_string_free().
+ */
+char *kessel_player_write_source(KesselPlayer *p, const char *path,
+                                 const char *source);
+
+/*
  * Compile and load a game. `name`'s extension picks the dialect: .lua/.ux for
  * luax, .asm for assembly.
  *
  * Returns NULL on success, or an owned diagnostics string for the caller to
  * display and then pass to kessel_string_free(). A failed load leaves the
  * console with no ROM.
+ *
+ * #include "..." resolves against sources handed over with
+ * kessel_player_write_source() and nothing else — a bare source string says
+ * nothing about a directory to search.
  */
 char *kessel_player_load(KesselPlayer *p, const char *source, const char *name);
 

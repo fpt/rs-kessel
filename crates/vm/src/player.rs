@@ -399,6 +399,56 @@ mod tests {
         }
     }
 
+    /// The path a host with no filesystem takes: hand over each library file,
+    /// then load the game. This is what Android does with its assets.
+    #[test]
+    fn a_game_loads_once_its_libraries_have_been_handed_over() {
+        let p = VmPlayer::new();
+        assert!(p
+            .write_source(
+                "lib/motion.lua",
+                include_str!("../../../games/lib/motion.lua")
+            )
+            .is_empty());
+
+        let err = p.load(
+            include_str!("../../../games/swarm.lua").to_string(),
+            "swarm.lua".to_string(),
+        );
+        assert!(err.is_empty(), "swarm.lua failed to load: {err}");
+        p.tick(0);
+        p.tick(BTN_RIGHT);
+        assert!(p.framebuffer_rgba().is_some());
+    }
+
+    /// `kessel run games/swarm.lua` — the console reads the game *and* its
+    /// includes off the disk, out of the directory the file sits in.
+    #[test]
+    fn a_game_loads_from_a_directory_with_its_includes() {
+        let games = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../games");
+        let p = VmPlayer::new();
+        let err = p.load_file(games, "swarm.lua".to_string());
+        assert!(err.is_empty(), "swarm.lua failed to load: {err}");
+        p.tick(0);
+        p.tick(BTN_RIGHT);
+        assert!(p.framebuffer_rgba().is_some());
+    }
+
+    /// Forgetting the library is the shape of bug a host hits, so it has to say
+    /// which file is missing rather than fail somewhere in the compiler.
+    #[test]
+    fn a_missing_library_names_itself() {
+        let p = VmPlayer::new();
+        let err = p.load(
+            include_str!("../../../games/swarm.lua").to_string(),
+            "swarm.lua".to_string(),
+        );
+        assert!(
+            err.contains("cannot find include 'lib/motion.lua'"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn assembly_dialect_also_plays() {
         let p = VmPlayer::new();

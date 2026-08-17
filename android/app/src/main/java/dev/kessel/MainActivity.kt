@@ -53,9 +53,17 @@ private fun KesselApp() {
     // the alternative is a loading state for something that takes under a
     // millisecond.
     val source = remember(game) { GameCatalog.source(context.assets, game) }
+    // The shared sources a game may `#include`. Read once and reused across
+    // games: the whole `lib/` directory is smaller than one game's sprite sheet.
+    val libraries = remember { GameCatalog.libraries(context.assets) }
 
     // System back leaves the game, which stops the loop and frees the console —
     // see the DisposableEffect in PlayScreen.
     BackHandler { playing = null }
-    PlayScreen(game = game, source = source, onBack = { playing = null })
+    PlayScreen(
+        game = game,
+        source = source,
+        libraries = libraries,
+        onBack = { playing = null },
+    )
 }

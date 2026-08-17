@@ -109,6 +109,15 @@ class KesselVm : AutoCloseable {
     private var frame: ByteBuffer = ByteBuffer.allocateDirect(CLASSIC_DIM * CLASSIC_DIM * 4)
 
     /**
+     * Make [source] available at [path] for a later [load] to `#include`.
+     * Returns null on success. Call before [load]; a game whose library is
+     * missing fails to load and says which file it wanted.
+     */
+    @Synchronized
+    fun writeSource(path: String, source: String): String? =
+        if (handle == 0L) "console closed" else KesselNative.playerWriteSource(handle, path, source)
+
+    /**
      * Compile and load a game. Returns null on success, or diagnostics to show
      * the user. A failed load leaves the console with no ROM, so the caller
      * must not assume the previous game is still running.

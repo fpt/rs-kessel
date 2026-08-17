@@ -101,12 +101,50 @@ pub unsafe extern "C" fn kessel_player_free(p: *mut KesselPlayer) {
     }
 }
 
+/// Add a source to the console's workspace without loading it, so a later
+/// [`kessel_player_load`] can `#include "…"` it.
+///
+/// This is how a host with no filesystem — Android's `AssetManager`, an iOS
+/// bundle — makes a shared library file available: hand over each one, then
+/// load the game. A resolver callback across this ABI would be the other
+/// answer, and it would mean function pointers, ownership rules for the string
+/// it returns, and a JNI upcall on the load path, to serve a handful of files
+/// the host can just push.
+///
+/// Returns **null on success**, or an owned C string to be freed with
+/// [`kessel_string_free`].
+///
+/// # Safety
+/// `path` and `source` must be null-terminated UTF-8, valid for the call.
+#[no_mangle]
+pub unsafe extern "C" fn kessel_player_write_source(
+    p: *mut KesselPlayer,
+    path: *const c_char,
+    source: *const c_char,
+) -> *mut c_char {
+    let player = player!(p, own_cstring("null player handle".into()));
+    let (Some(path), Some(source)) = (unsafe { borrow_str(path) }, unsafe { borrow_str(source) })
+    else {
+        return own_cstring("path and source must be valid UTF-8".into());
+    };
+    let err = player.write_source(path, source);
+    if err.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        own_cstring(err)
+    }
+}
+
 /// Compile and load `source` (named `name`, whose extension picks the dialect:
 /// `.lua`/`.ux` for luax, `.asm` for assembly).
 ///
 /// Returns **null on success**, or an owned C string of diagnostics that the
 /// caller must pass to [`kessel_string_free`]. A failed load leaves the player
 /// with no ROM — see [`VmPlayer::load`].
+///
+/// `#include "…"` resolves against sources handed over with
+/// [`kessel_player_write_source`], and nothing else: a bare source string says
+/// nothing about a directory to search.
 ///
 /// # Safety
 /// `source` and `name` must be null-terminated UTF-8, valid for the call.
