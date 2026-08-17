@@ -164,8 +164,12 @@ impl VmConsole {
         } else {
             self.sources.insert(path.to_string(), source.to_string());
         }
-        // Invalidate any previously built ROM for this path.
-        self.roms.remove(path);
+        // Invalidate every previously built ROM, not just this path's: with
+        // `#include`, editing `util.lua` changes what `game.lua` compiles to,
+        // and a stale cached ROM would have `vm_load_rom` silently run the
+        // previous build. Tracking include edges would be tidier and buys
+        // nothing at this size.
+        self.roms.clear();
         Ok(())
     }
 
@@ -204,6 +208,11 @@ impl VmConsole {
     /// [`load_rom`](Self::load_rom). Sources ending in `.lua` are first compiled
     /// from the luax front-end to assembler, then assembled. When disk-backed the
     /// source is re-read on every call, so an edit made by *any* tool is compiled.
+    ///
+    /// `#include "…"` resolves through [`get_source`](Self::get_source), so an
+    /// include obeys the same rule as the file that named it: the working
+    /// directory when disk-backed (and, through `resolve_in_root`, unable to
+    /// escape it), the in-memory workspace otherwise.
     pub fn assemble(&mut self, path: &str) -> Result<assembler::Assembled, String> {
         let src = &self.get_source(path).ok_or_else(|| {
             let available = self.list_sources();
@@ -225,7 +234,7 @@ impl VmConsole {
         // diagnostics are returned in an otherwise-empty `Assembled`. The
         // control-layout metadata rides along and is cached for `load_rom`.
         let (built, controls, mode, bank) = if is_lua(path) {
-            let compiled = luax::compile(src);
+            let compiled = luax::compile_with(src, &mut |inc: &str| self.get_source(inc));
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
                     rom: Vec::new(),
@@ -660,6 +669,80 @@ mod tests {
             c.get_source("game.lua").as_deref(),
             Some("function draw() cls(1) end\n")
         );
+    }
+
+    /// `#include` reads through the same working directory as the file that
+    /// named it — the whole point of resolving it here rather than in luax.
+    #[test]
+    fn an_include_resolves_against_the_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("util.lua"),
+            "record Point { x, y }\nfunction sum(p: Point) return p.x + p.y end\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("game.lua"),
+            "#include \"util.lua\"\nlocal p: Point\nfunction draw() pset(sum(p), 0, 7) end\n",
+        )
+        .unwrap();
+
+        let mut c = VmConsole::new();
+        c.set_root(Some(dir.path().to_path_buf()));
+        let built = c.assemble("game.lua").unwrap();
+        assert!(built.ok(), "{:?}", built.diagnostics);
+    }
+
+    /// An include cannot reach outside the working directory, because it goes
+    /// through the same `resolve_in_root` as everything else.
+    #[test]
+    fn an_include_cannot_escape_the_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("outside.lua"), "record Point { x, y }\n").unwrap();
+        let inner = dir.path().join("inner");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::write(
+            inner.join("game.lua"),
+            "#include \"../outside.lua\"\nfunction draw() cls(0) end\n",
+        )
+        .unwrap();
+
+        let mut c = VmConsole::new();
+        c.set_root(Some(inner));
+        let built = c.assemble("game.lua").unwrap();
+        assert!(!built.ok());
+        assert!(
+            built.diagnostics[0].message.contains("cannot find include"),
+            "{:?}",
+            built.diagnostics
+        );
+    }
+
+    /// Editing an included file must invalidate the *including* file's cached
+    /// ROM — otherwise `load_rom` silently runs the previous build.
+    #[test]
+    fn editing_an_include_invalidates_the_cached_rom() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = VmConsole::new();
+        c.set_root(Some(dir.path().to_path_buf()));
+        c.write_source("util.lua", "function tint() return 3 end\n")
+            .unwrap();
+        c.write_source(
+            "game.lua",
+            "#include \"util.lua\"\nfunction draw() cls(tint()) end\n",
+        )
+        .unwrap();
+        assert!(c.assemble("game.lua").unwrap().ok());
+
+        // The include no longer compiles; game.lua's cached ROM must not
+        // survive to be loaded.
+        c.write_source("util.lua", "function tint() return nope end\n")
+            .unwrap();
+        assert!(
+            c.load_rom("game.lua").is_err(),
+            "a stale ROM was loaded after its include changed"
+        );
+        assert!(!c.assemble("game.lua").unwrap().ok());
     }
 
     /// Model-supplied paths can't escape the working directory.

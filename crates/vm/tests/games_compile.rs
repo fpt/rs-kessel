@@ -16,7 +16,7 @@ fn assert_game_ok(name: &str, src: &str) {
     let luax_errs: Vec<_> = compiled
         .diagnostics
         .iter()
-        .map(|d| format!("  L{}: {}", d.line, d.message))
+        .map(|d| format!("  {}: {}", d.location(), d.message))
         .collect();
     assert!(
         compiled.ok(),
@@ -33,7 +33,7 @@ fn assert_game_ok(name: &str, src: &str) {
     let asm_errs: Vec<_> = built
         .diagnostics
         .iter()
-        .map(|d| format!("  L{}: {}", d.line, d.message))
+        .map(|d| format!("  {}: {}", d.location(), d.message))
         .collect();
     assert!(
         built.ok(),

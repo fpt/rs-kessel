@@ -254,7 +254,7 @@ impl VmTool for Assemble {
                 built.diagnostics.len()
             );
             for d in &built.diagnostics {
-                msg.push_str(&format!("  line {}: {}\n", d.line, d.message));
+                msg.push_str(&format!("  {}: {}\n", d.location(), d.message));
             }
             Ok(ToolResult::text(msg))
         }
