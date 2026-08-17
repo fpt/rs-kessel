@@ -224,8 +224,10 @@ An out-of-range argument makes the whole note a **no-op** — nothing is played
 and nothing is disturbed. Neither wrapping nor clamping would do: every channel
 `0`–`255` is one some part of the game may be holding a note on, so *any*
 mapping of an invalid value onto the valid range steals someone else's note.
-`vm_render_audio` reports the count, so the silence has an explanation. `games/piano.lua` is the worked example: it catches falling notes and
-plays each lane's pitch.
+`vm_render_audio` reports the count, so the silence has an explanation.
+`games/piano.lua` is the worked example for `note_on`/`note_off`: each finger
+on the keybed holds a note on its own touch slot as a channel, and lifting
+that finger releases it.
 
 **Chorus and reverb are shared sends.** A patch says how much of itself to send
 (`reverb = 40`, `chorus = 15`, both `0`–`255`); there is one chorus and one
