@@ -1055,7 +1055,11 @@ fn piano_holds_and_releases_notes_under_a_finger() {
 
     // Holding still must not retrigger the note.
     let held = c.run_frame(touch_at(4, 200));
-    assert!(held.sound.is_empty(), "a held key retriggered: {:?}", held.sound);
+    assert!(
+        held.sound.is_empty(),
+        "a held key retriggered: {:?}",
+        held.sound
+    );
 
     // Sliding onto the next white key (D4 = 62) retunes: the old note off,
     // the new one on, both on the same channel.
@@ -1119,7 +1123,11 @@ fn piano_octave_shift_releases_held_notes_and_retunes_the_keybed() {
     assert!(
         shifted.sound.iter().any(|e| matches!(
             e,
-            AudioEvent::NoteOn { chan: 0, note: 72, .. }
+            AudioEvent::NoteOn {
+                chan: 0,
+                note: 72,
+                ..
+            }
         )),
         "octave up did not restart the same key a fifth-octave up (C5 = 72): {:?}",
         shifted.sound
@@ -1154,4 +1162,3 @@ fn spectrum_uses_the_extended_screen_and_high_colours() {
         "the extended framebuffer is blank"
     );
 }
-
