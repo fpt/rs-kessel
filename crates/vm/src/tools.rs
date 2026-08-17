@@ -183,7 +183,7 @@ Canonical example:
         json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Workspace file name, e.g. 'game.lua' or 'game.asm'"},
+                "path": {"type": "string", "description": "Workspace file name, e.g. 'game.lua' or 'game.asm'. An ABSOLUTE path (e.g. '/Users/me/games/tetris.lua') also SETS the working directory to its parent for the rest of the session, so pass one on the first write when you know where the project should live; every later call can then use the bare name. The reply says which file was written."},
                 "source": {"type": "string", "description": "Source text: luax (.lua) or stack assembly (.asm)"}
             },
             "required": ["path", "source"]
@@ -229,7 +229,7 @@ impl VmTool for Assemble {
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "path": {"type": "string"} },
+            "properties": { "path": {"type": "string", "description": "The file to build: a workspace name, or an absolute path to compile a game that already exists on disk (which also makes its directory the working directory)."} },
             "required": ["path"]
         })
     }

@@ -63,11 +63,20 @@ With Claude Code, that's:
 claude mcp add kessel -- kessel mcp --root .
 ```
 
-The console is rooted at `--root` (default: the current directory) and **the
-filesystem is the source of truth**. `vm_write_source` writes a real `game.lua`
-there and `vm_assemble` re-reads it on every call — so the agent can equally well
-edit the file with its own editing tools and just call `vm_assemble`. No stale
-in-memory copy to get out of sync.
+The console is rooted at `--root` and **the filesystem is the source of truth**.
+`vm_write_source` writes a real `game.lua` there and `vm_assemble` re-reads it on
+every call — so the agent can equally well edit the file with its own editing
+tools and just call `vm_assemble`. No stale in-memory copy to get out of sync.
+
+`--root` is optional, which matters for a host like Claude Desktop that has one
+static config and starts in its own app bundle. Leave it out and the agent picks
+the workspace per session by passing an **absolute** path to `vm_write_source`;
+that directory holds the game and bare names resolve there afterwards. Adopted
+directories are confined to `--root` and your home, so this stays a way to choose
+a project rather than a write-anywhere tool. Without a flag or an absolute path,
+sources land in the current directory when it looks like a project, and
+`~/Documents/Kessel` when it doesn't. `$KESSEL_ROOT` works too, for a host whose
+config can set env vars but not a working directory.
 
 ### The tools
 

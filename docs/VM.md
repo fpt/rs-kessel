@@ -150,14 +150,48 @@ sprite syntax for no extra reach.
 `vm_inspect_memory`, `vm_inspect_stacks`, `vm_get_framebuffer` (PNG),
 `vm_render_audio` (WAV + report) → `vm_snapshot`/`vm_restore`, `vm_reset`.
 
-**Sources are actual files on disk.** `kessel mcp` roots the console at `--root`
-(default: the cwd), so `vm_write_source` writes `game.lua` there and
-`vm_assemble` re-reads it fresh on every call. This means the agent's *own*
-file-editing tools and `vm_assemble` operate on the same file: for a small
-tweak, edit `game.lua` directly and just call `vm_assemble`; for a first draft
-or rewrite, use `vm_write_source`. Model-supplied paths are confined to the root
-(no `..`/absolute escapes). `VmPlayer` (`kessel run`) and the test suites set no
-root and keep sources in memory, unchanged.
+**Sources are actual files on disk.** `kessel mcp` roots the console at `--root`,
+so `vm_write_source` writes `game.lua` there and `vm_assemble` re-reads it fresh
+on every call. This means the agent's *own* file-editing tools and `vm_assemble`
+operate on the same file: for a small tweak, edit `game.lua` directly and just
+call `vm_assemble`; for a first draft or rewrite, use `vm_write_source`.
+`VmPlayer` (`kessel run`) and the test suites set no root and keep sources in
+memory, unchanged.
+
+**The working directory can be chosen per session, by naming it.** `--root` is
+optional: without it the cwd is used when it looks like a project someone chose,
+and `~/Documents/Kessel` when it doesn't — a desktop host launched from Finder
+starts in `/` or its own bundle, which is no place to save a game. An agent then
+points the console at a real project by passing an **absolute** path to
+`vm_write_source` (or `vm_assemble`, for a game already on disk): its parent
+directory becomes the working directory for the rest of the session, and bare
+names resolve there from then on. One registered server, a different project each
+conversation, no per-project config.
+
+Four things make that safe rather than just convenient, and none should be
+loosened without a reason:
+
+- **Adoption is opt-in per console** (`set_adoptable_roots`), and the list of
+  allowed parent directories — the configured root and the user's home, never
+  `/` — is the whole boundary. The *model* picks the directory now, while a host
+  approves `vm_write_source` once by name and not once per path, so an unbounded
+  version would turn one approval into a licence to write anywhere.
+- **A relative path still means what it always did**, confined to the root with
+  no `..` or absolute escapes. That is what leaves `VmPlayer`, the FFI hosts and
+  every existing tool call untouched — for them adoption is simply off, and an
+  absolute path stays the error it has always been.
+- **`..` is refused rather than resolved.** The prefix check is what confines an
+  adopted root, and a component that climbs back out after it would make the
+  check decorative.
+- **A read of a path that doesn't exist does not move anything.** Adopting means
+  dropping the built ROMs (they describe a different game), so a typo'd
+  `vm_assemble` path would otherwise throw away the whole session's work — an
+  error either way, with the damage only visible on the *next* call.
+
+An adopted directory is also where that game's `#include`s resolve — they read
+through the same working directory, so a project carries its own `lib/` with it.
+And `kessel attach` finds a server by working directory, so moving the workspace
+re-publishes the session file under the new one.
 
 **Sound is checked by reading, not listening.** `vm_render_audio` runs the game
 (same input-script shape as `vm_run_frames`, and it advances the machine the

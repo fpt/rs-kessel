@@ -55,6 +55,11 @@ pub struct VmConsole {
     /// `game.lua` is what gets compiled. Without one (`VmPlayer`, tests) sources
     /// stay in the `sources` map below.
     root: Option<PathBuf>,
+    /// Directories the model may *move* the working directory to, by naming an
+    /// absolute path in a tool call. Empty (the default) fixes the root at
+    /// whatever [`set_root`](Self::set_root) was given. See
+    /// [`set_adoptable_roots`](Self::set_adoptable_roots).
+    adoptable: Vec<PathBuf>,
     /// Source files the model has written, when no working directory is set.
     sources: HashMap<String, String>,
     /// Assembled ROMs, keyed by source path.
@@ -115,6 +120,7 @@ impl VmConsole {
             frame: 0,
             prev_fb: vec![0u8; VideoMode::default().pixels()],
             root: None,
+            adoptable: Vec::new(),
             sources: HashMap::new(),
             roms: HashMap::new(),
             controls: HashMap::new(),
@@ -149,10 +155,83 @@ impl VmConsole {
         self.root.as_deref()
     }
 
+    /// Allow the model to move the working directory by naming an **absolute**
+    /// path in a tool call, as long as it lands under one of `dirs`.
+    ///
+    /// This is what makes a per-session workspace possible over stdio MCP, where
+    /// the server is launched from a static config and the cwd is wherever the
+    /// host app happened to start. The model names its directory by writing a
+    /// file into it, so nothing has to be configured per project.
+    ///
+    /// It takes a list of allowed parent directories rather than a `bool`
+    /// because the *model* is choosing now, and "the model picks the workspace"
+    /// must not widen into "the model may write anywhere": a host approves
+    /// `vm_write_source` once by name, not once per path. Empty (the default)
+    /// keeps the root fixed and an absolute path the error it has always been,
+    /// which is what [`VmPlayer`] and the in-memory tests want.
+    pub fn set_adoptable_roots(&mut self, dirs: Vec<PathBuf>) {
+        self.adoptable = dirs;
+    }
+
+    /// Normalize a model-supplied path into a workspace key, adopting its parent
+    /// directory as the working directory when the path is absolute.
+    ///
+    /// A relative path is returned unchanged and still resolves against the
+    /// current root, so every existing caller is untouched — including the
+    /// in-memory ones, where adoption is off entirely.
+    ///
+    /// `creating` separates a write (make the directory if missing) from a read
+    /// (the file must already exist). Without that split a typo'd `vm_assemble`
+    /// path would quietly move the workspace and, because a move drops the
+    /// caches, throw away every ROM built so far.
+    pub fn adopt_path(&mut self, path: &str, creating: bool) -> Result<String, String> {
+        if path.trim().is_empty() {
+            return Err("path is empty".to_string());
+        }
+        let p = Path::new(path);
+        if !p.is_absolute() || self.adoptable.is_empty() {
+            return Ok(path.to_string());
+        }
+
+        let full = normalize_abs(p)?;
+        let (dir, name) = match (full.parent(), full.file_name().and_then(|n| n.to_str())) {
+            (Some(d), Some(n)) => (d, n.to_string()),
+            _ => return Err(format!("path '{path}' does not name a file")),
+        };
+        if !within_any(dir, &self.adoptable) {
+            let allowed: Vec<String> = self
+                .adoptable
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect();
+            return Err(format!(
+                "'{}' is outside the directories this console may use ({}) — \
+                 write inside one of those, or restart the server with \
+                 --root pointing here",
+                dir.display(),
+                allowed.join(", ")
+            ));
+        }
+        if creating {
+            std::fs::create_dir_all(dir).map_err(|e| format!("create '{}': {e}", dir.display()))?;
+        } else if !full.is_file() {
+            return Err(format!("no file at '{}'", full.display()));
+        }
+
+        // Only *move* on a real change: `set_root` drops the built ROMs, and the
+        // assemble → load_rom pair names the same file twice.
+        if !self.root.as_deref().is_some_and(|cur| same_dir(cur, dir)) {
+            self.set_root(Some(dir.to_path_buf()));
+        }
+        Ok(name)
+    }
+
     /// Write a source file. With a working directory set this writes through to
     /// disk, so the file the model authored is the same one the backend's file
     /// tools and `kessel run` see; otherwise it is kept in memory.
     pub fn write_source(&mut self, path: &str, source: &str) -> Result<(), String> {
+        let key = self.adopt_path(path, true)?;
+        let path = key.as_str();
         if let Some(root) = &self.root {
             let full = resolve_in_root(root, path)?;
             if let Some(parent) = full.parent() {
@@ -214,6 +293,8 @@ impl VmConsole {
     /// directory when disk-backed (and, through `resolve_in_root`, unable to
     /// escape it), the in-memory workspace otherwise.
     pub fn assemble(&mut self, path: &str) -> Result<assembler::Assembled, String> {
+        let key = self.adopt_path(path, false)?;
+        let path = key.as_str();
         let src = &self.get_source(path).ok_or_else(|| {
             let available = self.list_sources();
             let known = if available.is_empty() {
@@ -270,6 +351,8 @@ impl VmConsole {
 
     /// Load a built ROM and run its reset vector.
     pub fn load_rom(&mut self, path: &str) -> Result<RunOutcome, String> {
+        let key = self.adopt_path(path, false)?;
+        let path = key.as_str();
         let rom = self
             .roms
             .get(path)
@@ -553,6 +636,72 @@ pub(crate) fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, String>
     Ok(root.join(p))
 }
 
+/// Lexically normalize an absolute path, dropping `.` and refusing `..`.
+///
+/// `..` is refused rather than resolved because [`within_any`] is what keeps an
+/// adopted root inside the directories the host allowed, and a component that
+/// climbs back out *after* that check would defeat it.
+fn normalize_abs(p: &Path) -> Result<PathBuf, String> {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!("path '{}' must not contain '..'", p.display()))
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    Ok(out)
+}
+
+/// Canonicalize as much of `dir` as already exists, keeping the rest lexically.
+///
+/// A directory the model is about to create has no canonical form yet, and a
+/// plain `canonicalize().unwrap_or(lexical)` compares those two kinds of path
+/// against each other: on macOS `/tmp/newgame` would then fail a bounds check
+/// that the very same, existing `/tmp/game` passes, because only one of them
+/// resolves to `/private/tmp`. Refusing `..` upstream is what makes keeping the
+/// unresolved tail sound.
+fn canonical_prefix(dir: &Path) -> PathBuf {
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut cur = dir;
+    loop {
+        if let Ok(resolved) = cur.canonicalize() {
+            let mut out = resolved;
+            out.extend(tail.iter().rev());
+            return out;
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name);
+                cur = parent;
+            }
+            // Nothing along the path exists — compare it as written.
+            _ => return dir.to_path_buf(),
+        }
+    }
+}
+
+/// True if `dir` is inside one of `allowed`.
+fn within_any(dir: &Path, allowed: &[PathBuf]) -> bool {
+    let target = canonical_prefix(dir);
+    allowed
+        .iter()
+        .any(|a| target.starts_with(canonical_prefix(a)))
+}
+
+/// True if two paths name the same directory, resolving symlinks where they
+/// exist.
+///
+/// Compared this way rather than lexically because the configured root may have
+/// arrived relative (`--root .`): a spurious mismatch here would re-adopt on
+/// every call, and re-adopting clears the ROM cache between `vm_assemble` and
+/// `vm_load_rom`.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    canonical_prefix(a) == canonical_prefix(b)
+}
+
 /// FNV-1a (64-bit) of the framebuffer, as a hex string.
 fn fnv1a(data: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -693,6 +842,33 @@ mod tests {
         assert!(built.ok(), "{:?}", built.diagnostics);
     }
 
+    /// An adopted directory is where that game's `#include`s live, so following
+    /// an absolute path has to move the include search with it. Adoption runs
+    /// before the source is read for exactly this reason.
+    #[test]
+    fn an_include_follows_the_adopted_working_dir() {
+        let base = tempfile::tempdir().unwrap();
+        let proj = base.path().join("with-lib");
+        std::fs::create_dir(&proj).unwrap();
+        std::fs::write(
+            proj.join("util.lua"),
+            "record Point { x, y }\nfunction sum(p: Point) return p.x + p.y end\n",
+        )
+        .unwrap();
+        let game = proj.join("game.lua");
+        std::fs::write(
+            &game,
+            "#include \"util.lua\"\nlocal p: Point\nfunction draw() pset(sum(p), 0, 7) end\n",
+        )
+        .unwrap();
+
+        // Rooted at the parent, where neither file is: only adoption makes the
+        // include resolvable.
+        let mut c = adopting(base.path());
+        let built = c.assemble(game.to_str().unwrap()).unwrap();
+        assert!(built.ok(), "{:?}", built.diagnostics);
+    }
+
     /// An include cannot reach outside the working directory, because it goes
     /// through the same `resolve_in_root` as everything else.
     #[test]
@@ -755,6 +931,160 @@ mod tests {
         assert!(c.write_source("../escape.lua", "x").is_err());
         assert!(c.write_source("/etc/passwd", "x").is_err());
         assert!(!dir.path().join("../escape.lua").exists());
+    }
+
+    /// A game, small enough to assemble and load in the adoption tests.
+    const TINY: &str = "function draw() cls(0) end\n";
+
+    /// A console that may follow the model into `dir` — what `kessel mcp` builds.
+    fn adopting(dir: &Path) -> VmConsole {
+        let mut c = VmConsole::new();
+        c.set_root(Some(dir.to_path_buf()));
+        c.set_adoptable_roots(vec![dir.to_path_buf()]);
+        c
+    }
+
+    /// The point of adoption: an absolute path names the workspace, so a server
+    /// launched from a static config still gets a per-session directory.
+    #[test]
+    fn an_absolute_path_moves_the_workspace_to_its_directory() {
+        let base = tempfile::tempdir().unwrap();
+        let mut c = adopting(base.path());
+
+        let proj = base.path().join("my-game");
+        let file = proj.join("game.lua");
+        c.write_source(file.to_str().unwrap(), TINY).unwrap();
+
+        assert!(same_dir(c.root().unwrap(), &proj), "root should have moved");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), TINY);
+        // ...and the bare name now resolves there, so the rest of the session
+        // does not have to repeat the path.
+        assert_eq!(c.get_source("game.lua").as_deref(), Some(TINY));
+    }
+
+    /// The trap this feature could easily walk into: adopting re-runs `set_root`,
+    /// which drops built ROMs — and `assemble` then `load_rom` names one file
+    /// twice. Naming the same directory again must not move anything.
+    #[test]
+    fn naming_the_same_directory_twice_keeps_the_built_rom() {
+        let base = tempfile::tempdir().unwrap();
+        let mut c = adopting(base.path());
+        let file = base.path().join("proj").join("game.lua");
+        let abs = file.to_str().unwrap().to_string();
+
+        c.write_source(&abs, TINY).unwrap();
+        assert!(c.assemble(&abs).unwrap().ok());
+        c.load_rom(&abs)
+            .expect("the ROM built one call ago is gone");
+        assert!(c.rom_loaded);
+    }
+
+    /// A typo'd read must not throw the workspace away: the fix is worth a test
+    /// because the failure is invisible — the call errors either way, and only
+    /// the *next* one reveals that every built ROM went with it.
+    #[test]
+    fn a_missing_absolute_path_does_not_move_the_workspace() {
+        let base = tempfile::tempdir().unwrap();
+        let mut c = adopting(base.path());
+        let good = base.path().join("proj").join("game.lua");
+        c.write_source(good.to_str().unwrap(), TINY).unwrap();
+        assert!(c.assemble("game.lua").unwrap().ok());
+
+        let typo = base.path().join("prj").join("game.lua");
+        assert!(c.assemble(typo.to_str().unwrap()).is_err());
+
+        assert!(same_dir(c.root().unwrap(), good.parent().unwrap()));
+        c.load_rom("game.lua")
+            .expect("a failed read discarded the built ROM");
+    }
+
+    /// Moving to a different project *does* drop the previous one's ROMs — they
+    /// describe a different game.
+    #[test]
+    fn moving_to_another_directory_drops_the_previous_rom() {
+        let base = tempfile::tempdir().unwrap();
+        let mut c = adopting(base.path());
+
+        let first = base.path().join("one").join("game.lua");
+        c.write_source(first.to_str().unwrap(), TINY).unwrap();
+        assert!(c.assemble(first.to_str().unwrap()).unwrap().ok());
+
+        let second = base.path().join("two").join("other.lua");
+        c.write_source(second.to_str().unwrap(), TINY).unwrap();
+
+        assert!(same_dir(c.root().unwrap(), second.parent().unwrap()));
+        assert!(
+            c.load_rom("game.lua").is_err(),
+            "a ROM from the previous workspace is still loadable"
+        );
+    }
+
+    /// Adoption is opt-in. Without it an absolute path stays the error it has
+    /// always been — which is what keeps `VmPlayer` and the FFI hosts, where the
+    /// path is whatever file the user opened, from silently becoming disk-backed.
+    #[test]
+    fn adoption_is_off_until_a_host_allows_it() {
+        let base = tempfile::tempdir().unwrap();
+        let mut c = VmConsole::new();
+        c.set_root(Some(base.path().to_path_buf()));
+
+        let abs = base.path().join("proj").join("game.lua");
+        assert!(c.write_source(abs.to_str().unwrap(), TINY).is_err());
+        assert!(same_dir(c.root().unwrap(), base.path()));
+
+        // In-memory (no root at all): an absolute path is just a key, as before.
+        let mut mem = VmConsole::new();
+        mem.write_source(abs.to_str().unwrap(), TINY).unwrap();
+        assert!(mem.root().is_none());
+        assert!(!abs.exists(), "an in-memory write must not touch disk");
+    }
+
+    /// The model picks the directory now, so the host's list is the whole
+    /// boundary: a tool a host approves once by name must not become a licence to
+    /// write anywhere on the disk.
+    #[test]
+    fn adopting_outside_the_allowed_directories_is_refused() {
+        let allowed = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let mut c = adopting(allowed.path());
+
+        let outside = elsewhere.path().join("game.lua");
+        let err = c
+            .write_source(outside.to_str().unwrap(), TINY)
+            .expect_err("wrote outside the allowed directories");
+        assert!(err.contains("outside"), "{err}");
+        assert!(!outside.exists());
+        assert!(same_dir(c.root().unwrap(), allowed.path()));
+    }
+
+    /// `..` is refused rather than resolved: a path that climbs out after the
+    /// prefix check would make the check decorative.
+    #[test]
+    fn an_absolute_path_may_not_climb_out_with_dotdot() {
+        let allowed = tempfile::tempdir().unwrap();
+        let mut c = adopting(allowed.path());
+
+        let sneaky = format!("{}/../escaped/game.lua", allowed.path().display());
+        let err = c
+            .write_source(&sneaky, TINY)
+            .expect_err("'..' escaped the allowed directories");
+        assert!(err.contains(".."), "{err}");
+        assert!(same_dir(c.root().unwrap(), allowed.path()));
+    }
+
+    /// A path whose prefix does not exist yet still has to compare against a
+    /// canonicalized bound — the `/tmp` → `/private/tmp` case on macOS, which
+    /// would otherwise refuse every new project directory.
+    #[test]
+    fn a_directory_that_does_not_exist_yet_is_still_inside_its_bound() {
+        let base = tempfile::tempdir().unwrap();
+        let nested = base.path().join("a").join("b").join("c");
+        assert!(!nested.exists());
+        assert!(within_any(&nested, &[base.path().to_path_buf()]));
+        assert!(!within_any(
+            Path::new("/somewhere/else"),
+            &[base.path().to_path_buf()]
+        ));
     }
 
     #[test]

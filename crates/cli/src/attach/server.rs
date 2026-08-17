@@ -27,9 +27,52 @@ use super::session::Session;
 /// leaves nothing for the next `kessel attach` to trip over.
 pub struct AttachServer {
     session_path: PathBuf,
+    /// Where sessions are published, so a moved root can be re-advertised into
+    /// the same directory this one was.
+    session_dir: PathBuf,
+    /// The root currently advertised, canonical — what [`refresh_root`] compares
+    /// the console against.
+    ///
+    /// [`refresh_root`]: AttachServer::refresh_root
+    root: PathBuf,
     /// Ours, so [`Session::unpublish`] can tell our advertisement from a newer
     /// server's that reused the same filename.
     port: u16,
+}
+
+impl AttachServer {
+    /// Re-advertise if the console's working directory has moved.
+    ///
+    /// Sessions are keyed by root (see [`super::session`]), which is how
+    /// `kessel attach <dir>` picks one server out of several. The agent can move
+    /// the root mid-session by naming an absolute path, so the advertisement has
+    /// to follow — otherwise attaching by directory silently finds nothing while
+    /// a perfectly good server is running.
+    pub fn refresh_root(&mut self, console: &Shared) {
+        let current = match console.lock().root() {
+            Some(r) => r.canonicalize().unwrap_or_else(|_| r.to_path_buf()),
+            None => return,
+        };
+        if current == self.root {
+            return;
+        }
+        match Session::publish_in(&self.session_dir, &current, self.port) {
+            Ok(path) => {
+                // Drop the old advertisement only once the new one is live, so a
+                // `kessel attach` racing this always finds one of the two.
+                let old = std::mem::replace(&mut self.session_path, path);
+                if old != self.session_path {
+                    let _ = Session::unpublish(&old, self.port);
+                }
+                self.root = current;
+                eprintln!(
+                    "kessel mcp: workspace moved — attach now advertised at {}",
+                    self.root.display()
+                );
+            }
+            Err(e) => eprintln!("kessel mcp: could not re-publish session: {e}"),
+        }
+    }
 }
 
 impl Drop for AttachServer {
@@ -105,7 +148,12 @@ pub fn start_in(session_dir: &Path, console: Shared, root: &Path) -> Option<Atta
     });
 
     eprintln!("kessel mcp: attach ready on 127.0.0.1:{port} — run `kessel attach` to join");
-    Some(AttachServer { session_path, port })
+    Some(AttachServer {
+        session_path,
+        session_dir: session_dir.to_path_buf(),
+        root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+        port,
+    })
 }
 
 /// Serve one attached player until it disconnects.
@@ -412,6 +460,44 @@ mod tests {
             Session::list_in(&sessions).is_empty(),
             "the owning server should clean up on exit"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The agent can move its workspace mid-session (an absolute path in
+    /// `vm_write_source`). Sessions are keyed by root, so the advertisement has to
+    /// follow — otherwise `kessel attach <new dir>` finds nothing while this very
+    /// server is sitting there serving that directory.
+    #[test]
+    fn a_moved_workspace_is_re_advertised() {
+        let dir = std::env::temp_dir().join(format!("kessel-attach-moved-{}", std::process::id()));
+        let sessions = dir.join("sessions");
+        let moved = dir.join("elsewhere");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&moved).unwrap();
+
+        let shared = console();
+        shared.lock().set_root(Some(dir.clone()));
+        let mut server = start_in(&sessions, shared.clone(), &dir).expect("listener should start");
+        let port = Session::list_in(&sessions)[0].1.port;
+
+        // Nothing moved yet: refreshing must not churn the advertisement.
+        server.refresh_root(&shared);
+        assert_eq!(Session::list_in(&sessions).len(), 1);
+
+        shared.lock().set_root(Some(moved.clone()));
+        server.refresh_root(&shared);
+
+        let live = Session::list_in(&sessions);
+        assert_eq!(live.len(), 1, "the stale advertisement should be gone");
+        assert_eq!(live[0].1.port, port, "the same server, a new directory");
+        assert_eq!(
+            PathBuf::from(&live[0].1.root),
+            moved.canonicalize().unwrap(),
+            "attach should now find this server by its new workspace"
+        );
+
+        drop(server);
+        assert!(Session::list_in(&sessions).is_empty(), "cleaned up on exit");
         std::fs::remove_dir_all(&dir).ok();
     }
 
