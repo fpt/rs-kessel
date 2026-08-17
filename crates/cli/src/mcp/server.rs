@@ -315,4 +315,74 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// The per-session workspace, end to end over the wire: a server started with
+    /// one root follows an absolute path into a project of the agent's choosing,
+    /// and the rest of the loop then works off bare names.
+    ///
+    /// This is the whole point of adoption — a desktop host registers `kessel mcp`
+    /// once, from a static config it cannot vary per conversation.
+    #[test]
+    fn an_absolute_path_sets_the_session_workspace_over_mcp() {
+        let base = std::env::temp_dir().join(format!("kessel-mcp-adopt-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let s = Server::new(base.clone());
+        s.console().lock().set_adoptable_roots(vec![base.clone()]);
+
+        let call = |name: &str, args: Value| -> Value {
+            result_of(
+                s.handle(req(
+                    9,
+                    "tools/call",
+                    json!({"name": name, "arguments": args}),
+                ))
+                .unwrap(),
+            )
+        };
+
+        let src = "local x = 60\n\
+                   function update() x = x + 1 end\n\
+                   function draw() cls(0) entity(x, 60, 1) end\n";
+        let project = base.join("space-game");
+        let file = project.join("game.lua");
+
+        let w = call(
+            "vm_write_source",
+            json!({"path": file.to_str().unwrap(), "source": src}),
+        );
+        assert!(w["isError"].is_null(), "write failed: {w}");
+        assert!(
+            file.exists(),
+            "the project directory should have been created"
+        );
+        // The reply names the file, which is how the model learns where it landed.
+        let wtext = w["content"][0]["text"].as_str().unwrap();
+        assert!(wtext.contains("space-game"), "write said: {wtext}");
+
+        // From here the bare name resolves in the adopted directory.
+        let a = call("vm_assemble", json!({"path": "game.lua"}));
+        let atext = a["content"][0]["text"].as_str().unwrap();
+        assert!(atext.contains("ok"), "assemble said: {atext}");
+        call("vm_load_rom", json!({"path": "game.lua"}));
+
+        let r = call("vm_run_frames", json!({"frames": 3}));
+        let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["final"]["entities"][0]["x"], 63);
+
+        // And a path outside the allowed directories is refused, not obeyed. The
+        // target sits one level *above* the allowed base — an absolute path on
+        // Windows too, unlike `/etc/…`, which has no drive prefix there and so
+        // would be judged relative and refused for the wrong reason.
+        let outside = std::env::temp_dir().join("kessel-should-not-exist.lua");
+        assert!(outside.is_absolute());
+        let bad = call(
+            "vm_write_source",
+            json!({"path": outside.to_str().unwrap(), "source": src}),
+        );
+        let btext = bad["content"][0]["text"].as_str().unwrap();
+        assert!(btext.contains("outside"), "refusal said: {btext}");
+        assert!(!outside.exists());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
 }

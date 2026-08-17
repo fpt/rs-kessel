@@ -16,7 +16,11 @@ pub use server::Server;
 use wire::{Request, Response, PARSE_ERROR};
 
 /// Serve the console rooted at `root` on stdin/stdout until the input closes.
-pub fn run(root: PathBuf) {
+///
+/// `adoptable` are the directories the agent may move the workspace into by
+/// naming an absolute path — see `VmConsole::set_adoptable_roots`. That is how a
+/// server registered once, from a static config, gets a per-session workspace.
+pub fn run(root: PathBuf, adoptable: Vec<PathBuf>) {
     eprintln!(
         "{} {} serving VM tools, root={}",
         crate::NAME,
@@ -24,20 +28,34 @@ pub fn run(root: PathBuf) {
         root.display()
     );
     let server = Server::new(root.clone());
+    server.console().lock().set_adoptable_roots(adoptable);
 
     // Publish the console for `kessel attach` to join. Held until we return, so
     // the session file goes away when this server does. A failure here is
     // reported and ignored — the attach bridge is optional, and an agent's session
     // must not die because a port was unavailable.
-    let _attach = crate::attach::server::start(server.console().clone(), &root);
+    let mut attach = crate::attach::server::start(server.console().clone(), &root);
 
-    serve(&server, std::io::stdin().lock(), std::io::stdout().lock());
+    serve(
+        &server,
+        attach.as_mut(),
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+    );
 }
 
 /// The read → dispatch → write loop. Requests are handled one at a time, which
 /// matches the console: it is a single machine with one timeline, and running
 /// two frames concurrently would be meaningless.
-fn serve(server: &Server, input: impl BufRead, mut output: impl Write) {
+///
+/// `attach`, when there is one, is re-advertised after each request: a tool call
+/// can move the working directory, and the session file is keyed off it.
+fn serve(
+    server: &Server,
+    mut attach: Option<&mut crate::attach::server::AttachServer>,
+    input: impl BufRead,
+    mut output: impl Write,
+) {
     for line in input.lines() {
         let line = match line {
             Ok(l) => l,
@@ -77,6 +95,10 @@ fn serve(server: &Server, input: impl BufRead, mut output: impl Write) {
                 return;
             }
         }
+
+        if let Some(a) = attach.as_mut() {
+            a.refresh_root(server.console());
+        }
     }
 }
 
@@ -100,7 +122,7 @@ mod tests {
         );
         let mut out = Vec::new();
         let server = Server::new(std::env::temp_dir());
-        serve(&server, input.as_bytes(), &mut out);
+        serve(&server, None, input.as_bytes(), &mut out);
 
         let text = String::from_utf8(out).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -120,7 +142,7 @@ mod tests {
     fn malformed_json_gets_a_parse_error_with_a_null_id() {
         let mut out = Vec::new();
         let server = Server::new(std::env::temp_dir());
-        serve(&server, "not json at all\n".as_bytes(), &mut out);
+        serve(&server, None, "not json at all\n".as_bytes(), &mut out);
 
         let v: Value = serde_json::from_str(String::from_utf8(out).unwrap().trim()).unwrap();
         assert!(v["id"].is_null());

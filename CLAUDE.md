@@ -209,7 +209,7 @@ games: the Android library screen lists what sits at the *top* of `games/`, and
 
 | File | Purpose |
 |------|---------|
-| `src/main.rs` | Subcommand dispatch (`mcp`, `play`, help/version) and `--root` parsing. |
+| `src/main.rs` | Subcommand dispatch (`mcp`, `play`, help/version) and where the workspace starts. |
 | `src/mcp/mod.rs` | The stdio read → dispatch → write loop. |
 | `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
@@ -446,6 +446,13 @@ Two invariants hold it together:
   event loop would freeze the whole window, not just the game. The worker blocks,
   the UI redraws the last frame it got.
 
+Sessions are keyed by working directory, which is how `kessel attach <dir>` picks
+one server out of several — so a workspace the agent moves mid-session has to be
+re-advertised (`AttachServer::refresh_root`, called from the `mcp` loop after each
+request). Otherwise attaching by directory silently finds nothing while the server
+serving that very directory is sitting there. The new advertisement is published
+*before* the old one is removed, so an attach racing the move finds one of the two.
+
 Transport is loopback TCP (not a Unix socket) so the same path works on Windows,
 carrying a small binary protocol (not JSON) because it's a 60 Hz framebuffer
 stream. It binds `127.0.0.1` only — `bind_addr()` is a separate function with a
@@ -527,6 +534,36 @@ with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bu
   writes through to disk and `vm_assemble` re-reads on every call, so the agent's
   own file-editing tools and the VM never diverge. In-memory sources exist only
   for `VmPlayer` and tests.
+- **An absolute path names the workspace, and `kessel mcp` takes no arguments.** A
+  stdio MCP server is launched from a static config with no session identity — no
+  id in `initialize`, just a PID — so a per-session working directory cannot come
+  from the host. It comes from the model instead: an absolute path to
+  `vm_write_source`/`vm_assemble` adopts its parent directory, and bare names
+  resolve there afterwards (`VmConsole::adopt_path`). There is no `--root` flag,
+  because a second way to say the same thing is a second thing to keep true: it
+  bought only what an absolute path already says, while making every host config
+  project-specific. The starting directory is the cwd when it looks like a project
+  and `~/Documents/Kessel` when it doesn't (a desktop host launched from Finder
+  starts in `/` or its own bundle), or `$KESSEL_ROOT` for a host that can set env
+  vars but not a cwd.
+
+  Four parts of that are load-bearing. **Adoption is opt-in per console**
+  (`set_adoptable_roots`) and bounded by a list — the configured root and the
+  user's home, never `/` — because a host approves `vm_write_source` once by
+  *name*, so an unbounded version turns one approval into a write-anywhere tool.
+  **Relative paths are unchanged**, which is what leaves `VmPlayer`, the FFI hosts
+  and every existing call alone; for them adoption is off and an absolute path is
+  still an error. **`..` is refused, not resolved**, or the prefix check that
+  bounds a root is decorative — and for the same reason `resolve_in_root` checks
+  the *resolved* path against the resolved root, since a component check cannot
+  see a symlink but `fs::write` follows one. And **a read of a missing path adopts nothing**:
+  adopting drops the built ROMs, so a typo'd `vm_assemble` would otherwise discard
+  the session's work, visibly only on the *next* call.
+
+  `same_dir`/`canonical_prefix` are why `assemble` then `load_rom` on one absolute
+  path doesn't re-adopt and clear that cache between them — and why a project
+  directory that doesn't exist yet still passes its bounds check on a system where
+  `/tmp` is a symlink.
 - **stdout is the MCP channel.** Every diagnostic in `kessel mcp` goes to stderr.
 - **The `play` and `audio` features are default-on but removable.**
   `--no-default-features` drops winit/softbuffer/cpal for a headless
@@ -544,7 +581,7 @@ cd crates && cargo build --release
 cd crates && cargo test
 cd crates && cargo build --release --no-default-features   # headless
 
-./crates/target/release/kessel mcp --root /path/to/project
+./crates/target/release/kessel mcp
 ./crates/target/release/kessel run games/tetris.lua
 
 cd crates && cargo run -p kessel-audio --example preview   # → target/audio-preview/*.wav
