@@ -212,15 +212,81 @@ impl Controls {
     }
 }
 
+/// How a `#include` finds the source it names.
+///
+/// The VM crate cannot answer this itself: `kessel run` hands the player a bare
+/// source string with no directory, and Android reads its games out of an
+/// `AssetManager`, which is not a filesystem at all. So the host that knows
+/// where sources live supplies one of these, and `kessel-vm` stays host-free.
+///
+/// Any `FnMut(&str) -> Option<String>` is one.
+pub trait SourceResolver {
+    /// The text of `path`, or `None` if it cannot be found.
+    fn resolve(&mut self, path: &str) -> Option<String>;
+}
+
+impl<F: FnMut(&str) -> Option<String>> SourceResolver for F {
+    fn resolve(&mut self, path: &str) -> Option<String> {
+        self(path)
+    }
+}
+
+/// A resolver that finds nothing, for callers with no notion of a source tree.
+/// Every `#include` then fails with a diagnostic naming the file, so a partly
+/// resolved program never compiles as if it were whole.
+pub struct NoIncludes;
+
+impl SourceResolver for NoIncludes {
+    fn resolve(&mut self, _path: &str) -> Option<String> {
+        None
+    }
+}
+
+/// How deep `#include` may nest before it is treated as a mistake.
+const MAX_INCLUDE_DEPTH: usize = 16;
+
+/// What to say when a program reaches for Lua's `require`. It is the reflex the
+/// module doc warns about, and it cannot work here — `require` returns a module
+/// *value*, and luax has no runtime values for one to be. One wording, said
+/// wherever they wrote it.
+const REQUIRE_HINT: &str = "luax has no 'require' — use '#include \"file.lua\"' at the top level \
+                            to splice another source's declarations in";
+
 /// Compile luax source into assembler text.
+///
+/// `#include` is unavailable — see [`compile_with`] for the version that can
+/// resolve one.
 pub fn compile(src: &str) -> Compiled {
+    compile_with(src, &mut NoIncludes)
+}
+
+/// Compile luax source, resolving `#include "…"` through `resolver`.
+///
+/// Included declarations are spliced in **at the directive**, depth first, and
+/// each file is included at most once (the useful half of Lua's
+/// `package.loaded`) — otherwise a diamond include reports its own declarations
+/// as duplicates. That order is also what fixes sprite ids, so it is part of the
+/// ROM's identity rather than an implementation detail.
+pub fn compile_with(src: &str, resolver: &mut dyn SourceResolver) -> Compiled {
     let mut diagnostics = Vec::new();
     let tokens = lex(src, &mut diagnostics);
     let mut parser = Parser::new(tokens);
     let decls = parser.parse_program(&mut diagnostics);
+    let mut inc = Includer {
+        resolver,
+        seen: Vec::new(),
+        stack: Vec::new(),
+        // The root file owns lines 1..n of the shared line space; included
+        // files are laid out above it, with slack for an EOF token.
+        next_base: src.lines().count() + 2,
+        map: LineMap::default(),
+    };
+    let decls = inc.expand(decls, &mut diagnostics);
+    let map = std::mem::take(&mut inc.map);
     let controls = extract_controls(&decls, &mut diagnostics);
     let mode = extract_mode(&decls, &mut diagnostics);
     if !diagnostics.is_empty() {
+        map.locate(&mut diagnostics);
         return Compiled {
             asm: String::new(),
             diagnostics,
@@ -231,12 +297,143 @@ pub fn compile(src: &str) -> Compiled {
     }
     let mut compiler = Compiler::new();
     let asm = compiler.compile(&decls, &mut diagnostics);
+    map.locate(&mut diagnostics);
     Compiled {
         asm,
         diagnostics,
         controls,
         mode,
         bank: std::mem::take(&mut compiler.bank),
+    }
+}
+
+/// Where each included file's declarations live in the shared line space.
+///
+/// The alternative — carrying a file name on every `Decl`, `Stmt` and `Expr` —
+/// would put provenance in a thousand places to read it in one. Instead an
+/// included file's tokens are shifted into a range of their own, and the range
+/// is translated back at the end. That is what makes a diagnostic from *any*
+/// pass — lexer, parser, or the compiler walking the merged program — name the
+/// file it belongs to, rather than only the ones the include pass raised itself.
+#[derive(Default)]
+struct LineMap {
+    spans: Vec<(usize, usize, String)>, // (base, last, file)
+}
+
+impl LineMap {
+    /// Rewrite each diagnostic's line back into its own file's numbering, and
+    /// name that file. Lines below the first span are the root file's own and
+    /// are left alone — `file: None` means "the file you compiled".
+    fn locate(&self, diagnostics: &mut [Diagnostic]) {
+        for diag in diagnostics {
+            if let Some((base, _, file)) = self
+                .spans
+                .iter()
+                .find(|(base, last, _)| diag.line >= *base && diag.line <= *last)
+            {
+                diag.line -= base - 1;
+                diag.set_file(file);
+            }
+        }
+    }
+}
+
+/// The `#include` pass: turns a parsed program into one with no `Decl::Include`
+/// left in it, so no later pass has to know the feature exists.
+struct Includer<'a> {
+    resolver: &'a mut dyn SourceResolver,
+    /// Files already spliced, in first-encounter order — include-once.
+    seen: Vec<String>,
+    /// The chain currently being expanded, for cycle detection and its message.
+    stack: Vec<String>,
+    /// Next free line in the shared line space (see [`LineMap`]).
+    next_base: usize,
+    map: LineMap,
+}
+
+impl Includer<'_> {
+    fn expand(&mut self, decls: Vec<Decl>, d: &mut Vec<Diagnostic>) -> Vec<Decl> {
+        let mut out = Vec::with_capacity(decls.len());
+        for decl in decls {
+            let Decl::Include { path, line } = &decl else {
+                out.push(decl);
+                continue;
+            };
+            let (path, line) = (path.clone(), *line);
+            // A malformed directive already has its diagnostic; don't add a
+            // second one about a file nobody named.
+            if path.is_empty() {
+                continue;
+            }
+            if self.stack.contains(&path) {
+                let mut chain = self.stack.clone();
+                chain.push(path.clone());
+                d.push(err(line, format!("include cycle: {}", chain.join(" → "))));
+                continue;
+            }
+            // Include-once: the second `#include "util.lua"` in a program is a
+            // no-op, not a pile of duplicate-declaration errors.
+            if self.seen.contains(&path) {
+                continue;
+            }
+            if self.stack.len() >= MAX_INCLUDE_DEPTH {
+                d.push(err(
+                    line,
+                    format!("includes nested more than {MAX_INCLUDE_DEPTH} deep"),
+                ));
+                continue;
+            }
+            let Some(src) = self.resolver.resolve(&path) else {
+                d.push(err(line, format!("cannot find include '{path}'")));
+                continue;
+            };
+            self.seen.push(path.clone());
+
+            // Give this file a range of the shared line space and shift its
+            // tokens into it, so every later pass reports a line that maps back
+            // to here. One slack line covers a token at EOF.
+            let base = self.next_base;
+            let last = base + src.lines().count();
+            self.next_base = last + 2;
+            self.map.spans.push((base, last, path.clone()));
+
+            let mark = d.len();
+            let mut tokens = lex(&src, d);
+            for diag in &mut d[mark..] {
+                diag.line += base - 1; // the lexer counts from 1 in its own file
+            }
+            for t in &mut tokens {
+                t.line += base - 1;
+            }
+            let mut parser = Parser::new(tokens);
+            let sub = parser.parse_program(d);
+            self.stack.push(path.clone());
+            let sub = self.expand(sub, d);
+            self.stack.pop();
+
+            for decl in sub {
+                // `screen` and `controls` are the ROM's own identity. A shared
+                // library that quietly moved you to a 240×240 screen would be a
+                // long afternoon.
+                let kw = match &decl {
+                    Decl::Screen { .. } => "screen",
+                    Decl::Controls { .. } => "controls",
+                    _ => {
+                        out.push(decl);
+                        continue;
+                    }
+                };
+                let at = match &decl {
+                    Decl::Screen { line, .. } | Decl::Controls { line, .. } => *line,
+                    _ => unreachable!(),
+                };
+                d.push(err(
+                    at,
+                    format!("'{kw}' belongs to the game's own file, not an include"),
+                ));
+            }
+        }
+        out
     }
 }
 
@@ -277,6 +474,7 @@ fn err(line: usize, message: impl Into<String>) -> Diagnostic {
     Diagnostic {
         line,
         message: message.into(),
+        file: None,
     }
 }
 
@@ -302,7 +500,7 @@ struct Token {
 // Longest-match first.
 const SYMBOLS: &[&str] = &[
     "==", "~=", "<=", ">=", "<<", ">>", "+", "-", "*", "/", "%", "&", "|", "~", "<", ">", "=", "(",
-    ")", "{", "}", "[", "]", ",", ":", ".",
+    ")", "{", "}", "[", "]", ",", ":", ".", "#",
 ];
 
 fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
@@ -621,6 +819,13 @@ enum Decl {
         mode: VideoMode,
         line: usize,
     },
+    /// `#include "util.lua"` — splice another source's declarations in here.
+    /// Resolved away by [`resolve_includes`] before the compiler ever sees the
+    /// program, so no later pass knows about it.
+    Include {
+        path: String,
+        line: usize,
+    },
     /// `instrument NAME { key = value … }` — a synth patch. Emits no code; it
     /// rides along as bank metadata. The name is a constant equal to its id.
     Instrument {
@@ -741,11 +946,18 @@ impl Parser {
                 decls.push(self.parse_sound_decl("track", d));
             } else if self.is_kw("fx") {
                 decls.push(self.parse_fx(d));
+            } else if matches!(self.peek(), Tok::Sym("#")) {
+                decls.push(self.parse_include(d));
+            } else if self.is_kw("require") {
+                // Bare `require "util.lua"` — Lua's call-without-parens form,
+                // which never reaches the expression parser.
+                d.push(err(self.line(), REQUIRE_HINT));
+                self.advance();
             } else {
                 d.push(err(
                     self.line(),
                     "expected 'record', 'function', 'local', 'sprite', 'tilemap', 'controls', \
-                     'instrument', 'sfx', 'track', or 'fx'",
+                     'instrument', 'sfx', 'track', 'fx', or '#include'",
                 ));
                 self.advance();
             }
@@ -780,6 +992,31 @@ impl Parser {
         }
         self.expect_sym("}", d);
         Decl::Record { name, fields, line }
+    }
+
+    /// `#include "util.lua"` — the PICO-8 spelling, quoted so a filename with
+    /// dots or dashes needs no lexer rule of its own. There is one search root,
+    /// so there is no `<…>` form to distinguish.
+    fn parse_include(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_sym("#");
+        if !self.eat_kw("include") {
+            d.push(err(line, "expected 'include' after '#'"));
+        }
+        let path = match self.peek().clone() {
+            Tok::Str(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                d.push(err(
+                    line,
+                    "expected a quoted file name, as in '#include \"util.lua\"'",
+                ));
+                String::new()
+            }
+        };
+        Decl::Include { path, line }
     }
 
     fn parse_sprite(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
@@ -1403,6 +1640,14 @@ impl Parser {
                         }
                     }
                     self.expect_sym(")", d);
+                    if name == "require" {
+                        // `local util = require("util.lua")` is the Lua reflex,
+                        // and it cannot work here: there is no runtime value for
+                        // a module to be. Said at the parser so it lands on the
+                        // line they wrote, in any position — a global's
+                        // initializer otherwise reports "must be constant".
+                        d.push(err(line, REQUIRE_HINT));
+                    }
                     Expr::Call(name, args, line)
                 } else {
                     Expr::Var(name, line)
@@ -4639,5 +4884,162 @@ mod video_tests {
         let fb = &c.vm.devices.framebuffer;
         assert_eq!(fb[0], 5, "bank 0 is the identity");
         assert_eq!(fb[8], 0x25, "bank 2 shifts the nibble to 2*16 + 5");
+    }
+}
+
+#[cfg(test)]
+mod include_tests {
+    use super::*;
+    use crate::assembler::assemble;
+    use crate::device::VideoMode;
+    use crate::VmConsole;
+
+    /// A resolver over a fixed set of (name, text) pairs, which is every host's
+    /// resolver in miniature.
+    fn files(pairs: &[(&str, &str)]) -> impl FnMut(&str) -> Option<String> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(n, s)| (n.to_string(), s.to_string()))
+            .collect();
+        move |path: &str| {
+            owned
+                .iter()
+                .find(|(n, _)| n == path)
+                .map(|(_, s)| s.clone())
+        }
+    }
+
+    fn messages(c: &Compiled) -> String {
+        c.diagnostics
+            .iter()
+            .map(|d| format!("{}: {}", d.location(), d.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn include_splices_declarations() {
+        let mut r = files(&[(
+            "util.lua",
+            "record Point { x, y }\n\
+             function midpoint(p: Point) return (p.x + p.y) / 2 end",
+        )]);
+        let c = compile_with(
+            "#include \"util.lua\"\n\
+             local p: Point\n\
+             function init() p.x = 10  p.y = 20 end\n\
+             function draw() pset(midpoint(p), 0, 7) end",
+            &mut r,
+        );
+        assert!(c.ok(), "{}", messages(&c));
+        let built = assemble(&c.asm);
+        assert!(built.ok(), "{:?}", built.diagnostics);
+    }
+
+    #[test]
+    fn include_is_unavailable_without_a_resolver() {
+        let c = compile("#include \"util.lua\"\nfunction draw() cls(0) end");
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics[0]
+                .message
+                .contains("cannot find include 'util.lua'"),
+            "{}",
+            messages(&c)
+        );
+    }
+
+    #[test]
+    fn a_diagnostic_names_the_file_it_came_from() {
+        let mut r = files(&[("util.lua", "function helper() return nope end")]);
+        let c = compile_with("#include \"util.lua\"\nfunction draw() cls(0) end", &mut r);
+        assert!(!c.ok());
+        let d = &c.diagnostics[0];
+        assert_eq!(d.file.as_deref(), Some("util.lua"), "{}", messages(&c));
+        assert!(
+            d.location().starts_with("util.lua line "),
+            "{}",
+            d.location()
+        );
+    }
+
+    #[test]
+    fn a_diagnostic_in_the_root_file_names_no_file() {
+        let c = compile("function draw() cls(nope) end");
+        assert!(!c.ok());
+        assert_eq!(c.diagnostics[0].file, None);
+        assert!(c.diagnostics[0].location().starts_with("line "));
+    }
+
+    #[test]
+    fn a_diamond_includes_the_shared_file_once() {
+        let mut r = files(&[
+            ("base.lua", "record Point { x, y }"),
+            ("a.lua", "#include \"base.lua\"\nfunction fa() return 1 end"),
+            ("b.lua", "#include \"base.lua\"\nfunction fb() return 2 end"),
+        ]);
+        let c = compile_with(
+            "#include \"a.lua\"\n#include \"b.lua\"\n\
+             local p: Point\n\
+             function draw() pset(fa() + fb(), p.x, 7) end",
+            &mut r,
+        );
+        // Without include-once this is "duplicate record 'Point'".
+        assert!(c.ok(), "{}", messages(&c));
+    }
+
+    #[test]
+    fn an_include_cycle_is_reported_with_its_chain() {
+        let mut r = files(&[
+            ("a.lua", "#include \"b.lua\"\nfunction fa() return 1 end"),
+            ("b.lua", "#include \"a.lua\"\nfunction fb() return 2 end"),
+        ]);
+        let c = compile_with("#include \"a.lua\"\nfunction draw() cls(0) end", &mut r);
+        assert!(!c.ok());
+        let m = messages(&c);
+        assert!(m.contains("include cycle"), "{m}");
+        assert!(m.contains("a.lua → b.lua → a.lua"), "{m}");
+    }
+
+    #[test]
+    fn screen_and_controls_belong_to_the_game_not_an_include() {
+        let mut r = files(&[
+            ("scr.lua", "screen { mode = Extended240 }"),
+            ("ctl.lua", "controls { a = \"jump\" }"),
+        ]);
+        let c = compile_with(
+            "#include \"scr.lua\"\n#include \"ctl.lua\"\nfunction draw() cls(0) end",
+            &mut r,
+        );
+        assert!(!c.ok());
+        let m = messages(&c);
+        assert!(m.contains("scr.lua line 1: 'screen' belongs"), "{m}");
+        assert!(m.contains("ctl.lua line 1: 'controls' belongs"), "{m}");
+        // …and the game keeps the console it asked for.
+        assert_eq!(c.mode, VideoMode::Classic128);
+    }
+
+    #[test]
+    fn sprite_ids_follow_include_order() {
+        let sheet = |name: &str| format!("sprite {name} {{\n{}}}\n", "..111...\n".repeat(8));
+        let (a, b) = (sheet("alpha"), sheet("beta"));
+        let mut r = files(&[("first.lua", a.as_str()), ("second.lua", b.as_str())]);
+        let c = compile_with(
+            "#include \"first.lua\"\n#include \"second.lua\"\n\
+             function draw() spr(alpha, 0, 0, 0)  spr(beta, 8, 0, 0) end",
+            &mut r,
+        );
+        assert!(c.ok(), "{}", messages(&c));
+        // Depth-first at the directive: `alpha` was declared first, so it is id 0.
+        let mut console = VmConsole::new();
+        console.write_source("game.asm", &c.asm).unwrap();
+        assert!(console.assemble("game.asm").unwrap().ok());
+    }
+
+    #[test]
+    fn require_points_at_include() {
+        let c = compile("local util = require(\"util.lua\")\nfunction draw() cls(0) end");
+        assert!(!c.ok());
+        assert!(messages(&c).contains("#include"), "{}", messages(&c));
     }
 }

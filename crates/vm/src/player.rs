@@ -39,6 +39,12 @@ impl VmPlayer {
     /// `has_rom` reports false and the render loop won't keep showing a stale
     /// game. A reset that halts/faults/exceeds the instruction cap is reported
     /// as a load error rather than silently opening a dead game.
+    /// `#include` resolves against the sources this player has been handed —
+    /// nothing else, since a caller that passes a bare string has told us
+    /// nothing about a directory. A host with several files hands each of them
+    /// over with [`write_source`](Self::write_source) before loading;
+    /// [`load_file`](Self::load_file) is the one for a host that has a real
+    /// directory.
     pub fn load(&self, source: String, path: String) -> String {
         let mut c = self.inner.lock();
         // VmPlayer is in-memory (no root), so this never touches disk — but a
@@ -47,6 +53,36 @@ impl VmPlayer {
             c.rom_loaded = false;
             return e;
         }
+        drop(c);
+        self.build(path)
+    }
+
+    /// Add a source to the player's in-memory workspace without loading it —
+    /// how a host with no filesystem (Android's `AssetManager`, say) makes a
+    /// file available to `#include` before calling [`load`](Self::load).
+    pub fn write_source(&self, path: &str, source: &str) -> String {
+        match self.inner.lock().write_source(path, source) {
+            Ok(()) => String::new(),
+            Err(e) => e,
+        }
+    }
+
+    /// Load `name` from the directory `root`, reading it (and anything it
+    /// `#include`s) from disk.
+    ///
+    /// This is [`load`](Self::load) for a host that has a real directory: the
+    /// console reads the file itself, so a reload picks up edits to *included*
+    /// files too, and nothing is written back over the game the player is
+    /// running.
+    pub fn load_file(&self, root: std::path::PathBuf, name: String) -> String {
+        self.inner.lock().set_root(Some(root));
+        self.build(name)
+    }
+
+    /// Assemble a source already in the workspace, load it, and report what a
+    /// person needs to see. Shared by both load paths.
+    fn build(&self, path: String) -> String {
+        let mut c = self.inner.lock();
         let built = match c.assemble(&path) {
             Ok(b) => b,
             Err(e) => {
@@ -59,7 +95,7 @@ impl VmPlayer {
             return built
                 .diagnostics
                 .iter()
-                .map(|d| format!("line {}: {}", d.line, d.message))
+                .map(|d| format!("{}: {}", d.location(), d.message))
                 .collect::<Vec<_>>()
                 .join("\n");
         }

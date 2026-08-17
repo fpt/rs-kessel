@@ -23,10 +23,34 @@ use super::isa::Op;
 use super::vm::ROM_ORIGIN;
 
 /// One assembler error, tied to a source line (1-based).
+///
+/// `file` names the source the line is in, and is `None` for the file that was
+/// compiled — the common case, and the only one that existed before luax grew
+/// `#include`. An included file stamps its own name here, because "line 42" in a
+/// two-file program is an invitation to edit the wrong one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub line: usize,
     pub message: String,
+    pub file: Option<String>,
+}
+
+impl Diagnostic {
+    /// Stamp this diagnostic as coming from `file`, unless it already names one
+    /// — a diagnostic that travelled up two levels of `#include` belongs to the
+    /// file it was raised in, not the one that included it.
+    pub fn set_file(&mut self, file: &str) {
+        self.file.get_or_insert_with(|| file.to_string());
+    }
+
+    /// `"line 12"` / `"util.lua line 12"` — the location alone, so every host
+    /// spells it the same way while keeping its own surrounding format.
+    pub fn location(&self) -> String {
+        match &self.file {
+            Some(f) => format!("{f} line {}", self.line),
+            None => format!("line {}", self.line),
+        }
+    }
 }
 
 /// Result of assembling: the ROM bytes, any diagnostics, and the resolved label
@@ -334,7 +358,11 @@ pub fn assemble(src: &str) -> Assembled {
 }
 
 fn err(line: usize, message: String) -> Diagnostic {
-    Diagnostic { line, message }
+    Diagnostic {
+        line,
+        message,
+        file: None,
+    }
 }
 
 fn is_ident(s: &str) -> bool {

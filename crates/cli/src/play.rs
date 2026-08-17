@@ -13,7 +13,7 @@
 //! what a sound *is* — only where it goes.
 
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kessel_vm::device::{
@@ -118,22 +118,33 @@ impl Source {
 
 /// Load `path` into a player and run the game window until the user quits.
 pub fn run(path: PathBuf) -> Result<(), String> {
-    let source =
-        std::fs::read_to_string(&path).map_err(|e| format!("read '{}': {e}", path.display()))?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let (dir, name) = split_game_path(&path)?;
 
     let player = VmPlayer::new();
     // A game that won't load is a hard error with the compiler's diagnostics —
     // opening a blank window and leaving the user to guess would be worse.
-    let err = player.load(source, name.clone());
+    let err = player.load_file(dir, name.clone());
     if !err.is_empty() {
         return Err(format!("{}:\n{err}", path.display()));
     }
 
     run_window(Source::Local { player, path, name })
+}
+
+/// Split a game path into the directory the console reads from and the file
+/// name inside it. The directory is what `#include "util.lua"` resolves
+/// against, so a game and its includes travel together in one folder.
+fn split_game_path(path: &Path) -> Result<(PathBuf, String), String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("'{}' names no file", path.display()))?;
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        // `kessel run tetris.lua` — the file is in the working directory.
+        _ => PathBuf::from("."),
+    };
+    Ok((dir, name))
 }
 
 /// Attach to a running `kessel mcp` and play its console.
@@ -236,14 +247,16 @@ impl App {
             eprintln!("kessel attach: the agent owns what's loaded — reload does nothing here");
             return;
         };
-        let source = match std::fs::read_to_string(path) {
-            Ok(s) => s,
+        // The console re-reads from disk, so this picks up edits to whatever
+        // the game `#include`s as well as to the game itself.
+        let dir = match split_game_path(path) {
+            Ok((dir, _)) => dir,
             Err(e) => {
                 eprintln!("kessel run: reload failed: {e}");
                 return;
             }
         };
-        let err = player.load(source, name.clone());
+        let err = player.load_file(dir, name.clone());
         if err.is_empty() {
             eprintln!("kessel run: reloaded {}", path.display());
         } else {
@@ -559,6 +572,26 @@ fn button_for(code: KeyCode) -> Option<u8> {
 mod tests {
     use super::*;
 
+    /// The directory half is what `#include` resolves against, so a bare file
+    /// name has to yield the working directory rather than an empty root — an
+    /// empty one makes every include in the game unfindable.
+    #[test]
+    fn a_game_path_splits_into_a_directory_and_a_name() {
+        let (dir, name) = split_game_path(Path::new("games/tetris.lua")).unwrap();
+        assert_eq!(dir, PathBuf::from("games"));
+        assert_eq!(name, "tetris.lua");
+
+        let (dir, name) = split_game_path(Path::new("tetris.lua")).unwrap();
+        assert_eq!(dir, PathBuf::from("."));
+        assert_eq!(name, "tetris.lua");
+
+        let (dir, name) = split_game_path(Path::new("/tmp/games/tetris.lua")).unwrap();
+        assert_eq!(dir, PathBuf::from("/tmp/games"));
+        assert_eq!(name, "tetris.lua");
+
+        assert!(split_game_path(Path::new("..")).is_err());
+    }
+
     #[test]
     fn both_key_layouts_reach_the_same_buttons() {
         assert_eq!(button_for(KeyCode::ArrowLeft), button_for(KeyCode::KeyA));
@@ -704,11 +737,13 @@ mod tests {
         blit(&mut dst, 10, 10, &src, 128); // would overflow if unclamped
     }
 
-    /// A missing file is a clean error, not a panic or a blank window.
+    /// A missing file is a clean error naming the file, not a panic or a blank
+    /// window.
     #[test]
     fn missing_file_is_reported() {
         let err = run(PathBuf::from("/definitely/not/here.lua")).unwrap_err();
-        assert!(err.contains("read"), "{err}");
+        assert!(err.contains("here.lua"), "{err}");
+        assert!(err.contains("no source"), "{err}");
     }
 
     /// A source that doesn't compile fails before any window is created, with
