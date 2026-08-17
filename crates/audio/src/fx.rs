@@ -20,7 +20,7 @@
 /// Delay-line lengths from the Freeverb tuning, in samples at 44.1 kHz.
 ///
 /// Freeverb uses eight combs per channel; four is the design decision recorded
-/// in `docs/AUDIO.md` — the remaining four thicken the tail on a real room and
+/// in `docs/SYNTH.md` — the remaining four thicken the tail on a real room and
 /// cost as much as the first four on a phone.
 const COMB_TUNING: [usize; 4] = [1116, 1188, 1277, 1356];
 const ALLPASS_TUNING: [usize; 2] = [556, 441];

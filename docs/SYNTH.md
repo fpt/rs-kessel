@@ -1,8 +1,13 @@
-# Kessel Audio — architecture
+# Kessel Synth — architecture
 
-What sits under sound port `0x9`. Written first as a plan (#64) and kept as the
-record of what was built and why — where the two diverged, the divergence is
-noted rather than quietly edited out, because the reasons are the useful part.
+What sits under sound port `0x9`: the `kessel-audio` crate. Written first as a
+plan (#64) and kept as the record of what was built and why — where the two
+diverged, the divergence is noted rather than quietly edited out, because the
+reasons are the useful part.
+
+For *writing* sound in a game — declaring instruments, effects and music, and
+reading the render report — see [`VM_AUDIO.md`](VM_AUDIO.md). This document is
+the machinery underneath it.
 
 The shape in one line: **a host-free synth crate, driven by an event log the VM
 emits, rendered by whoever owns an audio device.** The VM never produces a

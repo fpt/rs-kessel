@@ -2,7 +2,8 @@
 
 Everything the console reads from the player: buttons, an analog stick, touch,
 and the gestures derived from touch. Split out of [`VM.md`](VM.md), which owns
-the machine itself.
+the machine itself; its siblings are [`VM_GRAPHICS.md`](VM_GRAPHICS.md) and
+[`VM_AUDIO.md`](VM_AUDIO.md).
 
 The load-bearing idea: **a frame's input is one thing.** `device::Input` carries
 the buttons, the stick and four touch points together, because they are one

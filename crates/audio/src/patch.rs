@@ -33,7 +33,7 @@ pub enum Waveform {
 ///
 /// Times are milliseconds, levels are `0..=255`, and `pitch_env` is in
 /// semitones. Filter, LFO, and effect sends are not here yet — they arrive with
-/// the steps that render them (see `docs/AUDIO.md`).
+/// the steps that render them (see `docs/SYNTH.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Patch {
     pub wave: Waveform,

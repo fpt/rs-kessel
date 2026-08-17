@@ -236,8 +236,10 @@ luax is Lua-*flavored*, not Lua: statically typed, no tables, closures, or
 recursion. It exists because models have strong Lua priors from PICO-8 and
 TIC-80, and reusing those priors beats teaching a new syntax. See
 **[docs/VM.md](docs/VM.md)** for the full language, instruction set, and device
-map, and **[docs/VM_CONTROLS.md](docs/VM_CONTROLS.md)** for input — buttons, the
-analog stick, touch, swipe, and the `controls { … }` metadata a host reads.
+map, with a reference per device surface: **[graphics](docs/VM_GRAPHICS.md)**
+(screens, palette, sprites, tilemap), **[controls](docs/VM_CONTROLS.md)**
+(buttons, stick, touch, swipe, `controls { … }`), and
+**[sound](docs/VM_AUDIO.md)** (instruments, `sfx`, music).
 
 ## Layout
 
@@ -249,9 +251,11 @@ crates/ffi/    kessel-ffi — the C ABI and JNI bindings, for hosts that aren't 
 android/       The Android app: plain Kotlin + Compose over the same VM.
 games/         Sample games, and the luax reference corpus.
 games/lib/     Shared sources games reach with `#include` — not games themselves.
-docs/VM.md     Machine, instruction set, devices, luax, and the agent loop.
+docs/VM.md     Machine, instruction set, device map, luax, and the agent loop.
+docs/VM_GRAPHICS.md  Screens, palette, sprites, tilemap, drawing builtins.
 docs/VM_CONTROLS.md  Buttons, analog stick, touch, gestures, `controls` metadata.
-docs/AUDIO.md  Synth architecture, the event surface, and what was left out.
+docs/VM_AUDIO.md     Declaring and triggering sound; reading the render report.
+docs/SYNTH.md  Synth architecture, the event surface, and what was left out.
 ```
 
 ## License

@@ -232,8 +232,8 @@ instrument: a synth app links `Synth` without carrying a stack machine, an
 assembler, and a sprite blitter. When the event type has to be shared,
 `kessel-vm` depends on *this* crate, never the reverse.
 
-`docs/AUDIO.md` is the full architecture; issue #64 tracks what is built.
-Complete against `docs/AUDIO.md` and issue #64: voices, filter, pan, drive,
+`docs/SYNTH.md` is the full architecture; issue #64 tracks what is built.
+Complete against `docs/SYNTH.md` and issue #64: voices, filter, pan, drive,
 master limiter, the shared chorus and reverb, the bank, `sfx`, `music`, the
 note-level API (`play` / `note_on` / `note_off`), the offline render
 (`vm_render_audio`, `kessel render-audio`), and sound on both hosts —
@@ -241,7 +241,7 @@ note-level API (`play` / `note_on` / `note_off`), the offline render
 
 **No audio when attached**: `kessel attach` drives the agent's console, and
 those events belong to that process. No bitcrusher, FM, wavetables, delay, EQ or
-compressor — see the end of `docs/AUDIO.md` for what was left out and why.
+compressor — see the end of `docs/SYNTH.md` for what was left out and why.
 
 | File | Purpose |
 |------|---------|
@@ -598,8 +598,11 @@ kessel/
 ├── crates/audio/       kessel-audio: the synth (host-free, VM-free)
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
-├── docs/VM.md          machine, ISA, devices, luax, agent loop
-└── docs/AUDIO.md       synth architecture, event surface, build order
+├── docs/VM.md          machine, ISA, device map, luax, agent loop
+├── docs/VM_GRAPHICS.md screens, palette, sprites, tilemap, drawing
+├── docs/VM_CONTROLS.md buttons, stick, touch, gestures, controls metadata
+├── docs/VM_AUDIO.md    declaring/triggering sound, the render report
+└── docs/SYNTH.md       synth architecture, event surface, build order
 ```
 
 ## Testing notes

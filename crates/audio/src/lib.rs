@@ -27,7 +27,7 @@
 //! The console runs on frames; the synth runs on samples. Durations cross the
 //! boundary in frames ([`AudioEvent::Play`]) and are resolved here via
 //! [`samples_per_frame`]. Nothing in this crate knows what a frame *is* beyond
-//! that conversion — see `docs/AUDIO.md` for how events get timestamped.
+//! that conversion — see `docs/SYNTH.md` for how events get timestamped.
 //!
 //! ## Realtime contract
 //!

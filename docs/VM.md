@@ -9,25 +9,25 @@ The `vm_*` tools reach an agent over MCP: `kessel mcp` serves them on stdio, so
 any MCP-capable agent can drive the loop. `kessel run <file>` opens the same
 console in a window for a human.
 
-Two companion documents: [**VM_CONTROLS.md**](VM_CONTROLS.md) for input —
-buttons, the analog stick, touch, gestures and the `controls { … }` metadata —
-and [**AUDIO.md**](AUDIO.md) for the synth.
+This document owns the machine — the instruction set, memory, the device map, the
+luax language, and the agent loop. Each device surface a game actually draws on,
+reads or plays through has its own reference:
+
+| | |
+|---|---|
+| [**VM_GRAPHICS.md**](VM_GRAPHICS.md) | screens, palette, sprites, tilemap, drawing builtins |
+| [**VM_CONTROLS.md**](VM_CONTROLS.md) | buttons, the analog stick, touch, gestures, `controls { }` |
+| [**VM_AUDIO.md**](VM_AUDIO.md) | instruments, `sfx`, music, and reading the render report |
+| [**SYNTH.md**](SYNTH.md) | how the synth itself is built (`kessel-audio`) |
 
 ## Machine
 
 - 16-bit stack machine. Data stack + return stack, 256 `u16` cells each.
 - **Video**: a square, 8-bit palette-index framebuffer plus one 256-entry RGB
-  palette. Two screen sizes, and *only* the size differs — same ports, same
-  4bpp sprite sheet, same palette:
-
-  | mode | screen | framebuffer | selected by |
-  |------|--------|-------------|-------------|
-  | `Classic128` | 128×128 | 16 KiB | the default |
-  | `Extended240` | 240×240 | 56.25 KiB | `screen { mode = Extended240 }` |
-
-  The mode is fixed when the ROM loads and never changes under a running game.
-  The framebuffer lives outside the 64 KiB address space, so the wider screen
-  costs a game no RAM.
+  palette, in one of two sizes — 128×128 or 240×240, fixed when the ROM loads.
+  Only the size differs between them; the framebuffer lives outside the 64 KiB
+  address space, so the wider screen costs a game no RAM. See
+  [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
 - Flat 64 KiB memory (`u16` addresses — no out-of-range accesses).
 - ROMs load at `0x0100`; the **reset vector** runs once (init).
 - Each frame calls the installed **frame vector**; it runs until `RET` (to the
@@ -83,65 +83,34 @@ Referencing a label pushes its **address**. For a variable, define it with
 
 ## Devices (via `DEI`/`DEO`)
 
-Port byte = `(device << 4) | register`.
+Port byte = `(device << 4) | register`. This is the map; the three device
+documents own the detail.
 
-| Port | Dir | Meaning |
-|------|-----|---------|
-| `0x00` | out | system/halt (non-zero halts the machine) |
-| `0x02..0x04` | out | palette: stage r, g, b |
-| `0x01` | out | palette index (0–255) — **commits** the staged colour |
-| `0x10` | out | screen/vector — install the frame vector (address) |
-| `0x11` `0x12` | out | screen x, y |
-| `0x13` | out | screen colour (0–255 palette index) |
-| `0x14` | out | draw pixel at (x,y) |
-| `0x15` | out | draw 8×8 sprite from `mem[addr]` (32 bytes, 4bpp, hi-nibble = left) |
-| `0x16` | out | clear screen to colour |
-| `0x1e` | out | sprite palette bank (0–15): a sprite nibble `n` draws as `bank*16 + n` |
-| `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
-| `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id (scaled tile at screen x/y) |
-| `0xc0` | in/out | trig: write angle (0..255 = a turn) → read sin; `0xc1` reads cos. Signed 8.8 fixed (-256..256) |
-| `0x20`–`0x24` | in | gamepad buttons, edges, and the analog stick — see [VM_CONTROLS.md](VM_CONTROLS.md) |
-| `0xd0`–`0xd7` | in/out | touch points and gestures — see [VM_CONTROLS.md](VM_CONTROLS.md) |
-| `0x30` | in/out | rng: read next `u16` / write to set the seed |
-| `0x80` | in  | frame counter (frames since power-on; wraps at 65536) |
-| `0x90` `0x91` `0x92` | out | sound: sfx(id) / music(id) / music-stop |
-| `0x93`–`0x96` | out | note: frames / velocity / note, then instrument commits a `play` |
-| `0x97` `0x98` `0x99` | out | held note: instrument, then channel commits a `note_on`; `0x99` is `note_off` |
-| `0x40` `0x41` `0x42` | out/in/out | storage addr / read / write (256 bytes) |
-| `0x50` `0x51` `0x52` | out | debug entity: x, y, commit(tag) — reported in the observation |
-| `0x60` | out | console: write a byte to the text buffer |
+| Device | Ports | Meaning |
+|--------|-------|---------|
+| system | `0x00` | halt (non-zero halts the machine) |
+| system | `0x01`–`0x04` | palette: stage r, g, b, then commit on the index — [graphics](VM_GRAPHICS.md) |
+| screen | `0x10`–`0x1e` | frame vector, x/y, colour, pixel, sprite, cls, camera, flags, blit-id, tileset base, glyph, hspan, sprite bank — [graphics](VM_GRAPHICS.md) |
+| gamepad | `0x20`–`0x24` | buttons, edges, and the analog stick — [controls](VM_CONTROLS.md) |
+| rng | `0x30` | read next `u16` / write to set the seed |
+| storage | `0x40` `0x41` `0x42` | addr / read / write (256 bytes) |
+| debug | `0x50` `0x51` `0x52` | entity x, y, commit(tag) — reported in the observation |
+| console | `0x60` | write a byte to the text buffer |
+| tilemap | `0x70`–`0x78` | base, width, and the `map` draw parameters — [graphics](VM_GRAPHICS.md) |
+| time | `0x80` | frame counter (frames since power-on; wraps at 65536) |
+| sound | `0x90`–`0x99` | `sfx`/`music`, and the note-level ports — [audio](VM_AUDIO.md) |
+| sprn | `0xa0`–`0xa3` | base id, w, h, then draw a `w×h` block — [graphics](VM_GRAPHICS.md) |
+| scale | `0xb0` `0xb1` | scaled sprite: scale, then blit-id — [graphics](VM_GRAPHICS.md) |
+| trig | `0xc0` `0xc1` | write an angle (0..255 = a turn) → read sin / cos, signed 8.8 fixed |
+| touch | `0xd0`–`0xd7` | touch points and gestures — [controls](VM_CONTROLS.md) |
 
-Input has its own document: [**VM_CONTROLS.md**](VM_CONTROLS.md) covers the
-button bits, the analog stick, touch, gestures, the `controls { … }` metadata,
-and what each host provides.
+The **frame vector** (`0x10`) is how a game runs at all: install an address once
+and the console calls it every frame. Everything else is optional.
 
-### Colour
-
-Every drawing port takes a **palette index**, never RGB; only ports
-`0x01..0x04` deal in RGB. That keeps one colour model across the framebuffer,
-sprites, tilemaps and text.
-
-The palette is 256 entries and the default fills all of them:
-
-| range | contents |
-|-------|----------|
-| `0–15` | the PICO-8 16, so existing art is unchanged |
-| `16–231` | a 6×6×6 RGB cube — index = `16 + 36r + 6g + b` |
-| `232–255` | a 24-step grey ramp |
-
-Nothing is reserved: the console draws no UI of its own, so a host that wants a
-pause menu draws it in native UI, outside the framebuffer.
-
-The palette commits on the **index** write, not the blue write, because that is
-the order a stack machine produces for free — `pal(i,r,g,b)` pushes `i` first,
-so `b` pops first and `i` last.
-
-**Sprites stay 4bpp.** A tile is 32 bytes, one nibble per pixel, and nibble `0`
-is transparent in every bank. Port `0x1e` selects a bank, so nibble `n` draws
-as `bank*16 + n`: bank 0 is the identity (old art keeps its colours) and one
-tile can wear sixteen colour schemes without a second copy. Widening sprites to
-8bpp instead would have doubled the sheet and broken the one-char-per-pixel
-sprite syntax for no extra reach.
+Two rules hold across every device, and both are "do nothing" rather than
+"do something wrong": an off-screen `pset` draws nothing, and an out-of-range
+note argument plays nothing. There is no spare value to land on that would not
+belong to somebody.
 
 ## The tools (agent-facing loop)
 
@@ -200,91 +169,11 @@ through the same working directory, so a project carries its own `lib/` with it.
 And `kessel attach` finds a server by working directory, so moving the workspace
 re-publishes the session file under the new one.
 
-**Sound is checked by reading, not listening.** `vm_render_audio` runs the game
-(same input-script shape as `vm_run_frames`, and it advances the machine the
-same way) and returns a report: every trigger with the frame it fired on, peak
-and RMS, voices started and stolen, and a warning for each specific way audio
-goes wrong — an `sfx` id with no declaration, an instrument the bank lacks, notes
-dropped because too many were in flight, or triggers that fired into silence.
-With a working directory set it also writes a `.wav` for a human. The same
-render is available headless from the shell:
-
-```bash
-kessel render-audio games/shooter.lua --frames 200 --buttons A -o shooter.wav
-```
-
-```text
-rendered 200 frames (3.83s at 48000 Hz)
-level: peak 0.359, rms 0.067
-voices: 25 started, 0 stolen
-25 triggers:
-  frame 1     sfx shoot
-  frame 9     sfx shoot
-  ...
-```
-
-`music()` triggers are traced but silent until the sequencer lands; the report
-says so rather than leaving you to wonder.
-
-**Music is a `track`**: channels of rows, one channel per instrument, `tempo`
-frames per row, played with `music(name)` and stopped with `music_stop()`.
-
-```lua
-track drive {
-  tempo = 9
-  vel = 150                      -- music sits under the sound effects
-  thud  = "33 . 33 . 40 . 33 ."  -- a key that is not tempo/vel/loop names an
-  pulse = "57 60 64 60 57 60 63 60"  -- instrument: that is its channel
-}
-
-function init() music(drive) end -- loops until something stops it
-```
-
-Rows mean what an `sfx`'s do — a number starts a note, `-` holds it, `.` rests.
-A track **runs on the audio clock**, so a slow frame drops a frame rather than
-stuttering the tune; `sfx()` stays on the game's clock, because that timing is
-the game's. Music notes also yield their voices to sound effects, so an
-explosion is never eaten by a bassline.
-
-**Notes without a bank entry.** `sfx` and `track` cover sound a game knows in
-advance; for a pitch it decides at runtime there are three more builtins:
-
-```lua
-play(piano, 67, 200, 40)      -- instrument, MIDI note, velocity, frames
-note_on(0, organ, 60, 200)    -- channel, instrument, note, velocity
-note_off(0)                   -- release that channel
-```
-
-`play` is fire-and-forget and needs no bookkeeping. `note_on` holds until you
-release it, on a channel **you** own — any value `0`–`255`, and not a voice,
-because voices get stolen and a game must always be able to stop the note it
-started. A channel is just a label the synth matches on, so using an entity's
-index as its channel works.
-
-An out-of-range argument makes the whole note a **no-op** — nothing is played
-and nothing is disturbed. Neither wrapping nor clamping would do: every channel
-`0`–`255` is one some part of the game may be holding a note on, so *any*
-mapping of an invalid value onto the valid range steals someone else's note.
-`vm_render_audio` reports the count, so the silence has an explanation.
-`games/piano.lua` is the worked example for `note_on`/`note_off`: each finger
-on the keybed holds a note on its own touch slot as a channel, and lifting
-that finger releases it.
-
-**Chorus and reverb are shared sends.** A patch says how much of itself to send
-(`reverb = 40`, `chorus = 15`, both `0`–`255`); there is one chorus and one
-reverb for the whole mix, and an `fx { }` block says what they sound like:
-
-```lua
-fx {
-  reverb_size = 190      -- how long it rings
-  reverb_damping = 90    -- how fast the treble dies (high = soft room)
-  chorus_rate = 50  chorus_depth = 140
-}
-```
-
-One of each, not one per instrument — a room is a property of the room, and
-sixteen of them would cost sixteen times as much for a difference nobody can
-localize.
+**Sound is checked by reading, not listening.** An agent has no ears, so
+`vm_render_audio` returns a *report* — every trigger with its frame, levels, voices
+started and stolen, and a named warning for each way audio goes wrong — and writes
+the `.wav` as a by-product. Declaring instruments, effects and music, and reading
+that report, are in [**VM_AUDIO.md**](VM_AUDIO.md).
 
 **Prefer `vm_run_frames` over a loop of `vm_run_frame`.** One call plays a whole
 scenario from an input script and returns the final observation plus a summary
@@ -401,96 +290,22 @@ end
 - **Declarations:** `record`; top-level `local name[: T] [= const]` (a global);
   `function name(a[: T], …) … end`; `sprite NAME { <pixel rows> }` (see below).
   Records pass by address (functions mutate them); scalars pass by value.
-- **Sprites:** a `sprite NAME { … }` declaration is a block of pixel rows — each a
-  whitespace-free run where `.` = transparent and any other char is a palette
-  nibble `0-9a-f`. **The size comes from the body**: rows are the height,
-  characters the width, so 8 rows of 8 chars is one tile and 16 rows of 16 chars
-  is a 2×2 sprite the compiler slices for you. Declared sprites form a **sheet**;
-  `NAME` is a constant equal to the id of its *first* tile, and a multi-tile
-  sprite occupies that many consecutive ids. Draw one tile with
-  `spr(id, x, y, flags)` and anything bigger with `sprn(NAME, x, y, flags)`.
-
-  A single tile is forgiving — short rows and fewer than eight of them pad
-  transparent. Bigger than that, the grid must be exact (every row the same
-  length, both dimensions multiples of 8): a miscounted row there would not pad
-  one sprite, it would shift every tile after it in the block and every id after
-  that. Pointing `spr` at a multi-tile sprite, or giving `sprn` a size that
-  contradicts the declaration, is a diagnostic rather than a wrong-looking game.
-  ```lua
-  sprite ball {
-    ..2222..
-    .222222.
-    22222222
-    22222222
-    .222222.
-    ..2222..
-  }
-  function draw() spr(ball, x, y, 0) end   -- flags bit0=flip-x, bit1=flip-y
-  ```
+- **Sprites, tilemaps, colour:** declared with `sprite NAME { <pixel rows> }` and
+  `tilemap NAME(w, h)`; a sprite's size comes from its body, and its name is a
+  constant equal to its first tile id. See [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
 - **Statements:** `local`, assignment, `if/elseif/else … end`, `while … do … end`,
   `for i = a, b[, step] do … end` (ascending, positive literal step), `break`,
   `return`, calls.
 - **Operators (Lua):** `+ - * / %`, `& | ~ << >>` (binary `~` is xor), `== ~= < <=
   > >=`, `and or not`, unary `-` `~` (bitwise not). Assignment is a statement.
-- **Tilemap:** one `tilemap NAME(w, h)` declaration reserves a `w×h` grid of tile
-  ids. `mget(tx,ty)` / `mset(tx,ty,id)` read/write cells; `map(tx,ty,sx,sy,tw,th)`
-  draws a `tw×th` block of the grid (tiles from the sprite sheet) to screen
-  `(sx,sy)`. Per-tile flag bits: `fset(tile,flag,v)` / `fget(tile,flag)→0/1`;
-  `solid(px,py)→0/1` is `fget(mget(px/8,py/8), SOLID)` — the platformer collision
-  primitive. Flag constants: `SOLID` (0), `FLAG1..FLAG3`.
-- **Tilemap collision (phase 2):** higher-level helpers so the model doesn't
-  re-derive corner-sampling and snap-to-grid every game (all take a rect
-  `x,y,w,h` and a tile `flag`):
-  - `map_rect_overlap(x,y,w,h,flag)→bool` — does the rect touch any tile with
-    `flag` set? Scans every tile the rect covers (one sample per 8-px cell), so
-    boxes larger than a tile don't miss an interior tile.
-  - `collide_x(x,y,w,h,dx,flag)→new_x` / `collide_y(x,y,w,h,dy,flag)→new_y` —
-    move the box by a signed `dx`/`dy` and return the coordinate snapped flush
-    against the first flagged tile in the way (or the full move if clear). The
-    whole leading edge is scanned tile-by-tile, so a box taller/wider than a tile
-    can't slip past a tile between its corners. Resolve one axis at a time:
-    `nx = collide_x(x,y,w,h,vx,SOLID)` then `ny = collide_y(nx,y,w,h,vy,SOLID)`.
-    Assumes the box starts in a clear cell and the per-step move is smaller than a
-    tile (no tunneling across a full tile in one frame).
-  - `touching_left|right|floor|ceiling(x,y,w,h,flag)→bool` — is a flagged tile
-    directly against that edge? (Grounded checks, wall-slides, ceiling bonks.)
-  Jump *feel* (coyote time, jump buffering, wall-slides, and wall-jumps) stays in
-  luax — see `games/platform.lua`.
-- **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
-  `id`; flags bit0/1 = flip x/y), `sprn(NAME,x,y,flags)` (draw a multi-tile sprite
-  at its declared size) or `sprn(id,x,y,w,h,flags)` (the raw form: a `w×h` block of
-  contiguous sheet tiles, id at col/row = `id + row*w + col`, for walking a run the
-  compiler cannot see; a flip mirrors the cell layout as well as each tile's
-  pixels, so a flipped 2×2 character faces the other way rather than scrambling),
-  `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
-  `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
-  `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
-- **Colour:**
-  - `pal(i,r,g,b)` — rewrite palette entry `i` (0–255). The framebuffer is
-    untouched, so recolouring the screen costs one loop and no redraw: fades,
-    damage flashes, day/night, and palette cycling all fall out of this.
-  - `sprbank(n)` — draw subsequent sprites through bank `n` (0–15), so a tile's
-    nibble `c` becomes colour `n*16 + c`. Bank 0 is the identity. One tile, up
-    to sixteen colour schemes; nibble 0 stays transparent in every bank.
-  - `screen { mode = Extended240 }` — a 240×240 screen instead of 128×128.
-    Declared like `controls`, read by the host when the ROM loads, fixed for the
-    run. `games/spectrum.lua` demonstrates all three.
-- **Pseudo-3D / scaling (racers, mode-7-ish effects):**
-  - `hline(x1,x2,y,c)` — fill a horizontal span at row `y`. The endpoints are
-    signed, so a span whose left edge runs off-screen clips cleanly. Drawing one
-    span per scanline gives a perspective road/floor cheaply (see
-    `games/outrun.lua`).
-  - `spr_scaled(id,x,y,scale,flags)` — nearest-neighbour scaled sheet tile;
-    `scale` is 8.8 fixed (`256` = 1.0, `512` = 2×, `128` = ½×). For
-    distance-scaled cars, trees and signs. Prefer angle-specific sprites over
-    runtime rotation (there is no rotate builtin — it costs a lot for little).
-  - `sin(a)→int` / `cos(a)→int` — fixed-point trig with `a` in `0..255` for a
-    full turn (`64` = 90°). The result is **signed** 8.8 fixed in `[-256,256]`
-    (`256` = 1.0), so `if cos(a) < 0` works. Note `/` is **always unsigned**, so
-    `cos(a)*speed/256` does *not* auto-handle a negative product — branch on the
-    sign and divide the magnitude, e.g.
-    `if s < 0 then d = 0 - ((0 - s) / 40) else d = s / 40 end` (see the bobbing
-    sun in `outrun.lua`).
+- **Builtins:** `entity(x,y,tag)` (report a game object, so it shows up in the
+  observation an agent reads), `rnd(n)→0..n-1`, `peek/poke(addr[,v])` (8-bit) and
+  `peek16/poke16`, `min(a,b)` / `max(a,b)`, and
+  `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
+- **Drawing:** `cls(c)`, `pset(x,y,c)`, sprites (`spr`/`sprn`), the `tilemap`
+  declaration and its collision helpers, `camera`, the palette (`pal`/`sprbank`),
+  `text`/`number`, and the pseudo-3D pieces (`hline`, `spr_scaled`, `sin`/`cos`).
+  Full reference in [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
 - **Input:** `btn`/`btnp`/`btnr(mask)→0/1` (held / pressed this frame /
   released this frame), the analog stick, touch, and `swipe`. Full reference in
   [**VM_CONTROLS.md**](VM_CONTROLS.md). `frame_count()→word` gives frames since
@@ -501,19 +316,9 @@ end
   in place (`clear(bullets)` resets a pool; `clear(bullets[i])` one element) —
   cheaper and less error-prone than field-by-field reinitialization.
 - **Sound:** `sfx(id)`, `music(id)`, `music_stop()` for what a game declares in
-  advance, and `play(inst, note, vel, frames)` / `note_on(chan, inst, note, vel)`
-  / `note_off(chan)` for a pitch it decides at runtime. The VM itself stays
-  deterministic and headless: it records what was asked for into the
-  observation's `sound` array, and a *host* renders it — `kessel run` through
-  cpal, the Android app through `AudioTrack`, and `vm_render_audio` /
-  `kessel render-audio` to a file. See **Sound** above for the declarations
-  (`instrument`, `sfx`, `track`, `fx`).
-- **On-screen text:** `text("LITERAL", x, y, color)` draws a compile-time string
-  in a built-in 3×5 font (uppercase `A-Z`, `0-9`, space, `: ! . -`; lowercase
-  folds to upper), one glyph every 4 px — the argument must be a `"..."` literal,
-  luax has no runtime strings. `number(n, x, y, color)` draws an integer in
-  decimal. For scores, titles, and `GAME OVER` — reset `camera(0,0)` first if the
-  world is scrolled. See the HUD in `games/shooter.lua`.
+  advance, and `play`/`note_on`/`note_off` for a pitch it decides at runtime.
+  Declarations (`instrument`, `sfx`, `track`, `fx`) and the render report are in
+  [**VM_AUDIO.md**](VM_AUDIO.md).
 - **Button constants:** `LEFT RIGHT UP DOWN A B START SELECT` — also the values
   `swipe()` reports.
 - **Controls metadata:** an optional top-level `controls { … }` block records the
@@ -607,24 +412,10 @@ of complete example to adapt.
 
 ## Playing a game (`kessel run`)
 
-`kessel run` renders a ROM in a native window, so the games a model authors are
-**human-playable**:
-
-```bash
-kessel run games/2048.lua      # 2048 — arrows slide tiles, A starts a new game
-kessel run games/bounce.lua    # a self-animating demo
-kessel run games/mover.lua     # arrows move; Z/X = A/B; Return/Space = Start/Select
-kessel run games/snake.lua     # grid snake — arrows steer, eat food, A restarts
-kessel run games/brick.lua     # Breakout — arrows move the paddle
-kessel run games/shooter.lua   # vertical shooter — arrows move, A fires
-kessel run games/tetris.lua    # Tetris — L/R move, A rotates, Down soft-drops
-kessel run games/rogue.lua     # top-down action — arrows move, A swings a sword
-kessel run games/platform.lua  # tile platformer — arrows move, A jumps/wall-jumps
-kessel run games/sokoban.lua   # box-pushing puzzle — grid moves (btnp), mset-mutated board
-kessel run games/outrun.lua    # pseudo-3D road racer — arrows steer/accelerate, A boosts
-```
-
-The `games/` set doubles as worked luax examples spanning the builtins:
+`kessel run games/tetris.lua` renders a ROM in a native window, so the games a
+model authors are **human-playable**. The README lists the bundled set with their
+controls; what matters here is that they double as worked luax examples spanning
+the builtins:
 `2048` (array transforms + edge-triggered grid input, and the **swipe**
 reference — `swipe()` and `btnp` folded into one `direction()`), `snake` (record arrays +
 grid movement), `brick` (signed `int` velocity + AABB brick hits + a
