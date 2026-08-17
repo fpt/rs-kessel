@@ -147,6 +147,48 @@ snapshotable — which is the entire point of the agent loop, since
 Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 `crates/vm`, don't. Put it in the player.
 
+### Several files: `#include`, not `require`
+
+A game spans files through `#include "lib/motion.lua"` — PICO-8's spelling,
+chosen over Lua's `require` because `require` returns a module *value* and this
+machine has no runtime values for one to be. A model writing
+`local M = require("util")` and then `M.foo()` would be betrayed by borrowing the
+familiar word, so `require` is a diagnostic pointing at `#include` in all three
+positions it can appear.
+
+Four things follow, and none should be re-litigated:
+
+- **It resolves to declarations, not text.** `Compiler::compile` already walks
+  `&[Decl]` in passes, so the include pass splices `Vec<Decl>` at the directive
+  and no later pass knows the feature exists. A textual splice before the lexer
+  would wreck every line number.
+- **Provenance is a line map, not a field on every node.** An included file's
+  tokens shift into a range of their own and `LineMap` translates back at the
+  end, so a diagnostic from *any* pass — including the compiler, which sees one
+  merged program — names its file. Carrying a file on every `Decl`, `Stmt` and
+  `Expr` would put provenance in a thousand places to read it in one.
+- **Resolution belongs to the host.** `kessel run` has a directory, Android has
+  an `AssetManager`, `kessel-vm` has neither; `SourceResolver` is the seam.
+  `VmConsole` resolves through `get_source`, so an include inherits
+  `resolve_in_root` and cannot escape the working directory. A host with no
+  filesystem pushes each file over (`kessel_player_write_source`) rather than
+  handing back a callback — no function pointers across the C ABI, no JNI upcall
+  on the load path.
+- **Include-once, keyed on the path as written.** Without it a diamond include
+  reports its own declarations as duplicates. Depth-first at the directive, first
+  encounter wins — which also fixes sprite ids, so include order is part of the
+  ROM's identity.
+
+`screen` and `controls` are rejected inside an include: they are the ROM's own
+identity, and a shared library that quietly moved a game to a 240×240 screen
+would be a long afternoon. And `write_source` invalidates **every** cached ROM,
+not just its own path — editing `util.lua` changes what `game.lua` compiles to,
+and the alternative is `vm_load_rom` silently running the previous build.
+
+Shared sources live in `games/lib/` and are included by that path. They are not
+games: the Android library screen lists what sits at the *top* of `games/`, and
+`lib` has no extension to match. `games/swarm.lua` is the worked example.
+
 ### `crates/vm` — `kessel-vm`
 
 | File | Purpose |
@@ -420,7 +462,7 @@ additions rather than a rewrite.
 | `vm/KesselNative.kt` | The raw `external fun` declarations. Names bind to symbols in `crates/ffi/src/android.rs` — renaming this class or its package breaks them at *runtime*, not build time. |
 | `vm/KesselVm.kt` | The safe handle: owns the pointer's lifetime, one lock so `close` cannot race a `tick`. |
 | `vm/Controls.kt` | Parses the ROM's control metadata, so the pad shows only the buttons that do something. |
-| `game/GameCatalog.kt` | The library, read from `assets/`. |
+| `game/GameCatalog.kt` | The library, read from `assets/`. Also reads `assets/lib/`, whose files are pushed into the console before a game loads so `#include` can find them. |
 | `game/GameEngine.kt` | The 60 Hz thread. Draws to a `Surface`; publishes only pause/halt to Compose. |
 | `game/AudioPlayer.kt` | The audio thread: an `AudioTrack` in `ENCODING_PCM_FLOAT`, fed from a direct `ByteBuffer` the native synth renders into. `write` blocks, which is what clocks the loop — there is no timer. |
 | `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. `consoleTouch` is its inverse. |
@@ -534,7 +576,9 @@ kessel/
 - `crates/vm/tests/games_compile.rs` guards every file in `games/`: each must
   compile with no diagnostics and survive 300 frames under both idle and rotating
   button input without faulting. Sources are `include_str!`'d, so renaming a game
-  breaks the build rather than silently skipping it.
+  breaks the build rather than silently skipping it — `games/lib/` is embedded
+  the same way and written into the workspace before each game compiles, which
+  is what makes the `#include` path part of the guard rather than beside it.
 - `crates/cli/src/mcp/server.rs` has a full write → assemble → load → run test
   over the MCP surface — the thing that actually has to work for a real host.
 - `blit` in `play.rs` is tested separately (channel order, integer upscale,

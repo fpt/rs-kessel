@@ -191,9 +191,22 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      * Compile [source] and start the loop. Diagnostics land in [state] rather
      * than being thrown: a game that won't compile is something to show the
      * player, not a crash.
+     *
+     * [libraries] are the shared sources the game may `#include`, keyed by the
+     * path it names them by. They go in before the load because the VM cannot
+     * open an asset itself — a game whose library is missing fails to load and
+     * says which file it wanted.
      */
-    fun start(source: String, name: String) {
+    fun start(source: String, name: String, libraries: Map<String, String> = emptyMap()) {
         check(thread == null) { "engine already started" }
+
+        for ((path, text) in libraries) {
+            val failed = vm.writeSource(path, text)
+            if (failed != null) {
+                _state.value = PlayState(error = "$path: $failed")
+                return
+            }
+        }
 
         val error = vm.load(source, name)
         if (error != null) {

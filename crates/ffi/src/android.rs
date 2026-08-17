@@ -59,6 +59,38 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerFree(
     }
 }
 
+/// Hand over a source the game may `#include`, without loading it. Returns null
+/// on success, or the reason it could not be stored.
+#[no_mangle]
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerWriteSource<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    handle: jlong,
+    path: JString<'l>,
+    source: JString<'l>,
+) -> jstring {
+    let fail = |env: &mut JNIEnv<'l>, msg: &str| -> jstring {
+        env.new_string(msg)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    };
+
+    let Some(p) = player(handle) else {
+        return fail(&mut env, "no console (the player was already closed)");
+    };
+    let (Ok(path), Ok(source)) = (env.get_string(&path), env.get_string(&source)) else {
+        return fail(&mut env, "path and source must be strings");
+    };
+    let (path, source): (String, String) = (path.into(), source.into());
+
+    let err = p.player.write_source(&path, &source);
+    if err.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        fail(&mut env, &err)
+    }
+}
+
 /// Compile and load a game. Returns null on success, or the diagnostics to show.
 #[no_mangle]
 pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerLoad<'l>(

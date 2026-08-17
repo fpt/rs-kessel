@@ -318,7 +318,8 @@ Everything downstream (load, run, observe, play) is identical.
 
 **Not** real Lua — a static subset: no `require`, metatables, coroutines,
 closures, varargs, GC, or stdlib. Tables are compile-time **records**; arrays are
-fixed-length. Entry points (VM is vector-driven, no `main(){ loop … }`): `init`
+fixed-length. (For several files, `#include` — see below — not `require`, which
+returns a module value this machine has nowhere to put.) Entry points (VM is vector-driven, no `main(){ loop … }`): `init`
 runs once at reset; `update` then `draw` run each frame (or a single `frame`).
 Locals/params use static slots — **no recursion**.
 
@@ -463,7 +464,46 @@ end
   game's input layout as ROM metadata, so a host UI can label and lay out a pad
   without guessing. Irrelevant to VM execution. See
   [**VM_CONTROLS.md**](VM_CONTROLS.md).
+- **Several files:** `#include "lib/motion.lua"` — see below.
 - Comments: `--` line, `--[[ … ]]` block.
+
+### Splitting a game across files (`#include`)
+
+```lua
+#include "lib/motion.lua"     -- top level, quoted, with the extension
+```
+
+The named file's declarations are spliced in **at the directive**, into the same
+flat namespace — records, functions, globals, sprites, instruments, `sfx`,
+tracks. There is no module value and nothing to bind: writing Lua's
+`require` is a diagnostic that says so, because `require` returns a table and
+this machine has no runtime tables to return one into. (PICO-8 spells its
+equivalent the same way, for the same reason.)
+
+The rules, all of which are diagnostics rather than surprises:
+
+- **A file is included at most once**, however many files ask for it — so two of
+  your sources may both include the same library without declaring anything
+  twice.
+- **A cycle is an error**, reported with its chain (`a.lua → b.lua → a.lua`), as
+  is nesting more than 16 deep.
+- **`screen` and `controls` belong to the game's own file.** They are the ROM's
+  identity; a library that quietly changed your screen size would be a long
+  afternoon.
+- **Diagnostics name their file** — `util.lua line 12: unknown variable 'nope'`.
+
+Where the named file is looked up is the *host's* answer, since the VM has no
+opinion about directories:
+
+| Host | `#include "x.lua"` finds |
+|------|--------------------------|
+| `kessel mcp` (`vm_assemble`) | `x.lua` in the working directory, which it cannot escape |
+| `kessel run games/swarm.lua` | `games/x.lua` — the game's own directory |
+| Android | a source the app handed over from `assets/` before loading |
+
+In `games/`, shared sources live in `games/lib/` and are included by that path:
+`games/swarm.lua` is the worked example, and `games/lib/motion.lua` the library
+it uses.
 
 ### Tutorial snippets
 

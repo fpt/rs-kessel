@@ -31,8 +31,16 @@ const GAMES: &[(&str, &str)] = &[
     ("sokoban.lua", include_str!("../../../games/sokoban.lua")),
     ("spectrum.lua", include_str!("../../../games/spectrum.lua")),
     ("sprite.lua", include_str!("../../../games/sprite.lua")),
+    ("swarm.lua", include_str!("../../../games/swarm.lua")),
     ("tetris.lua", include_str!("../../../games/tetris.lua")),
 ];
+
+/// The shared sources games reach through `#include "lib/…"`, put in the
+/// workspace before a game is compiled. Same list as `games_compile.rs`.
+const LIBS: &[(&str, &str)] = &[(
+    "lib/motion.lua",
+    include_str!("../../../games/lib/motion.lua"),
+)];
 
 /// The same input cycle `games_compile.rs` uses, so a game's sound is exercised
 /// on the paths its gameplay test already walks.
@@ -40,6 +48,9 @@ const INPUTS: [u8; 9] = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x18, 0x02];
 
 fn loaded(name: &str, src: &str) -> VmConsole {
     let mut c = VmConsole::new();
+    for (path, lib) in LIBS {
+        c.write_source(path, lib).unwrap();
+    }
     c.write_source("g.lua", src).unwrap();
     let built = c
         .assemble("g.lua")

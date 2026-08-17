@@ -10,9 +10,34 @@
 
 use kessel_vm::{assembler, device, luax, VmConsole};
 
+/// The shared sources under `games/lib/`, which games reach through
+/// `#include "lib/…"`. Embedded for the same reason the games are: renaming one
+/// must break this build rather than quietly stop being tested.
+const LIBS: &[(&str, &str)] = &[(
+    "lib/motion.lua",
+    include_str!("../../../games/lib/motion.lua"),
+)];
+
+/// A console with every library file in its workspace, so a game that includes
+/// one compiles here the same way it does in `games/`.
+fn console() -> VmConsole {
+    let mut c = VmConsole::new();
+    for (path, src) in LIBS {
+        c.write_source(path, src).unwrap();
+    }
+    c
+}
+
+/// The resolver for compiling a game outside a console.
+fn libs(path: &str) -> Option<String> {
+    LIBS.iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, src)| (*src).to_string())
+}
+
 fn assert_game_ok(name: &str, src: &str) {
     // --- compile (luax) ---
-    let compiled = luax::compile(src);
+    let compiled = luax::compile_with(src, &mut libs);
     let luax_errs: Vec<_> = compiled
         .diagnostics
         .iter()
@@ -46,7 +71,7 @@ fn assert_game_ok(name: &str, src: &str) {
     );
 
     // --- run (300 frames, cycling inputs to exercise move/fire/rotate/restart) ---
-    let mut c = VmConsole::new();
+    let mut c = console();
     c.write_source("g.lua", src).unwrap();
     c.assemble("g.lua")
         .unwrap_or_else(|e| panic!("{name}.lua assemble via VmConsole: {e}"));
@@ -659,6 +684,7 @@ const GAMES: &[(&str, &str)] = &[
     ("sokoban.lua", include_str!("../../../games/sokoban.lua")),
     ("spectrum.lua", include_str!("../../../games/spectrum.lua")),
     ("sprite.lua", include_str!("../../../games/sprite.lua")),
+    ("swarm.lua", include_str!("../../../games/swarm.lua")),
     ("tetris.lua", include_str!("../../../games/tetris.lua")),
 ];
 
@@ -672,7 +698,7 @@ const GAMES: &[(&str, &str)] = &[
 /// enforces the checkout; this names the problem if that ever stops working.
 #[test]
 fn corpus_is_lf_only() {
-    for (name, src) in GAMES {
+    for (name, src) in GAMES.iter().chain(LIBS) {
         assert!(
             !src.contains('\r'),
             "{name} has CR in it — check .gitattributes; multi-line test fixtures \
@@ -810,6 +836,7 @@ games_ok! {
     piano_ok => "piano",
     popn_ok => "popn",
     paint_ok => "paint",
+    swarm_ok => "swarm",
 }
 
 /// `popn.lua` is the reference for a pad with **no directions**: the four

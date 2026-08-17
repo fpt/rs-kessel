@@ -25,6 +25,15 @@ internal object KesselNative {
     /** Destroy a console. The handle is dangling afterwards. */
     external fun playerFree(handle: Long)
 
+    /**
+     * Put a source in the console's workspace without loading it, so a game
+     * loaded afterwards can `#include "<path>"` it. Returns null on success.
+     *
+     * The APK has no filesystem for the VM to search, so shared library files
+     * are pushed across rather than looked up.
+     */
+    external fun playerWriteSource(handle: Long, path: String, source: String): String?
+
     /** Compile and load a game. Returns null on success, diagnostics otherwise. */
     external fun playerLoad(handle: Long, source: String, name: String): String?
 

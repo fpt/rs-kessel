@@ -220,8 +220,11 @@ impl VmTool for Assemble {
         "Assemble a source file into a ROM, reading it fresh each time — from the \
          working directory when one is set, so edits made with any editing tool \
          (yours or vm_write_source) are picked up. A '.lua' file is compiled from \
-         the Lua-ish dialect to assembly first. Returns diagnostics with line \
-         numbers on error, or the byte size and labels on success."
+         the Lua-ish dialect to assembly first. A game may span several files: \
+         '#include \"lib/util.lua\"' splices another source's declarations in, \
+         resolved against the same working directory (there is no 'require'). \
+         Returns diagnostics with a file and line number on error, or the byte \
+         size and labels on success."
     }
     fn parameters_schema(&self) -> Value {
         json!({
