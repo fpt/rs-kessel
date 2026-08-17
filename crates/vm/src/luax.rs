@@ -1716,9 +1716,15 @@ struct Compiler {
     globals: HashMap<String, GlobalInfo>,
     funcs: HashMap<String, FuncSig>,
     locals: HashMap<String, VarInfo>,
-    /// Declared sprites in id order (name, rows); each `NAME` is a constant = its id.
-    sprites: Vec<(String, Vec<String>)>,
+    /// The sprite sheet: one **8×8 tile** per entry, in id order. A declaration
+    /// contributes `w*h` of them (see [`slice_tiles`]), so a tile's id is its
+    /// index here — not the index of the declaration it came from.
+    tiles: Vec<Vec<String>>,
+    /// Base tile id per sprite name; each `NAME` is a constant equal to it.
     sprite_ids: HashMap<String, u16>,
+    /// Declared size in tiles per sprite name. This is what lets `spr`/`sprn`
+    /// check a call against the picture the author actually drew.
+    sprite_dims: HashMap<String, (u16, u16)>,
     /// Declared instruments and sound effects. Like sprites, each `NAME` is a
     /// constant equal to its id, so `sfx(boom)` survives someone inserting a
     /// declaration above it.
@@ -1877,8 +1883,9 @@ impl Compiler {
             globals: HashMap::new(),
             funcs: HashMap::new(),
             locals: HashMap::new(),
-            sprites: Vec::new(),
+            tiles: Vec::new(),
             sprite_ids: HashMap::new(),
+            sprite_dims: HashMap::new(),
             bank: SoundBank::default(),
             instrument_ids: HashMap::new(),
             sfx_ids: HashMap::new(),
@@ -1987,15 +1994,30 @@ impl Compiler {
                 }
             }
         }
-        // Pass 1.5: sprites — assign ids (declaration order), bind each name to
-        // its id (a compile-time constant).
+        // Pass 1.5: sprites — slice each declaration into 8×8 tiles, bind each
+        // name to the id of its **first** tile (a compile-time constant), and
+        // remember how big it was drawn.
+        //
+        // Ids come off a running tile cursor rather than the declaration index,
+        // because one declaration is no longer one tile: a 16×16 sprite occupies
+        // four consecutive ids, which is exactly what `sprn` wants to walk.
         for decl in decls {
             if let Decl::Sprite { name, rows, line } = decl {
-                let id = self.sprites.len() as u16;
+                let (w, h) = match sprite_dims(rows) {
+                    Ok(dims) => dims,
+                    Err(msg) => {
+                        d.push(err(*line, format!("sprite '{name}': {msg}")));
+                        // Recover as one tile so later passes still typecheck;
+                        // the diagnostic already means nothing is assembled.
+                        (1, 1)
+                    }
+                };
+                let id = self.tiles.len() as u16;
                 if self.sprite_ids.insert(name.clone(), id).is_some() {
                     d.push(err(*line, format!("duplicate sprite '{name}'")));
                 }
-                self.sprites.push((name.clone(), rows.clone()));
+                self.sprite_dims.insert(name.clone(), (w, h));
+                self.tiles.extend(slice_tiles(rows, w, h));
             }
         }
         // Pass 1.55: instruments, then sound effects — ids in declaration
@@ -2790,6 +2812,40 @@ impl Compiler {
             }
             return false;
         }
+        // `sprn(hero, x, y, flags)` — the size comes from the declaration, so the
+        // common case stops repeating what the sprite body already says (and
+        // stops being a chance to disagree with it). The six-argument form stays:
+        // it is the only way to walk a run of ids the compiler cannot see, which
+        // is what a block of separately-declared tiles is.
+        if name == "sprn" && args.len() == 4 {
+            match args.first().and_then(|a| self.named_sprite(a)) {
+                Some((w, h)) => {
+                    let filled = vec![
+                        args[0].clone(),
+                        args[1].clone(),
+                        args[2].clone(),
+                        Expr::Num(w as i64, line),
+                        Expr::Num(h as i64, line),
+                        args[3].clone(),
+                    ];
+                    return self.gen_call(name, &filled, out, d, line);
+                }
+                None => {
+                    d.push(err(
+                        line,
+                        "sprn(sprite, x, y, flags) needs a declared sprite name as its \
+                         first argument; for a computed id give the size too: \
+                         sprn(id, x, y, w, h, flags)",
+                    ));
+                    return false;
+                }
+            }
+        }
+        // A call that disagrees with the picture the author drew is a diagnostic
+        // rather than a wrong-looking game.
+        if name == "spr" || name == "sprn" {
+            self.check_sprite_call(name, args, d, line);
+        }
         if let Some((argc, yields)) = builtin(name) {
             // On an arity mismatch, report it and emit nothing — a partial call
             // would leave the data stack unbalanced.
@@ -2823,6 +2879,61 @@ impl Compiler {
         }
         d.push(err(line, format!("unknown function '{name}'")));
         false
+    }
+
+    /// The declared size of `e` if it names a sprite, else `None`.
+    fn named_sprite(&self, e: &Expr) -> Option<(u16, u16)> {
+        match e {
+            Expr::Var(name, _) => self.sprite_dims.get(name).copied(),
+            _ => None,
+        }
+    }
+
+    /// Check a `spr`/`sprn` call against the declared size of the sprite it names.
+    ///
+    /// Only a **multi-tile** declaration is checked. A 1×1 sprite passed to `sprn`
+    /// with a bigger size is the raw contract — draw `w*h` contiguous ids from
+    /// this one — and that is a real thing to want: four separately-declared
+    /// quadrants, or a run of frames. Once a declaration states its own size,
+    /// though, a call that contradicts it can only be a mistake.
+    fn check_sprite_call(&self, name: &str, args: &[Expr], d: &mut Vec<Diagnostic>, line: usize) {
+        let Some(Expr::Var(sprite, _)) = args.first() else {
+            return;
+        };
+        let Some(&(w, h)) = self.sprite_dims.get(sprite) else {
+            return;
+        };
+        if (w, h) == (1, 1) {
+            return;
+        }
+        if name == "spr" {
+            d.push(err(
+                line,
+                format!(
+                    "'{sprite}' is {w}x{h} tiles and spr() draws a single 8x8 tile \
+                     (you would get its top-left corner) — use sprn({sprite}, x, y, flags)"
+                ),
+            ));
+            return;
+        }
+        // sprn with an explicit size: honour it only if it agrees.
+        if let [_, _, _, aw, ah, _] = args {
+            if let (Some(tw), Some(th)) = (
+                self.eval_const(aw, &mut Vec::new()),
+                self.eval_const(ah, &mut Vec::new()),
+            ) {
+                if (tw, th) != (w as i64, h as i64) {
+                    d.push(err(
+                        line,
+                        format!(
+                            "'{sprite}' is declared {w}x{h} tiles but this draws it {tw}x{th} \
+                             — drop the size and let the declaration say it: \
+                             sprn({sprite}, x, y, flags)"
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     /// Enable `lx_flagat` and its dependencies (the flags table + `fget`), which
@@ -3078,7 +3189,7 @@ impl Compiler {
         let mut out = String::new();
         out.push_str("( generated by the luax front-end )\n");
         // Point the tileset base at the sprite sheet so `spr(id, …)` works.
-        if !self.sprites.is_empty() {
+        if !self.tiles.is_empty() {
             out.push_str("lx_sheet #1b DEO\n");
         }
         // Point the tilemap device at the map grid + its width.
@@ -3422,15 +3533,78 @@ impl Compiler {
         if self.helpers.clear {
             out.push_str("@lx_cl_a .res 2\n@lx_cl_n .res 2\n");
         }
-        // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order.
-        if !self.sprites.is_empty() {
+        // Sprite sheet: contiguous 32-byte tiles at `lx_sheet`, in id order. A
+        // declaration wider or taller than one tile has already been sliced into
+        // several of these, so the emitter stays a flat walk and `.sprite` stays
+        // strictly 8×8 — all of the new meaning lives in `sprite_dims`/`slice_tiles`.
+        if !self.tiles.is_empty() {
             out.push_str("@lx_sheet\n");
-            for (id, (_, rows)) in self.sprites.iter().enumerate() {
+            for (id, rows) in self.tiles.iter().enumerate() {
                 out.push_str(&format!(".sprite lx_spr{id} {} .end\n", rows.join(" ")));
             }
         }
         out
     }
+}
+
+/// The size of a `sprite` declaration in 8×8 tiles, read off the body itself:
+/// rows are the height, characters the width.
+///
+/// **Nothing declares the size, because nothing has to.** Rows and row length are
+/// independent, so a body cannot be ambiguous — 8×16 and 16×8 are already
+/// distinguishable. A `sprite hero(2, 2) {` form would also break the lexer's
+/// raw-capture trigger, which keys on `sprite NAME {` exactly (three tokens back)
+/// and without which the pixel rows reach the ordinary lexer as garbage.
+///
+/// **One tile keeps its forgiving padding.** Short rows, and fewer than eight of
+/// them, pad transparent as they always have — the tests lean on `sprite a { 12...... }`
+/// and nothing in the corpus is affected. Once a declaration is *bigger* than one
+/// tile the grid has to be exact, because a miscounted row there does not pad one
+/// sprite: it shifts every tile after it in the block, and every id after that.
+fn sprite_dims(rows: &[String]) -> Result<(u16, u16), String> {
+    if rows.is_empty() {
+        return Err("no pixel rows".to_string());
+    }
+    let widths: Vec<usize> = rows.iter().map(|r| r.chars().count()).collect();
+    let (min_w, max_w) = (*widths.iter().min().unwrap(), *widths.iter().max().unwrap());
+    if rows.len() <= 8 && max_w <= 8 {
+        return Ok((1, 1));
+    }
+    if min_w != max_w {
+        return Err(format!(
+            "a sprite bigger than 8x8 needs every row the same length, but these \
+             run from {min_w} to {max_w} characters"
+        ));
+    }
+    if max_w % 8 != 0 || rows.len() % 8 != 0 {
+        return Err(format!(
+            "a sprite bigger than 8x8 must be a whole number of 8x8 tiles, but \
+             this one is {max_w}x{} pixels",
+            rows.len()
+        ));
+    }
+    Ok(((max_w / 8) as u16, (rows.len() / 8) as u16))
+}
+
+/// Slice a declaration's pixel rows into 8×8 tiles, **row-major**.
+///
+/// That order is the contract with `draw_sprn` (`device.rs`), which reads a block
+/// back as `id = base + row*w + col`. Getting it wrong draws all the right pixels
+/// in the wrong quadrants, so it lives in one function beside the id assignment
+/// rather than spread through the emitter.
+fn slice_tiles(rows: &[String], w: u16, h: u16) -> Vec<Vec<String>> {
+    let mut tiles = Vec::new();
+    for tile_row in 0..h as usize {
+        for tile_col in 0..w as usize {
+            tiles.push(
+                (0..8)
+                    .filter_map(|r| rows.get(tile_row * 8 + r))
+                    .map(|row| row.chars().skip(tile_col * 8).take(8).collect())
+                    .collect(),
+            );
+        }
+    }
+    tiles
 }
 
 /// Whether a function body contains a `return <value>` (rough arity for calls).
@@ -3918,6 +4092,256 @@ mod tests {
         assert_eq!(c.vm.devices.framebuffer[8], 2); // (8,0) id b
         assert_eq!(c.vm.devices.framebuffer[8 * 128], 3); // (0,8) id c
         assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4); // (8,8) id d
+    }
+
+    /// One 16×16 declaration, drawn as itself. Each quadrant is a solid colour, so
+    /// the framebuffer says which 8×8 cell of the body landed where — the point
+    /// being that the source now looks like the picture instead of four blocks in
+    /// a load-bearing order.
+    #[test]
+    fn a_big_sprite_slices_row_major() {
+        let src = r#"
+            sprite panel {
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+            }
+            function draw() sprn(panel, 0, 0, 0) end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        // Corners of each quadrant: the slice order has to match draw_sprn's
+        // `base + row*w + col`, or the colours land in the wrong quarters.
+        assert_eq!(fb[0], 1, "top-left");
+        assert_eq!(fb[15], 2, "top-right");
+        assert_eq!(fb[15 * 128], 3, "bottom-left");
+        assert_eq!(fb[15 * 128 + 15], 4, "bottom-right");
+        // ...and the seams are filled, not just the corners.
+        assert_eq!(fb[7 * 128 + 7], 1);
+        assert_eq!(fb[8 * 128 + 8], 4);
+    }
+
+    /// A non-square declaration: 8 wide, 16 tall is 1×2 tiles. Rows and row length
+    /// are read independently, which is why the body never needs a stated size.
+    #[test]
+    fn a_tall_sprite_is_one_tile_wide_and_two_high() {
+        let src = r#"
+            sprite tower {
+              55555555
+              55555555
+              55555555
+              55555555
+              55555555
+              55555555
+              55555555
+              55555555
+              66666666
+              66666666
+              66666666
+              66666666
+              66666666
+              66666666
+              66666666
+              66666666
+            }
+            function draw() sprn(tower, 0, 0, 0) end
+        "#;
+        let mut c = load(src);
+        c.run_frame(0);
+        assert_eq!(c.vm.devices.framebuffer[0], 5);
+        assert_eq!(c.vm.devices.framebuffer[8 * 128], 6);
+        assert_eq!(c.vm.devices.framebuffer[15 * 128], 6);
+    }
+
+    /// Ids come off a tile cursor, so a multi-tile sprite pushes the next
+    /// declaration along by its whole footprint. Getting this wrong is invisible
+    /// in the first sprite and wrong in every one after it.
+    #[test]
+    fn a_big_sprite_advances_the_next_id_by_its_footprint() {
+        let src = r#"
+            sprite panel {
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+            }
+            sprite coin { 7....... }
+            function draw()
+              sprn(panel, 0, 0, 0)
+              spr(coin, 0, 16, 0)
+            end
+        "#;
+        let mut c = load(src);
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        // panel occupies ids 0..=3, so coin is id 4. Had it been given id 1 — the
+        // old declaration-index rule — this pixel would be panel's top-right
+        // quadrant instead, and panel itself would draw coin in that corner.
+        assert_eq!(fb[16 * 128], 7, "coin drew the wrong tile");
+        assert_eq!(fb[15], 2, "panel's top-right quadrant was displaced");
+    }
+
+    /// `spr` draws one 8×8 tile, so pointing it at a bigger sprite silently drew
+    /// the top-left corner. The compiler knows the declared size, so it says so.
+    #[test]
+    fn spr_on_a_big_sprite_is_a_diagnostic() {
+        let src = r#"
+            sprite panel {
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+            }
+            function draw() spr(panel, 0, 0, 0) end
+        "#;
+        let c = compile(src);
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("sprn(panel")),
+            "the message should name the call that works: {:?}",
+            c.diagnostics
+        );
+    }
+
+    /// A size that contradicts the declaration can only be a mistake — but a 1×1
+    /// sprite drawn as a block is the raw contract and stays legal
+    /// (`sprn_draws_block_row_major` above is exactly that).
+    #[test]
+    fn sprn_disagreeing_with_the_declaration_is_a_diagnostic() {
+        let big = r#"
+            sprite panel {
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              1111111122222222
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+              3333333344444444
+            }
+        "#;
+        let c = compile(&format!(
+            "{big} function draw() sprn(panel, 0, 0, 2, 3, 0) end"
+        ));
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("2x2")),
+            "{:?}",
+            c.diagnostics
+        );
+        // The honest size is still accepted, so existing sources keep working.
+        assert!(compile(&format!(
+            "{big} function draw() sprn(panel, 0, 0, 2, 2, 0) end"
+        ))
+        .ok());
+    }
+
+    /// Once a declaration is bigger than one tile the grid has to be exact: a
+    /// miscounted row would shift every tile after it, so it is refused instead of
+    /// padded. A single tile keeps its old forgiving padding.
+    #[test]
+    fn a_big_sprite_must_be_a_whole_grid() {
+        // 16 wide, `n` tall.
+        let rows16 = |n: usize| -> String {
+            let mut s = String::from("sprite p {\n");
+            for _ in 0..n {
+                s.push_str("1111111122222222\n");
+            }
+            s.push_str("}\nfunction draw() end\n");
+            s
+        };
+        let c = compile(&rows16(15));
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("16x15")),
+            "the message should name the size it saw: {:?}",
+            c.diagnostics
+        );
+        assert!(compile(&rows16(16)).ok(), "16x16 is a whole 2x2");
+
+        // Ragged rows, which is what a mistyped row actually looks like.
+        let ragged = "sprite p {\n1111111122222222\n11111111222222\n\
+                      1111111122222222\n1111111122222222\n1111111122222222\n\
+                      1111111122222222\n1111111122222222\n1111111122222222\n\
+                      1111111122222222\n1111111122222222\n1111111122222222\n\
+                      1111111122222222\n1111111122222222\n1111111122222222\n\
+                      1111111122222222\n1111111122222222\n}\nfunction draw() end\n";
+        let c = compile(ragged);
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("same length")),
+            "{:?}",
+            c.diagnostics
+        );
+
+        // A single tile still pads, as it always has.
+        assert!(compile("sprite p { 12 }\nfunction draw() spr(p, 0, 0, 0) end").ok());
+    }
+
+    /// The short `sprn` form needs a name it can look the size up on; a computed
+    /// id has to say how big the run is.
+    #[test]
+    fn the_short_sprn_form_needs_a_declared_sprite() {
+        let c = compile("sprite a { 1....... }\nlocal n = 0\nfunction draw() sprn(n, 0, 0, 0) end");
+        assert!(!c.ok());
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("declared sprite")),
+            "{:?}",
+            c.diagnostics
+        );
     }
 
     #[test]

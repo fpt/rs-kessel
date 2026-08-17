@@ -401,10 +401,21 @@ end
 - **Declarations:** `record`; top-level `local name[: T] [= const]` (a global);
   `function name(a[: T], …) … end`; `sprite NAME { <pixel rows> }` (see below).
   Records pass by address (functions mutate them); scalars pass by value.
-- **Sprites:** a `sprite NAME { … }` declaration gives an 8×8 tile; each row is a
-  whitespace-free run of up to 8 chars — `.` = transparent, else a palette nibble
-  `0-9a-f`. Declared sprites form a **sheet** (ids 0,1,2… in order); `NAME` is a
-  constant = its id. Draw with `spr(id, x, y, flags)`.
+- **Sprites:** a `sprite NAME { … }` declaration is a block of pixel rows — each a
+  whitespace-free run where `.` = transparent and any other char is a palette
+  nibble `0-9a-f`. **The size comes from the body**: rows are the height,
+  characters the width, so 8 rows of 8 chars is one tile and 16 rows of 16 chars
+  is a 2×2 sprite the compiler slices for you. Declared sprites form a **sheet**;
+  `NAME` is a constant equal to the id of its *first* tile, and a multi-tile
+  sprite occupies that many consecutive ids. Draw one tile with
+  `spr(id, x, y, flags)` and anything bigger with `sprn(NAME, x, y, flags)`.
+
+  A single tile is forgiving — short rows and fewer than eight of them pad
+  transparent. Bigger than that, the grid must be exact (every row the same
+  length, both dimensions multiples of 8): a miscounted row there would not pad
+  one sprite, it would shift every tile after it in the block and every id after
+  that. Pointing `spr` at a multi-tile sprite, or giving `sprn` a size that
+  contradicts the declaration, is a diagnostic rather than a wrong-looking game.
   ```lua
   sprite ball {
     ..2222..
@@ -446,9 +457,10 @@ end
   Jump *feel* (coyote time, jump buffering, wall-slides, and wall-jumps) stays in
   luax — see `games/platform.lua`.
 - **Builtins:** `cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)` (draw sheet tile
-  `id`; flags bit0/1 = flip x/y), `sprn(id,x,y,w,h,flags)` (draw a `w×h` block of
-  contiguous sheet tiles — id at col/row = `id + row*w + col` — for 16×16+
-  players/bosses/UI panels; flip applies per tile, the block isn't mirrored),
+  `id`; flags bit0/1 = flip x/y), `sprn(NAME,x,y,flags)` (draw a multi-tile sprite
+  at its declared size) or `sprn(id,x,y,w,h,flags)` (the raw form: a `w×h` block of
+  contiguous sheet tiles, id at col/row = `id + row*w + col`, for walking a run the
+  compiler cannot see),
   `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.
