@@ -884,10 +884,17 @@ impl Devices {
     /// Draw a `sprn_w × sprn_h` block of sheet tiles anchored at the pending
     /// screen `(sx,sy)`. Tile ids are row-major and contiguous from `sprn_id`
     /// (id at col/row = `sprn_id + row*w + col`), each 8 px cell blitted from the
-    /// tileset. The current `sprite_flags` (flip) apply to every tile; the block
-    /// layout itself is not mirrored.
+    /// tileset.
+    ///
+    /// **A flip mirrors the block, not just its tiles.** `sprite_flags` bit 0/1
+    /// mirror each tile's pixels; the cell each tile is *placed* in has to be
+    /// mirrored too, or a flipped 2×2 character is four quadrants each reversed
+    /// in place — every pixel correct, the picture scrambled. Only the placement
+    /// is reflected here; `blit_sprite` still does the pixels.
     fn draw_sprn(&mut self, mem: &[u8]) {
         let (base_x, base_y) = (self.sx, self.sy);
+        let flip_x = self.sprite_flags & 0x01 != 0;
+        let flip_y = self.sprite_flags & 0x02 != 0;
         for row in 0..self.sprn_h {
             for col in 0..self.sprn_w {
                 let id = self
@@ -895,8 +902,18 @@ impl Devices {
                     .wrapping_add(row.wrapping_mul(self.sprn_w))
                     .wrapping_add(col);
                 let addr = self.tileset_base.wrapping_add(id.wrapping_mul(32));
-                self.sx = base_x.wrapping_add(col.wrapping_mul(8));
-                self.sy = base_y.wrapping_add(row.wrapping_mul(8));
+                let cell_col = if flip_x {
+                    self.sprn_w.wrapping_sub(1).wrapping_sub(col)
+                } else {
+                    col
+                };
+                let cell_row = if flip_y {
+                    self.sprn_h.wrapping_sub(1).wrapping_sub(row)
+                } else {
+                    row
+                };
+                self.sx = base_x.wrapping_add(cell_col.wrapping_mul(8));
+                self.sy = base_y.wrapping_add(cell_row.wrapping_mul(8));
                 self.blit_sprite(addr, mem);
             }
         }
@@ -1218,6 +1235,62 @@ mod tests {
         assert_eq!(d.framebuffer[5], 3);
         assert_eq!(d.framebuffer[4], 4);
         assert_eq!(d.framebuffer[0], 0); // src 7 was transparent
+    }
+
+    /// Flipping a multi-tile block has to mirror where the tiles *go*, not only
+    /// the pixels inside each one. Mirroring pixels alone gives you every pixel
+    /// correct and the picture scrambled — the failure a 2×2 character hits the
+    /// first time it turns around.
+    #[test]
+    fn sprn_flip_mirrors_the_block_layout() {
+        let mut d = Devices::new();
+        // A 4-tile sheet at 0; tile n's top-left pixel is colour n+1, so the
+        // framebuffer reports which tile landed in which cell.
+        let mut mem = [0u8; 4 * 32];
+        for n in 0..4 {
+            mem[n * 32] = ((n as u8) + 1) << 4;
+        }
+        d.write(0x1b, 0, &mem); // tileset base
+
+        let corner = |d: &Devices, cx: usize, cy: usize| d.framebuffer[cy * 8 * 128 + cx * 8];
+
+        // Unflipped: ids 1,2 / 3,4 across the 2×2 block.
+        d.write(0x19, 0x00, &mem);
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0xa0, 0, &mem); // base id
+        d.write(0xa1, 2, &mem); // w
+        d.write(0xa2, 2, &mem); // h
+        d.write(0xa3, 0, &mem); // draw
+        assert_eq!((corner(&d, 0, 0), corner(&d, 1, 0)), (1, 2));
+        assert_eq!((corner(&d, 0, 1), corner(&d, 1, 1)), (3, 4));
+
+        // Flip-x: the columns swap, so the top row reads 2,1 — each tile's own
+        // pixels are mirrored as well, which puts tile 2's marker at its right
+        // edge rather than the cell corner.
+        d.write(0x16, 0, &mem); // clear
+        d.write(0x19, 0x01, &mem);
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0xa3, 0, &mem);
+        assert_eq!(
+            d.framebuffer[15], 1,
+            "tile 1 belongs in the right-hand cell"
+        );
+        assert_eq!(d.framebuffer[7], 2, "tile 2 belongs in the left-hand cell");
+
+        // Flip-y: the rows swap.
+        d.write(0x16, 0, &mem);
+        d.write(0x19, 0x02, &mem);
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0xa3, 0, &mem);
+        assert_eq!(d.framebuffer[7 * 128], 3, "tile 3 belongs in the top cell");
+        assert_eq!(
+            d.framebuffer[15 * 128],
+            1,
+            "tile 1 belongs in the bottom cell"
+        );
     }
 
     #[test]

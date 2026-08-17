@@ -19,46 +19,25 @@ controls {
   pause = START
 }
 
--- Four contiguous sprites form a reusable 16x16 tile frame via sprn(...,2,2).
-sprite panel_tl {
-  66666666
-  65555555
-  65555555
-  65555555
-  65555555
-  65555555
-  65555555
-  65555555
-}
-sprite panel_tr {
-  66666666
-  55555556
-  55555556
-  55555556
-  55555556
-  55555556
-  55555556
-  55555556
-}
-sprite panel_bl {
-  65555555
-  65555555
-  65555555
-  65555555
-  65555555
-  65555555
-  65555555
-  66666666
-}
-sprite panel_br {
-  55555556
-  55555556
-  55555556
-  55555556
-  55555556
-  55555556
-  55555556
-  66666666
+-- A 16x16 panel frame, drawn as one sprite: the compiler slices it into the
+-- four 8x8 tiles sprn walks.
+sprite panel {
+  6666666666666666
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6555555555555556
+  6666666666666666
 }
 
 sprite fill_2 {
@@ -361,7 +340,7 @@ end
 function draw_tile(index)
   local x = draw_ox + (index % 4) * 16
   local y = draw_oy + (index / 4) * 16
-  sprn(panel_tl, x, y, 2, 2, 0)
+  sprn(panel, x, y, 0)
 
   local value = cells[index]
   if value ~= 0 then
