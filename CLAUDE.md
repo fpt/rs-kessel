@@ -554,7 +554,9 @@ with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bu
   **Relative paths are unchanged**, which is what leaves `VmPlayer`, the FFI hosts
   and every existing call alone; for them adoption is off and an absolute path is
   still an error. **`..` is refused, not resolved**, or the prefix check that
-  bounds a root is decorative. And **a read of a missing path adopts nothing**:
+  bounds a root is decorative — and for the same reason `resolve_in_root` checks
+  the *resolved* path against the resolved root, since a component check cannot
+  see a symlink but `fs::write` follows one. And **a read of a missing path adopts nothing**:
   adopting drops the built ROMs, so a typo'd `vm_assemble` would otherwise discard
   the session's work, visibly only on the *next* call.
 

@@ -632,7 +632,29 @@ pub(crate) fn resolve_in_root(root: &Path, rel: &str) -> Result<PathBuf, String>
             }
         }
     }
-    Ok(root.join(p))
+    let full = root.join(p);
+
+    // The component checks above cannot see a **symlink**, and both `fs::write`
+    // and `read_to_string` follow one — so a link planted in the workspace would
+    // turn a confined write into an arbitrary one, which is exactly the property
+    // this function exists to provide. Resolve what already exists and require
+    // the result to stay put.
+    //
+    // Both sides go through `canonical_prefix`, so a workspace reached *through* a
+    // link (`/tmp` on macOS, a symlinked home) still matches itself, and a file
+    // that does not exist yet is checked by its deepest existing ancestor.
+    //
+    // This is a check-then-use, and deliberately: closing the race would need the
+    // path opened once with `O_NOFOLLOW` per component, and anyone who can plant a
+    // link inside the workspace between these two lines can already write the file
+    // directly.
+    if !canonical_prefix(&full).starts_with(canonical_prefix(root)) {
+        return Err(format!(
+            "path '{rel}' must stay inside the working directory \
+             (it leads outside through a link)"
+        ));
+    }
+    Ok(full)
 }
 
 /// Lexically normalize an absolute path, dropping `.` and refusing `..`.
@@ -930,6 +952,39 @@ mod tests {
         assert!(c.write_source("../escape.lua", "x").is_err());
         assert!(c.write_source("/etc/passwd", "x").is_err());
         assert!(!dir.path().join("../escape.lua").exists());
+    }
+
+    /// A relative path may not follow a **symlink** out of the working directory.
+    /// The component checks are lexical and cannot see one, while `fs::write` and
+    /// `read_to_string` both follow it — so a link planted in the workspace would
+    /// otherwise defeat the confinement for writes *and* reads.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_may_not_lead_out_of_the_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let root = tmp.path().join("workspace");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let secret = outside.join("secret.lua");
+        std::fs::write(&secret, "-- private\n").unwrap();
+
+        // One link to the directory, one straight to the file.
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        std::os::unix::fs::symlink(&secret, root.join("alias.lua")).unwrap();
+
+        let mut c = VmConsole::new();
+        c.set_root(Some(root));
+
+        for path in ["link/secret.lua", "alias.lua", "link/new.lua"] {
+            assert!(
+                c.write_source(path, "-- overwritten\n").is_err(),
+                "wrote through '{path}'"
+            );
+            assert!(c.get_source(path).is_none(), "read through '{path}'");
+        }
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "-- private\n");
+        assert!(!outside.join("new.lua").exists());
     }
 
     /// A game, small enough to assemble and load in the adoption tests.

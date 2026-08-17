@@ -182,6 +182,11 @@ loosened without a reason:
   no `..` or absolute escapes. That is what leaves `VmPlayer`, the FFI hosts and
   every existing tool call untouched — for them adoption is simply off, and an
   absolute path stays the error it has always been.
+- **The confinement is checked after resolving links, not just lexically.**
+  Component checks cannot see a symlink and `fs::write` follows one, so
+  `resolve_in_root` also requires the resolved path to stay under the resolved
+  workspace — otherwise a link planted in the workspace turns a confined write
+  (and read) into an arbitrary one.
 - **`..` is refused rather than resolved.** The prefix check is what confines an
   adopted root, and a component that climbs back out after it would make the
   check decorative.

@@ -369,14 +369,19 @@ mod tests {
         let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(v["final"]["entities"][0]["x"], 63);
 
-        // And a path outside the allowed directories is refused, not obeyed.
+        // And a path outside the allowed directories is refused, not obeyed. The
+        // target sits one level *above* the allowed base — an absolute path on
+        // Windows too, unlike `/etc/…`, which has no drive prefix there and so
+        // would be judged relative and refused for the wrong reason.
+        let outside = std::env::temp_dir().join("kessel-should-not-exist.lua");
+        assert!(outside.is_absolute());
         let bad = call(
             "vm_write_source",
-            json!({"path": "/etc/kessel-should-not-exist.lua", "source": src}),
+            json!({"path": outside.to_str().unwrap(), "source": src}),
         );
         let btext = bad["content"][0]["text"].as_str().unwrap();
         assert!(btext.contains("outside"), "refusal said: {btext}");
-        assert!(!std::path::Path::new("/etc/kessel-should-not-exist.lua").exists());
+        assert!(!outside.exists());
 
         std::fs::remove_dir_all(&base).ok();
     }
