@@ -52,7 +52,7 @@ cargo build --release --no-default-features   # `kessel mcp` only
 ```json
 {
   "mcpServers": {
-    "kessel": { "command": "kessel", "args": ["mcp", "--root", "/path/to/project"] }
+    "kessel": { "command": "kessel", "args": ["mcp"] }
   }
 }
 ```
@@ -60,23 +60,25 @@ cargo build --release --no-default-features   # `kessel mcp` only
 With Claude Code, that's:
 
 ```bash
-claude mcp add kessel -- kessel mcp --root .
+claude mcp add kessel -- kessel mcp
 ```
 
-The console is rooted at `--root` and **the filesystem is the source of truth**.
-`vm_write_source` writes a real `game.lua` there and `vm_assemble` re-reads it on
-every call — so the agent can equally well edit the file with its own editing
-tools and just call `vm_assemble`. No stale in-memory copy to get out of sync.
+One registration serves every project, including on a host like Claude Desktop
+whose config you can't vary per conversation: **the agent names its own
+workspace**. An absolute path to `vm_write_source` makes that directory the
+workspace for the rest of the session, and bare names resolve there afterwards.
+Adopted directories are confined to the starting workspace and your home, so this
+is a way to choose a project rather than a write-anywhere tool.
 
-`--root` is optional, which matters for a host like Claude Desktop that has one
-static config and starts in its own app bundle. Leave it out and the agent picks
-the workspace per session by passing an **absolute** path to `vm_write_source`;
-that directory holds the game and bare names resolve there afterwards. Adopted
-directories are confined to `--root` and your home, so this stays a way to choose
-a project rather than a write-anywhere tool. Without a flag or an absolute path,
-sources land in the current directory when it looks like a project, and
-`~/Documents/Kessel` when it doesn't. `$KESSEL_ROOT` works too, for a host whose
-config can set env vars but not a working directory.
+Until an agent names one, sources land in the current directory when it looks like
+a project, and in `~/Documents/Kessel` when it doesn't — a desktop app launched
+from Finder starts in `/` or its own bundle. Set `$KESSEL_ROOT` to pin the
+starting workspace instead.
+
+Either way **the filesystem is the source of truth**. `vm_write_source` writes a
+real `game.lua` and `vm_assemble` re-reads it on every call — so the agent can
+equally well edit the file with its own editing tools and just call `vm_assemble`.
+No stale in-memory copy to get out of sync.
 
 ### The tools
 

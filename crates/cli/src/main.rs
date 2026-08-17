@@ -1,7 +1,7 @@
 //! `kessel` — the fantasy console, two ways.
 //!
 //! ```text
-//! kessel mcp [--root <dir>]     # serve the vm_* tools to an agent over MCP
+//! kessel mcp                    # serve the vm_* tools to an agent over MCP
 //! kessel run <file.lua|.asm>    # open a window and play a game yourself
 //! kessel attach [workdir]        # join a running mcp session and play its VM
 //! kessel render-audio <file>    # render a game's sound to a .wav, headless
@@ -29,29 +29,24 @@ const USAGE: &str = "\
 kessel — a tiny fantasy console for agents and humans
 
 USAGE:
-    kessel mcp [--root <dir>]     Serve the VM to an agent as an MCP stdio server
+    kessel mcp                    Serve the VM to an agent as an MCP stdio server
     kessel run <file.lua|.asm>    Open a window and play a game on its own VM
     kessel attach [workdir]       Join a running `kessel mcp` and play ITS VM
     kessel render-audio <file>    Render a game's sound to a .wav (no window,
                                   no audio device — works headless and over ssh)
 
+THE WORKSPACE (`mcp`):
+    `mcp` takes no options — the agent names its own workspace. An ABSOLUTE path
+    in vm_write_source makes that directory the workspace for the rest of the
+    session, so one registered server serves a different project each time.
+    Adopted directories are confined to the starting workspace and your home.
+
+    Until it names one, sources land in the current directory when it looks like
+    a project someone chose, and in ~/Documents/Kessel when it doesn't — a
+    desktop app launched from Finder starts in `/` or its own bundle, which is no
+    place to save a game. Set $KESSEL_ROOT to pin the starting workspace instead.
+
 OPTIONS:
-    --root <dir>    For `mcp`: the working directory holding the game sources the
-                    VM compiles. Sources are read from and written to real files
-                    here, so an agent's own file-editing tools and the VM see the
-                    same game. Also settable as $KESSEL_ROOT, for hosts whose
-                    config can set env but not a working directory.
-
-                    Optional. Without it the current directory is used when it
-                    looks like a project someone chose, and ~/Documents/Kessel
-                    when it doesn't — a desktop app launched from Finder starts
-                    in `/` or its own bundle, which is no place to save a game.
-
-                    An agent can also just name an ABSOLUTE path in vm_write_source
-                    and the workspace moves there, so one registered server serves
-                    a different project each session. Adopted directories are
-                    confined to the root above and your home.
-
     For `render-audio`:
     --frames, -n <n>   How many frames to run (default 180 = 3 seconds)
     --out, -o <file>   Where to write the .wav (default: <name>.wav here)
@@ -77,10 +72,10 @@ CONTROLS:
 
 Register the MCP server with any MCP-capable agent, e.g.:
 
-    {\"command\": \"kessel\", \"args\": [\"mcp\", \"--root\", \"/path/to/project\"]}
+    {\"command\": \"kessel\", \"args\": [\"mcp\"]}
 
-`--root` can be left out — useful for a desktop host with one static config, where
-each session's workspace is whichever directory the agent writes into.
+One registration is enough for every project, including on a desktop host whose
+config you can't vary per conversation.
 ";
 
 fn main() {
@@ -103,7 +98,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("mcp") => {
-            let root = parse_root(&args[1..])?;
+            let root = mcp_root(&args[1..])?;
             let adoptable = adoptable_roots(&root);
             mcp::run(root, adoptable);
             Ok(())
@@ -129,8 +124,8 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// Reject any option before looking at arity, so `attach --root /tmp` complains
-/// about `--root` rather than about the path that follows it.
+/// Reject any option before looking at arity, so `attach --dir /tmp` complains
+/// about the flag rather than about the path that follows it.
 fn reject_options(args: &[String]) -> Result<(), String> {
     match args.iter().find(|a| a.starts_with('-')) {
         Some(opt) => Err(format!("unexpected option '{opt}'")),
@@ -154,9 +149,9 @@ fn parse_run(args: &[String]) -> Result<PathBuf, String> {
 
 /// Parse `attach`'s arguments: an optional workdir naming which session to join.
 ///
-/// It is positional rather than a `--root` flag so the two commands read the
-/// same way — `kessel run <file>` / `kessel attach <workdir>` — and so it is
-/// obvious at a glance which VM a given invocation is driving.
+/// It is positional rather than a flag so the two commands read the same way —
+/// `kessel run <file>` / `kessel attach <workdir>` — and so it is obvious at a
+/// glance which VM a given invocation is driving.
 fn parse_attach(args: &[String]) -> Result<Option<PathBuf>, String> {
     reject_options(args)?;
     match args {
@@ -190,32 +185,27 @@ fn run_attach(_root: Option<PathBuf>) -> Result<(), String> {
 const NO_PLAYER: &str = "this build has no player (compiled with --no-default-features); \
                          `kessel mcp` is available";
 
-/// Parse `mcp`'s options. The root is created if absent, so pointing an agent at
-/// a fresh project directory just works.
-///
-/// Three sources, in order: `--root`, `$KESSEL_ROOT`, then [`default_root`]. The
-/// environment variable is there for hosts whose config can set `env` but whose
-/// working directory you don't control — a desktop app launched from Finder.
-fn parse_root(args: &[String]) -> Result<PathBuf, String> {
-    let mut root: Option<PathBuf> = None;
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--root" => {
-                let dir = it.next().ok_or("--root needs a directory")?;
-                root = Some(PathBuf::from(dir));
-            }
-            other => return Err(format!("unexpected argument '{other}'")),
-        }
+/// Where `kessel mcp` starts working: `$KESSEL_ROOT` if set, else
+/// [`default_root`]. The agent moves it from there by naming an absolute path, so
+/// this is only the starting point — which is why `mcp` takes no arguments.
+fn mcp_root(args: &[String]) -> Result<PathBuf, String> {
+    if let Some(arg) = args.first() {
+        return Err(format!("`kessel mcp` takes no arguments, but got '{arg}'"));
     }
 
-    let root = match root.or_else(|| env_dir("KESSEL_ROOT")) {
+    let root = match env_dir("KESSEL_ROOT") {
         Some(r) => r,
         None => default_root(std::env::current_dir().ok(), home()),
     };
+    prepare_root(root)
+}
+
+/// Create the starting workspace if it isn't there — pointing an agent at a fresh
+/// directory should just work — and canonicalize it, since the session file is
+/// keyed off this path and the console compares it against directories the model
+/// names absolutely.
+fn prepare_root(root: PathBuf) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&root).map_err(|e| format!("create root '{}': {e}", root.display()))?;
-    // Canonical from here on: the session file is keyed off this path, and the
-    // console compares it against directories the model names absolutely.
     Ok(root.canonicalize().unwrap_or(root))
 }
 
@@ -288,14 +278,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn root_defaults_to_the_cwd() {
-        let root = parse_root(&[]).unwrap();
-        // Canonical on both sides: `parse_root` resolves the path it returns, and
-        // a test run under a symlinked checkout would otherwise fail here.
+    fn the_workspace_starts_at_the_cwd() {
+        let root = mcp_root(&[]).unwrap();
+        // Canonical on both sides: `mcp_root` resolves the path it returns, and a
+        // test run under a symlinked checkout would otherwise fail here.
         assert_eq!(
             root,
             std::env::current_dir().unwrap().canonicalize().unwrap()
         );
+    }
+
+    /// `mcp` has no arguments left — the agent names its own workspace.
+    #[test]
+    fn mcp_takes_no_arguments() {
+        for arg in ["--root", "/some/dir", "-x"] {
+            let err = mcp_root(&[arg.into()]).unwrap_err();
+            assert!(err.contains(arg), "{err}");
+        }
+    }
+
+    /// A starting workspace that isn't there yet is created, so pointing a server
+    /// at a fresh directory just works.
+    #[test]
+    fn a_missing_starting_workspace_is_created() {
+        let base = tempfile::tempdir().unwrap();
+        let fresh = base.path().join("new-workspace");
+        let out = prepare_root(fresh.clone()).unwrap();
+        assert!(out.is_dir(), "should have been created");
+        assert_eq!(out, fresh.canonicalize().unwrap());
     }
 
     /// The Claude Desktop case: launched from Finder, the cwd is `/` or the app's
@@ -365,33 +375,13 @@ mod tests {
     }
 
     #[test]
-    fn root_is_created_when_missing() {
-        let dir = std::env::temp_dir().join(format!("kessel-root-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        let out = parse_root(&["--root".into(), dir.display().to_string()]).unwrap();
-        assert!(out.is_dir(), "root should have been created");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn root_without_a_value_is_an_error() {
-        assert!(parse_root(&["--root".into()]).is_err());
-    }
-
-    #[test]
-    fn unknown_mcp_flag_is_rejected() {
-        let err = parse_root(&["--frames".into()]).unwrap_err();
-        assert!(err.contains("--frames"), "{err}");
-    }
-
-    #[test]
     fn run_takes_exactly_one_file() {
         assert_eq!(
             parse_run(&["games/bounce.lua".into()]).unwrap(),
             PathBuf::from("games/bounce.lua")
         );
         assert!(parse_run(&["a.lua".into(), "b.lua".into()]).is_err());
-        assert!(parse_run(&["--root".into()]).is_err());
+        assert!(parse_run(&["--dir".into()]).is_err());
     }
 
     /// `kessel run` with no file used to mean "attach". Now that attaching has
@@ -413,11 +403,11 @@ mod tests {
         assert!(parse_attach(&["a".into(), "b".into()]).is_err());
     }
 
-    /// The workdir is positional now; a stray `--root` should say so rather than
-    /// being silently swallowed as a path.
+    /// The workdir is positional; a stray flag should say so rather than being
+    /// silently swallowed as a path.
     #[test]
-    fn attach_rejects_a_root_flag() {
-        let err = parse_attach(&["--root".into(), "/tmp".into()]).unwrap_err();
-        assert!(err.contains("--root"), "{err}");
+    fn attach_rejects_a_flag() {
+        let err = parse_attach(&["--dir".into(), "/tmp".into()]).unwrap_err();
+        assert!(err.contains("--dir"), "{err}");
     }
 }

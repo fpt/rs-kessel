@@ -209,7 +209,7 @@ games: the Android library screen lists what sits at the *top* of `games/`, and
 
 | File | Purpose |
 |------|---------|
-| `src/main.rs` | Subcommand dispatch (`mcp`, `play`, help/version) and `--root` parsing. |
+| `src/main.rs` | Subcommand dispatch (`mcp`, `play`, help/version) and where the workspace starts. |
 | `src/mcp/mod.rs` | The stdio read → dispatch → write loop. |
 | `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
@@ -534,14 +534,18 @@ with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bu
   writes through to disk and `vm_assemble` re-reads on every call, so the agent's
   own file-editing tools and the VM never diverge. In-memory sources exist only
   for `VmPlayer` and tests.
-- **An absolute path names the workspace; `--root` only seeds it.** A stdio MCP
-  server is launched from a static config with no session identity — no id in
-  `initialize`, just a PID — so a per-session working directory cannot come from
-  the host. It comes from the model instead: an absolute path to
+- **An absolute path names the workspace, and `kessel mcp` takes no arguments.** A
+  stdio MCP server is launched from a static config with no session identity — no
+  id in `initialize`, just a PID — so a per-session working directory cannot come
+  from the host. It comes from the model instead: an absolute path to
   `vm_write_source`/`vm_assemble` adopts its parent directory, and bare names
-  resolve there afterwards (`VmConsole::adopt_path`). Without a flag the root is
-  the cwd when it looks like a project and `~/Documents/Kessel` when it doesn't,
-  because a desktop host launched from Finder starts in `/` or its own bundle.
+  resolve there afterwards (`VmConsole::adopt_path`). There is no `--root` flag,
+  because a second way to say the same thing is a second thing to keep true: it
+  bought only what an absolute path already says, while making every host config
+  project-specific. The starting directory is the cwd when it looks like a project
+  and `~/Documents/Kessel` when it doesn't (a desktop host launched from Finder
+  starts in `/` or its own bundle), or `$KESSEL_ROOT` for a host that can set env
+  vars but not a cwd.
 
   Four parts of that are load-bearing. **Adoption is opt-in per console**
   (`set_adoptable_roots`) and bounded by a list — the configured root and the
@@ -575,7 +579,7 @@ cd crates && cargo build --release
 cd crates && cargo test
 cd crates && cargo build --release --no-default-features   # headless
 
-./crates/target/release/kessel mcp --root /path/to/project
+./crates/target/release/kessel mcp
 ./crates/target/release/kessel run games/tetris.lua
 
 cd crates && cargo run -p kessel-audio --example preview   # → target/audio-preview/*.wav

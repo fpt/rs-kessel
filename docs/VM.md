@@ -150,23 +150,25 @@ sprite syntax for no extra reach.
 `vm_inspect_memory`, `vm_inspect_stacks`, `vm_get_framebuffer` (PNG),
 `vm_render_audio` (WAV + report) → `vm_snapshot`/`vm_restore`, `vm_reset`.
 
-**Sources are actual files on disk.** `kessel mcp` roots the console at `--root`,
-so `vm_write_source` writes `game.lua` there and `vm_assemble` re-reads it fresh
-on every call. This means the agent's *own* file-editing tools and `vm_assemble`
-operate on the same file: for a small tweak, edit `game.lua` directly and just
-call `vm_assemble`; for a first draft or rewrite, use `vm_write_source`.
-`VmPlayer` (`kessel run`) and the test suites set no root and keep sources in
-memory, unchanged.
+**Sources are actual files on disk.** `vm_write_source` writes `game.lua` into the
+working directory and `vm_assemble` re-reads it fresh on every call. This means
+the agent's *own* file-editing tools and `vm_assemble` operate on the same file:
+for a small tweak, edit `game.lua` directly and just call `vm_assemble`; for a
+first draft or rewrite, use `vm_write_source`. `VmPlayer` (`kessel run`) and the
+test suites set no root and keep sources in memory, unchanged.
 
-**The working directory can be chosen per session, by naming it.** `--root` is
-optional: without it the cwd is used when it looks like a project someone chose,
-and `~/Documents/Kessel` when it doesn't — a desktop host launched from Finder
-starts in `/` or its own bundle, which is no place to save a game. An agent then
-points the console at a real project by passing an **absolute** path to
-`vm_write_source` (or `vm_assemble`, for a game already on disk): its parent
-directory becomes the working directory for the rest of the session, and bare
-names resolve there from then on. One registered server, a different project each
-conversation, no per-project config.
+**The working directory is chosen per session, by naming it.** `kessel mcp` takes
+no arguments: an agent points the console at a project by passing an **absolute**
+path to `vm_write_source` (or `vm_assemble`, for a game already on disk), and its
+parent directory becomes the working directory for the rest of the session, with
+bare names resolving there from then on. One registered server, a different project
+each conversation, no per-project config.
+
+Until an agent names one, the working directory is the cwd when that looks like a
+project someone chose, and `~/Documents/Kessel` when it doesn't — a desktop host
+launched from Finder starts in `/` or its own bundle, which is no place to save a
+game. `$KESSEL_ROOT` pins the starting directory for a host that can set env vars
+but not a cwd.
 
 Four things make that safe rather than just convenient, and none should be
 loosened without a reason:

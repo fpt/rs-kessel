@@ -63,7 +63,7 @@ play: build
 
 ROOT ?= .
 mcp: build
-	@./crates/target/release/kessel mcp --root "$(ROOT)"
+	@KESSEL_ROOT="$(ROOT)" ./crates/target/release/kessel mcp
 
 # --- Android ---------------------------------------------------------------
 #

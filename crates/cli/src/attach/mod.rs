@@ -82,7 +82,7 @@ fn shell_quote(path: &str) -> String {
 /// The "which session did you mean?" error.
 ///
 /// Each line must be a command the user can actually run, which has now been
-/// wrong twice: first suggesting the `--root` flag that `attach` rejects, then
+/// wrong twice: first suggesting a flag that `attach` rejects, then
 /// printing paths unquoted so any workdir with a space became two arguments.
 /// `suggestions_survive_a_shell_and_the_parser` guards both by pasting the
 /// suggestions through a shell-like splitter and into the real parser.

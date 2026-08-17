@@ -206,8 +206,7 @@ impl VmConsole {
                 .collect();
             return Err(format!(
                 "'{}' is outside the directories this console may use ({}) — \
-                 write inside one of those, or restart the server with \
-                 --root pointing here",
+                 write inside one of those",
                 dir.display(),
                 allowed.join(", ")
             ));
@@ -694,10 +693,10 @@ fn within_any(dir: &Path, allowed: &[PathBuf]) -> bool {
 /// True if two paths name the same directory, resolving symlinks where they
 /// exist.
 ///
-/// Compared this way rather than lexically because the configured root may have
-/// arrived relative (`--root .`): a spurious mismatch here would re-adopt on
-/// every call, and re-adopting clears the ROM cache between `vm_assemble` and
-/// `vm_load_rom`.
+/// Compared this way rather than lexically because the starting root may have
+/// arrived relative or through a symlink (`$KESSEL_ROOT=.`, a linked home): a
+/// spurious mismatch here would re-adopt on every call, and re-adopting clears
+/// the ROM cache between `vm_assemble` and `vm_load_rom`.
 fn same_dir(a: &Path, b: &Path) -> bool {
     canonical_prefix(a) == canonical_prefix(b)
 }
