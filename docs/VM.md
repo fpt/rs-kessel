@@ -460,7 +460,8 @@ end
   `id`; flags bit0/1 = flip x/y), `sprn(NAME,x,y,flags)` (draw a multi-tile sprite
   at its declared size) or `sprn(id,x,y,w,h,flags)` (the raw form: a `w×h` block of
   contiguous sheet tiles, id at col/row = `id + row*w + col`, for walking a run the
-  compiler cannot see),
+  compiler cannot see; a flip mirrors the cell layout as well as each tile's
+  pixels, so a flipped 2×2 character faces the other way rather than scrambling),
   `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, `entity(x,y,tag)`, `btn(mask)→0/1`, `rnd(n)→0..n-1`,
   `peek/poke(addr[,v])` (8-bit) + `peek16/poke16`, `min(a,b)` `max(a,b)`,
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`, and the tilemap builtins above.

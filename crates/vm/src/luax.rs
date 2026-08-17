@@ -3576,7 +3576,7 @@ fn sprite_dims(rows: &[String]) -> Result<(u16, u16), String> {
              run from {min_w} to {max_w} characters"
         ));
     }
-    if max_w % 8 != 0 || rows.len() % 8 != 0 {
+    if !max_w.is_multiple_of(8) || !rows.len().is_multiple_of(8) {
         return Err(format!(
             "a sprite bigger than 8x8 must be a whole number of 8x8 tiles, but \
              this one is {max_w}x{} pixels",
