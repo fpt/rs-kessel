@@ -13,30 +13,8 @@
 use kessel_vm::device::{Input, Touch};
 use kessel_vm::VmConsole;
 
-/// Same list, same reason as `games_compile.rs`: `include_str!` means renaming a
-/// game breaks the build rather than silently dropping it from the guard.
-const GAMES: &[(&str, &str)] = &[
-    ("2048.lua", include_str!("../../../games/2048.lua")),
-    ("bounce.lua", include_str!("../../../games/bounce.lua")),
-    ("brick.lua", include_str!("../../../games/brick.lua")),
-    ("mover.lua", include_str!("../../../games/mover.lua")),
-    ("outrun.lua", include_str!("../../../games/outrun.lua")),
-    ("paint.lua", include_str!("../../../games/paint.lua")),
-    ("piano.lua", include_str!("../../../games/piano.lua")),
-    ("platform.lua", include_str!("../../../games/platform.lua")),
-    ("popn.lua", include_str!("../../../games/popn.lua")),
-    ("rogue.lua", include_str!("../../../games/rogue.lua")),
-    ("shooter.lua", include_str!("../../../games/shooter.lua")),
-    ("snake.lua", include_str!("../../../games/snake.lua")),
-    ("sokoban.lua", include_str!("../../../games/sokoban.lua")),
-    ("spectrum.lua", include_str!("../../../games/spectrum.lua")),
-    ("sprite.lua", include_str!("../../../games/sprite.lua")),
-    ("swarm.lua", include_str!("../../../games/swarm.lua")),
-    ("tetris.lua", include_str!("../../../games/tetris.lua")),
-];
-
 mod common;
-use common::INCLUDES as LIBS;
+use common::{GAMES, INCLUDES as LIBS};
 
 /// The same input cycle `games_compile.rs` uses, so a game's sound is exercised
 /// on the paths its gameplay test already walks.
