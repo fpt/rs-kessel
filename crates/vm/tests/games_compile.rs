@@ -10,13 +10,8 @@
 
 use kessel_vm::{assembler, device, luax, VmConsole};
 
-/// The shared sources under `games/lib/`, which games reach through
-/// `#include "lib/…"`. Embedded for the same reason the games are: renaming one
-/// must break this build rather than quietly stop being tested.
-const LIBS: &[(&str, &str)] = &[(
-    "lib/motion.lua",
-    include_str!("../../../games/lib/motion.lua"),
-)];
+mod common;
+use common::INCLUDES as LIBS;
 
 /// A console with every library file in its workspace, so a game that includes
 /// one compiles here the same way it does in `games/`.
@@ -457,50 +452,164 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
 }
 
 #[test]
-fn shooter_centres_bullets_and_player_can_die() {
+fn shooter_vulcan_bomb_powerup_and_boss() {
     const A: u8 = 0x10;
+    const B: u8 = 0x20;
     const SHOOTER: &str = include_str!("../../../games/shooter.lua");
+    const DIM: usize = 240;
 
-    let mut c = VmConsole::new();
-    c.write_source("s.lua", SHOOTER).unwrap();
-    c.assemble("s.lua").unwrap();
-    c.load_rom("s.lua").unwrap();
+    // Entity tags the game reports: 1/2/3 = playing/game over/stage clear at the
+    // player, 8 carries (power, bombs), 9 is the boss while it is on screen.
+    fn tagged(obs: &kessel_vm::Observation, tag: u16) -> Option<(u16, u16)> {
+        obs.entities
+            .iter()
+            .find(|e| e.tag == tag)
+            .map(|e| (e.x, e.y))
+    }
+
+    fn boot(src: &str) -> VmConsole {
+        let mut c = console();
+        c.write_source("s.lua", src).unwrap();
+        let built = c.assemble("s.lua").unwrap();
+        assert!(built.ok(), "{:?}", built.diagnostics);
+        c.load_rom("s.lua").unwrap();
+        c
+    }
+
+    // --- the vulcan fires up the fighter's centreline -----------------------
+    let mut c = boot(SHOOTER);
     c.run_frame(0);
     c.run_frame(A);
+    let (px, _) = tagged(&c.run_frame(0), 1).expect("player was not reported");
 
     let rgba = c.framebuffer_rgba();
     let mut yellow_x = Vec::new();
     for (index, pixel) in rgba.chunks_exact(4).enumerate() {
         if pixel == [0xff, 0xec, 0x27, 0xff] {
-            yellow_x.push(index % 128);
+            yellow_x.push(index % DIM);
         }
     }
-    assert!(!yellow_x.is_empty(), "fired bullet was not rendered");
-    assert_eq!(
-        (
-            *yellow_x.iter().min().unwrap(),
-            *yellow_x.iter().max().unwrap()
-        ),
-        (63, 64),
-        "bullet was not aligned to the ship centreline"
+    assert!(!yellow_x.is_empty(), "fired round was not rendered");
+    // The round's bright core is two pixels wide; the fighter is 32 wide, so its
+    // centreline is px + 16. A round that misses it looks like the gun is bolted
+    // to a wing.
+    let core = (yellow_x.iter().min().unwrap() + yellow_x.iter().max().unwrap()) / 2;
+    let centre = px as usize + 16;
+    assert!(
+        core.abs_diff(centre) <= 2,
+        "round at {core} is not on the fighter's centreline {centre}"
     );
 
-    // Make spawned enemies track the initial ship x so collision is deterministic.
-    let targeted = SHOOTER.replace("foes[i].x = rnd(120)", "foes[i].x = px");
-    let mut c = VmConsole::new();
-    c.write_source("s.lua", &targeted).unwrap();
-    c.assemble("s.lua").unwrap();
-    c.load_rom("s.lua").unwrap();
-
-    let mut player = c.run_frame(0).entities[0];
-    for _ in 0..150 {
-        player = c.run_frame(0).entities[0];
+    // --- a bomb is spent, and only while you have one -----------------------
+    let mut c = boot(SHOOTER);
+    c.run_frame(0);
+    let (_, bombs) = tagged(&c.run_frame(0), 8).expect("stats were not reported");
+    assert_eq!(bombs, 3, "the run should start with three bombs");
+    c.run_frame(B);
+    let (_, after) = tagged(&c.run_frame(0), 8).unwrap();
+    assert_eq!(after, 2, "B did not spend a bomb");
+    for _ in 0..8 {
+        c.run_frame(B);
+        c.run_frame(0);
     }
-    assert_eq!(player.tag, 2, "enemy collision did not kill the player");
+    let (_, empty) = tagged(&c.run_frame(0), 8).unwrap();
+    assert_eq!(empty, 0, "bombs went past zero");
+    // The stock is a *word*: at zero, a HUD loop bounded by `bombs - 1` counts to
+    // 65535 and blows the frame cap. Nothing here should fault.
+    for _ in 0..30 {
+        let obs = c.run_frame(B);
+        assert!(
+            obs.fault.is_none(),
+            "faulted with no bombs left: {:?}",
+            obs.fault
+        );
+    }
 
-    player = c.run_frame(A).entities[0];
-    assert_eq!(player.tag, 1, "A did not restart after game over");
-    assert_eq!(player.x, 60, "restart did not reset the ship position");
+    // --- a pickup raises the vulcan ----------------------------------------
+    // Every kill drops one, and it drops just above the player rather than over
+    // the enemy that died: whether a pickup happens to fall on a stationary
+    // player is luck, and what is being tested is that collecting one works.
+    // The grace period is stretched over the whole run too: dying resets the
+    // vulcan to 1, so a player shot down between the pickup and the assertion
+    // fails a test about pickups for a reason that is not pickups.
+    let generous = SHOOTER
+        .replace("if kills % 8 == 0 then", "if kills % 1 == 0 then")
+        .replace(
+            "add_pup(foes[i].x, foes[i].y, kind)",
+            "add_pup(px, py - 40, kind)",
+        )
+        .replace("invuln = 90", "invuln = 30000")
+        // ...and enemies fly down the player's own column, so a stationary
+        // player holding fire actually kills something. Otherwise whether this
+        // test passes is whether `rnd` put an enemy in front of the guns.
+        .replace("rnd(200) + 8", "px");
+    let mut c = boot(&generous);
+    let mut power = 0;
+    for _ in 0..600 {
+        let obs = c.run_frame(A);
+        power = tagged(&obs, 8).unwrap().0;
+        if power >= 2 {
+            break;
+        }
+    }
+    assert!(power >= 2, "collecting pickups never raised the vulcan");
+
+    // --- the boss arrives at the boss line, and can be killed ---------------
+    // Immortal for this one: the assertion is that the boss can be killed, and a
+    // stationary player parked under a five-way spread cannot survive to prove it.
+    let quick = SHOOTER
+        .replace("local BOSS_AT = 2200", "local BOSS_AT = 400")
+        .replace("local BOSS_HP = 220", "local BOSS_HP = 12")
+        .replace("invuln = 90", "invuln = 30000");
+    let mut c = boot(&quick);
+    let mut saw_boss = false;
+    let mut cleared = false;
+    for _ in 0..900 {
+        let obs = c.run_frame(A);
+        assert!(
+            obs.fault.is_none(),
+            "faulted during the boss: {:?}",
+            obs.fault
+        );
+        if tagged(&obs, 9).is_some() {
+            saw_boss = true;
+        }
+        if tagged(&obs, 3).is_some() {
+            cleared = true;
+            break;
+        }
+    }
+    assert!(saw_boss, "the boss never appeared at the boss line");
+    assert!(
+        cleared,
+        "the boss never died to a stationary player holding fire"
+    );
+
+    // --- running out of ships ends the run, and A restarts it ---------------
+    let lethal = SHOOTER
+        .replace("lives = 3", "lives = 1")
+        .replace("invuln = 90", "invuln = 0")
+        .replace("rnd(200) + 8, 0 - 16, 0, 3, 0", "px, 0 - 16, 0, 3, 0");
+    let mut c = boot(&lethal);
+    let mut over = false;
+    for _ in 0..600 {
+        if tagged(&c.run_frame(0), 2).is_some() {
+            over = true;
+            break;
+        }
+    }
+    assert!(over, "flying into enemies never ended the run");
+    c.run_frame(A);
+    let obs = c.run_frame(0);
+    assert!(
+        tagged(&obs, 1).is_some(),
+        "A did not restart after game over"
+    );
+    assert_eq!(
+        tagged(&obs, 8).unwrap(),
+        (1, 3),
+        "restart did not reset the vulcan and bombs"
+    );
 }
 
 #[test]

@@ -1,6 +1,7 @@
 package dev.kessel
 
 import dev.kessel.game.GameCatalog
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,6 +28,28 @@ class GameCatalogTest {
         assertTrue(GameCatalog.isSource("raw.asm"))
         assertTrue("the corpus is lowercase, but the rule should not care",
             GameCatalog.isSource("TETRIS.LUA"))
+    }
+
+    @Test
+    fun `every directory below the root is walked for includes`() {
+        // `lib/` is the shared one; `outrun/` is a game whose art outgrew a
+        // single file. Both have to reach the console, and a rule that only
+        // knew about `lib/` would leave outrun listed but uncompilable — on the
+        // device only, since `kessel run` resolves includes off the filesystem.
+        val tree = mapOf(
+            "" to arrayOf("outrun.lua", "snake.lua", "lib", "outrun", "images"),
+            "lib" to arrayOf("motion.lua"),
+            "outrun" to arrayOf("car.lua", "scenery.lua", "smoke.lua"),
+            "images" to arrayOf("title.png"),
+        )
+        val paths = GameCatalog.includePaths { tree[it] }
+
+        assertEquals(
+            listOf("lib/motion.lua", "outrun/car.lua", "outrun/scenery.lua", "outrun/smoke.lua"),
+            paths,
+        )
+        assertFalse("a game at the root is played, not included", paths.contains("snake.lua"))
+        assertFalse("only sources are pushed", paths.contains("images/title.png"))
     }
 
     @Test

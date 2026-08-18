@@ -202,5 +202,6 @@ with no usable GPU.
 `spectrum` (240×240, the 256-colour palette, sprite banks), `outrun` (per-scanline
 `hline` road, `spr_scaled` roadside trees, a `sin`-bobbed sun), `platform` (tile
 collision, gravity, wall-jumps), `rogue` and `sokoban` (`tilemap` +
-`fset`/`solid`, a board mutated with `mset`), `shooter` (sprite pools and a
-`text`/`number` HUD), `2048` (a 16×16 `sprn` panel frame).
+`fset`/`solid`, a board mutated with `mset`), `shooter` (sprite pools, three
+sprite banks plus a `pal` ramp of its own for the terrain, and a `text`/`number`
+HUD), `2048` (a 16×16 `sprn` panel frame).

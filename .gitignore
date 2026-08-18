@@ -5,6 +5,10 @@ target/
 # Env
 .env
 
+# Asset tools (tools/pyproject.toml, run with `uv run --project tools`)
+tools/.venv/
+tools/__pycache__/
+
 # IDE
 .vscode/
 .idea/
@@ -17,6 +21,9 @@ target/
 
 # Logs
 *.log
+
+# temp
+temp/
 
 # Android
 android/.gradle/

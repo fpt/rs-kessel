@@ -111,6 +111,18 @@ pub fn run(args: Args) -> Result<(), String> {
         .unwrap_or_else(|| "game.lua".to_string());
 
     let mut console = VmConsole::new();
+    // The file's own directory is the include root, the same way `kessel run`
+    // treats it. Without this a game that spans files renders nothing but a
+    // "cannot find include" — and this is the documented way to check a game's
+    // sound, so the games most likely to have sound worth checking were exactly
+    // the ones that could not be checked.
+    console.set_root(Some(
+        args.file
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".")),
+    ));
     console.write_source(&name, &source)?;
     let built = console.assemble(&name)?;
     if !built.ok() {
@@ -233,5 +245,39 @@ function draw() cls(0) end
         .unwrap_err();
         assert!(err.contains("did not compile"), "{err}");
         assert!(err.contains("trumpet"), "{err}");
+    }
+
+    #[test]
+    fn a_game_that_spans_files_resolves_its_includes() {
+        // The include root is the game's own directory. Getting this wrong does
+        // not render a quiet WAV, it refuses to render at all — and it refuses
+        // for exactly the games big enough to have split themselves up, which is
+        // the same set as the games with sound worth checking.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("parts")).unwrap();
+        std::fs::write(
+            dir.path().join("parts/sound.lua"),
+            "instrument beep { wave = square  decay = 60 }\nsfx ping { inst = beep  notes = \"72\" }",
+        )
+        .unwrap();
+        let game = dir.path().join("split.lua");
+        std::fs::write(
+            &game,
+            "#include \"parts/sound.lua\"\nfunction init() sfx(ping) end\nfunction update() end",
+        )
+        .unwrap();
+
+        let out = dir.path().join("split.wav");
+        run(Args {
+            file: game,
+            frames: 20,
+            out: out.clone(),
+            buttons: 0,
+        })
+        .unwrap();
+        assert!(
+            std::fs::read(&out).unwrap().len() > 44,
+            "no samples were written"
+        );
     }
 }

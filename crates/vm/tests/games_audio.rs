@@ -35,12 +35,8 @@ const GAMES: &[(&str, &str)] = &[
     ("tetris.lua", include_str!("../../../games/tetris.lua")),
 ];
 
-/// The shared sources games reach through `#include "lib/…"`, put in the
-/// workspace before a game is compiled. Same list as `games_compile.rs`.
-const LIBS: &[(&str, &str)] = &[(
-    "lib/motion.lua",
-    include_str!("../../../games/lib/motion.lua"),
-)];
+mod common;
+use common::INCLUDES as LIBS;
 
 /// The same input cycle `games_compile.rs` uses, so a game's sound is exercised
 /// on the paths its gameplay test already walks.
