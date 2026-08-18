@@ -618,13 +618,30 @@ kessel/
   that keeps the master limiter engaged. The games that declare instruments must
   also be audible, and the ones that don't must be silent — otherwise the whole
   suite passes happily over silence.
-- `crates/vm/tests/games_compile.rs` guards every file in `games/`: each must
-  compile with no diagnostics and survive 300 frames under both idle and rotating
-  button input without faulting. Sources are `include_str!`'d, so renaming a game
-  breaks the build rather than silently skipping it — every included source
+- **What is in `games/` and what the guards run is one set**, held in
+  `crates/vm/tests/common/mod.rs` (`GAMES`, `INCLUDES`) and shared by all three
+  corpus test binaries. Sources are `include_str!`'d, so renaming a game breaks
+  the build rather than silently skipping it — every included source
   (`games/lib/`, `games/outrun/`) is embedded the same way and written into the
   workspace before each game compiles, which is what makes the `#include` path
   part of the guard rather than beside it.
+
+  `include_str!` cannot catch the other half. A rename is loud; an **addition**
+  is silent, and a new `games/newgame.lua` that nobody registers skips every
+  guard at once while the suite stays green — an untested example in the corpus
+  the model is told to adapt from. So `every_game_and_include_is_registered`
+  reads the directory instead of trusting the list, and prints the entry to
+  paste. It also refuses a source nested two directories deep: Android's asset
+  walk is one level, so that file would be unreachable on the device and fine
+  under `kessel run`.
+- `crates/vm/tests/games_compile.rs` guards every file in `games/`: each must
+  compile with no diagnostics and survive 300 frames under both idle and rotating
+  button input without faulting.
+- `crates/vm/tests/player_games.rs` loads the same corpus the way a host with no
+  filesystem must — hand every include over with `write_source`, then `load`.
+  It lived in `player.rs` over a hand-picked seven games and a second copy of
+  the include list, which drifted the moment shooter was split: the game most
+  likely to break that path was the one it did not run.
 - `crates/cli/src/mcp/server.rs` has a full write → assemble → load → run test
   over the MCP surface — the thing that actually has to work for a real host.
 - `blit` in `play.rs` is tested separately (channel order, integer upscale,

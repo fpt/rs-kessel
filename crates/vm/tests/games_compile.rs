@@ -11,7 +11,7 @@
 use kessel_vm::{assembler, device, luax, VmConsole};
 
 mod common;
-use common::INCLUDES as LIBS;
+use common::{GAMES, INCLUDES as LIBS};
 
 /// A console with every library file in its workspace, so a game that includes
 /// one compiles here the same way it does in `games/`.
@@ -775,27 +775,27 @@ fn rogue_chests_and_stairs_advance_stages() {
     }
 }
 
-/// The whole shipped corpus. Kept as one list so a guard can cover every game
-/// rather than only the ones a given test happens to embed.
-const GAMES: &[(&str, &str)] = &[
-    ("2048.lua", include_str!("../../../games/2048.lua")),
-    ("bounce.lua", include_str!("../../../games/bounce.lua")),
-    ("brick.lua", include_str!("../../../games/brick.lua")),
-    ("mover.lua", include_str!("../../../games/mover.lua")),
-    ("outrun.lua", include_str!("../../../games/outrun.lua")),
-    ("paint.lua", include_str!("../../../games/paint.lua")),
-    ("piano.lua", include_str!("../../../games/piano.lua")),
-    ("platform.lua", include_str!("../../../games/platform.lua")),
-    ("popn.lua", include_str!("../../../games/popn.lua")),
-    ("rogue.lua", include_str!("../../../games/rogue.lua")),
-    ("shooter.lua", include_str!("../../../games/shooter.lua")),
-    ("snake.lua", include_str!("../../../games/snake.lua")),
-    ("sokoban.lua", include_str!("../../../games/sokoban.lua")),
-    ("spectrum.lua", include_str!("../../../games/spectrum.lua")),
-    ("sprite.lua", include_str!("../../../games/sprite.lua")),
-    ("swarm.lua", include_str!("../../../games/swarm.lua")),
-    ("tetris.lua", include_str!("../../../games/tetris.lua")),
-];
+/// Every `.lua` file in `games/` must be registered in `common::GAMES` or
+/// `common::INCLUDES`, or no guard in this crate ever runs it.
+///
+/// This is the half `include_str!` cannot cover. A rename breaks the build,
+/// which is loud and correct; an *addition* is silent. Without this, dropping
+/// `games/newgame.lua` into the corpus skips the compile guard, the audio guard
+/// and the 300-frame fault guard at once, leaves the suite green, and puts an
+/// untested example in the set the model is told to adapt from.
+///
+/// The failure message is the list entry to paste, because the fix is
+/// mechanical and the point is to make it a two-second one.
+#[test]
+fn every_game_and_include_is_registered() {
+    let gap = common::registration_gap();
+    assert!(
+        gap.is_empty(),
+        "{} file(s) in games/ are in no guard. Add to crates/vm/tests/common/mod.rs:\n{}",
+        gap.len(),
+        gap.join("\n")
+    );
+}
 
 /// Every embedded game must use LF endings.
 ///
