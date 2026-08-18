@@ -185,9 +185,14 @@ would be a long afternoon. And `write_source` invalidates **every** cached ROM,
 not just its own path — editing `util.lua` changes what `game.lua` compiles to,
 and the alternative is `vm_load_rom` silently running the previous build.
 
-Shared sources live in `games/lib/` and are included by that path. They are not
-games: the Android library screen lists what sits at the *top* of `games/`, and
-`lib` has no extension to match. `games/swarm.lua` is the worked example.
+Shared sources live in `games/lib/`, and a game too big for one file gets its own
+directory — `games/outrun/car.lua`. Both are included by the path as written.
+Neither is a game: the Android library screen lists what sits at the *top* of
+`games/`, and a directory has no extension to match. `games/swarm.lua` is the
+worked example for `lib/`, `games/outrun.lua` for a split game.
+
+The split matters most for art. A 48×32 sprite in four poses is 128 rows of
+pixels; a game's logic and its pixels in one file means neither can be read.
 
 ### `crates/vm` — `kessel-vm`
 
@@ -469,7 +474,7 @@ additions rather than a rewrite.
 | `vm/KesselNative.kt` | The raw `external fun` declarations. Names bind to symbols in `crates/ffi/src/android.rs` — renaming this class or its package breaks them at *runtime*, not build time. |
 | `vm/KesselVm.kt` | The safe handle: owns the pointer's lifetime, one lock so `close` cannot race a `tick`. |
 | `vm/Controls.kt` | Parses the ROM's control metadata, so the pad shows only the buttons that do something. |
-| `game/GameCatalog.kt` | The library, read from `assets/`. Also reads `assets/lib/`, whose files are pushed into the console before a game loads so `#include` can find them. |
+| `game/GameCatalog.kt` | The library, read from `assets/`. Also walks **every** directory below the root (`lib/`, `outrun/`), whose files are pushed into the console before a game loads so `#include` can find them — one that only knew about `lib/` would leave a split game listed but uncompilable on the device alone. |
 | `game/GameEngine.kt` | The 60 Hz thread. Draws to a `Surface`; publishes only pause/halt to Compose. |
 | `game/AudioPlayer.kt` | The audio thread: an `AudioTrack` in `ENCODING_PCM_FLOAT`, fed from a direct `ByteBuffer` the native synth renders into. `write` blocks, which is what clocks the loop — there is no timer. |
 | `game/Blit.kt` | `destRect` — integer upscale + letterbox, matching `blit` in `play.rs`. Pure, so it is testable off-device. `consoleTouch` is its inverse. |
@@ -616,9 +621,10 @@ kessel/
 - `crates/vm/tests/games_compile.rs` guards every file in `games/`: each must
   compile with no diagnostics and survive 300 frames under both idle and rotating
   button input without faulting. Sources are `include_str!`'d, so renaming a game
-  breaks the build rather than silently skipping it — `games/lib/` is embedded
-  the same way and written into the workspace before each game compiles, which
-  is what makes the `#include` path part of the guard rather than beside it.
+  breaks the build rather than silently skipping it — every included source
+  (`games/lib/`, `games/outrun/`) is embedded the same way and written into the
+  workspace before each game compiles, which is what makes the `#include` path
+  part of the guard rather than beside it.
 - `crates/cli/src/mcp/server.rs` has a full write → assemble → load → run test
   over the MCP surface — the thing that actually has to work for a real host.
 - `blit` in `play.rs` is tested separately (channel order, integer upscale,

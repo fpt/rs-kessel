@@ -362,9 +362,17 @@ opinion about directories:
 | `kessel run games/swarm.lua` | `games/x.lua` — the game's own directory |
 | Android | a source the app handed over from `assets/` before loading |
 
-In `games/`, shared sources live in `games/lib/` and are included by that path:
-`games/swarm.lua` is the worked example, and `games/lib/motion.lua` the library
-it uses.
+In `games/`, an included source lives in one of two places, both reached by the
+path as written:
+
+- `games/lib/` for helpers **shared** between games — `games/swarm.lua` is the
+  worked example and `games/lib/motion.lua` the library it uses;
+- `games/<game>/` for a **single** game that has outgrown one file — the art in
+  `games/outrun/car.lua` is 128 rows of pixels, and beside 200 lines of
+  arithmetic neither half is findable.
+
+Neither is a game: the library screens list what sits at the *top* of `games/`,
+and a directory has no extension to match.
 
 ### Tutorial snippets
 
@@ -419,15 +427,18 @@ the builtins:
 `2048` (array transforms + edge-triggered grid input, and the **swipe**
 reference — `swipe()` and `btnp` folded into one `direction()`), `snake` (record arrays +
 grid movement), `brick` (signed `int` velocity + AABB brick hits + a
-`len`-bounded pool init), `shooter` (entity pools driven by `len` +
-`clear`-reset pools + `rect_overlap`), `tetris` (bitmask pieces, runtime
+`len`-bounded pool init), `shooter` (a Raiden-shaped
+vertical shmup on the 240×240 screen: entity pools driven by `len`, banded
+terrain that carries the stage from sea to land, a levelled vulcan with steering
+missiles, bombs, pickups, and a 64×64 boss), `tetris` (bitmask pieces, runtime
 rotation, a `tilemap` well + line clears, `min`-clamped difficulty), `rogue`
 (`tilemap` + `fset`/`solid` collision + simple enemy AI + `min`-capped healing),
 `platform` (tile collision, gravity, wall-jumps, collectibles, and enemies), and
 `sokoban` (grid puzzle — `btnp` step input, a board held in the `tilemap` and
 mutated with `mset`, `text`/`number` HUD), and `outrun` (a pseudo-3D road racer
-— per-scanline `hline` road with a parabolic curve, `spr_scaled` roadside trees,
-and a `sin`-bobbed sun), `popn` (a six-key rhythm game with **no directions** —
+— per-scanline `hline` road with a parabolic curve, a 32×32 `sprn` car and
+`spr_scaled` roadside scenery each in their own `pal`/`sprbank` palette, and a
+`sin`-bobbed sun), `popn` (a six-key rhythm game with **no directions** —
 the four direction bits declared as labelled keys, so a host draws a button row),
 and `paint` (the two analog surfaces — `touch_*` fingers in console pixels and a
 `stick_x`/`stick_y` brush, with the branch-on-the-sign idiom the unsigned divide

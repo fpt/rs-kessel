@@ -175,7 +175,8 @@ sound rather than hear it.
 
 ## Sample games
 
-`shooter` (four instruments, effects fired from gameplay, and a `track`), `popn`
+`shooter` (six instruments, effects fired from gameplay, and two `track`s —
+the stage tune and the one that replaces it when the boss arrives), `popn`
 (a rhythm game — a `track` plus the effect its keys trigger), `platform` (three
 instruments and their effects, no music), and `piano` (`note_on`/`note_off` per
 touch slot, one instrument, nothing declared in advance).
