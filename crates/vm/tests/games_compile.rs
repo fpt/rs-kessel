@@ -1173,10 +1173,10 @@ fn piano_holds_and_releases_notes_under_a_finger() {
     }
 
     // The leftmost white key (C4 = 60). y = 200 sits below the black keys'
-    // reach (BLACK_H = 90 from KB_Y = 70, i.e. below 160), so a touch there
+    // reach (BLACK_H = 78 from KB_Y = 108, i.e. below 186), so a touch there
     // can only ever land on a white key. `vel_for_y`'s own formula, away
-    // from a magic number: 90 + (200-70) * 130 / 150 = 202.
-    const VEL: u8 = 202;
+    // from a magic number: 90 + (200-108) * 130 / 132 = 180.
+    const VEL: u8 = 180;
     let obs = c.run_frame(touch_at(4, 200));
     assert_eq!(
         obs.sound,
@@ -1296,5 +1296,288 @@ fn spectrum_uses_the_extended_screen_and_high_colours() {
     assert!(
         fb.iter().any(|&p| p != 0),
         "the extended framebuffer is blank"
+    );
+}
+
+/// The panel piano.lua grew: four modes, per-mode parameters, and octave
+/// buttons you can reach without a gamepad.
+///
+/// The load-bearing claim is that **a knob is a choice between patches, not an
+/// edit to one** — the bank is fixed when the ROM loads. So every assertion
+/// here is about which instrument id and how many voices a key press produces,
+/// which is the only place that choice is observable.
+#[test]
+fn piano_modes_drawbars_and_panel_octave_buttons() {
+    use kessel_audio::AudioEvent;
+    use kessel_vm::device::{Input, Touch};
+
+    const PIANO: &str = include_str!("../../../games/piano.lua");
+    let mut c = VmConsole::new();
+    c.write_source("piano.lua", PIANO).unwrap();
+    assert!(c.assemble("piano.lua").unwrap().ok());
+    c.load_rom("piano.lua").unwrap();
+
+    fn at(x: u16, y: u16) -> Input {
+        Input {
+            touches: [
+                Touch { x, y, down: true },
+                Touch::default(),
+                Touch::default(),
+                Touch::default(),
+            ],
+            ..Input::default()
+        }
+    }
+    /// A finger on a key and a second finger somewhere on the panel.
+    fn at2(kx: u16, ky: u16, px: u16, py: u16) -> Input {
+        Input {
+            touches: [
+                Touch {
+                    x: kx,
+                    y: ky,
+                    down: true,
+                },
+                Touch {
+                    x: px,
+                    y: py,
+                    down: true,
+                },
+                Touch::default(),
+                Touch::default(),
+            ],
+            ..Input::default()
+        }
+    }
+    /// One tap: press, then lift. The panel acts on the press edge, so a tap
+    /// that never lifts would be a finger still holding the button.
+    fn tap(c: &mut VmConsole, x: u16, y: u16) {
+        c.run_frame(at(x, y));
+        c.run_frame(Input::default());
+    }
+    fn tagged(obs: &kessel_vm::Observation, tag: u16) -> (u16, u16) {
+        let e = obs
+            .entities
+            .iter()
+            .find(|e| e.tag == tag)
+            .unwrap_or_else(|| panic!("no entity tagged {tag}"));
+        (e.x, e.y)
+    }
+
+    // A white key well below the black keys' reach, and the velocity
+    // `vel_for_y` gives there: 90 + (200-108) * 130 / 132.
+    const KEY_X: u16 = 4;
+    const KEY_Y: u16 = 200;
+    const VEL: u8 = 180;
+
+    // --- the octave buttons on the panel do what A and B do ----------------
+    assert_eq!(tagged(&c.run_frame(Input::default()), 10), (0, 60));
+    tap(&mut c, 160, 12); // OCT DN
+    assert_eq!(
+        tagged(&c.run_frame(Input::default()), 10),
+        (0, 48),
+        "the panel's DN button did not drop an octave"
+    );
+    tap(&mut c, 210, 12); // OCT UP
+    assert_eq!(tagged(&c.run_frame(Input::default()), 10), (0, 60));
+
+    // --- a mode button switches the patch a key plays ----------------------
+    // PIANO is instrument 0 and E.PIANO is 1 — declaration order, which is why
+    // the game looks its synth ids up in an array rather than betting on it.
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    assert_eq!(
+        obs.sound,
+        [AudioEvent::NoteOn {
+            chan: 0,
+            inst: 0,
+            note: 60,
+            vel: VEL
+        }],
+        "PIANO mode did not play the piano patch"
+    );
+    c.run_frame(Input::default());
+
+    tap(&mut c, 90, 40); // the E.PNO button
+    assert_eq!(tagged(&c.run_frame(Input::default()), 10).0, 1);
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    assert_eq!(
+        obs.sound,
+        [AudioEvent::NoteOn {
+            chan: 0,
+            inst: 1,
+            note: 60,
+            vel: VEL
+        }],
+        "E.PIANO mode did not play the epiano patch"
+    );
+
+    // Switching mode with a key still down must release what is sounding: a
+    // note left ringing in a timbre the panel no longer shows is exactly the
+    // plausibly-wrong state this console exists to avoid.
+    //
+    // It takes a *second* finger, because a role is fixed when a finger lands
+    // and does not change while it is down — dragging from a key up onto the
+    // ORGAN button is still that key's glissando, and presses nothing.
+    let obs = c.run_frame(at2(KEY_X, KEY_Y, 140, 40));
+    assert_eq!(
+        tagged(&obs, 10).0,
+        2,
+        "a second finger on the ORGAN button did not switch mode"
+    );
+    assert!(
+        obs.sound.contains(&AudioEvent::NoteOff { chan: 0 }),
+        "changing mode did not release the held note: {:?}",
+        obs.sound
+    );
+    c.run_frame(Input::default());
+
+    // And the drag that *cannot* switch mode still behaves: a finger that
+    // wanders off the keybed stops its note and keeps its role, so sliding
+    // back on plays again rather than falling through to the panel.
+    c.run_frame(at(KEY_X, KEY_Y));
+    let off = c.run_frame(at(KEY_X, 40));
+    assert!(
+        off.sound.contains(&AudioEvent::NoteOff { chan: 0 }),
+        "dragging off the keybed did not stop the note: {:?}",
+        off.sound
+    );
+    assert_eq!(
+        tagged(&off, 10).0,
+        2,
+        "a glissando that wandered onto the mode row changed the mode"
+    );
+    c.run_frame(Input::default());
+
+    // --- the organ stacks one voice per drawbar ----------------------------
+    // Default registration is 8/6/4/2, so a key sounds four partials at
+    // 16'/8'/4'/2 2/3' — note - 12 plus 0/12/24/31 — each on its own channel,
+    // with the drawbar's level scaling that partial's velocity.
+    assert_eq!(tagged(&c.run_frame(Input::default()), 12), (8, 6));
+    assert_eq!(tagged(&c.run_frame(Input::default()), 13), (4, 2));
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    assert_eq!(
+        obs.sound,
+        [
+            AudioEvent::NoteOn {
+                chan: 0,
+                inst: 2,
+                note: 48,
+                vel: 180
+            },
+            AudioEvent::NoteOn {
+                chan: 1,
+                inst: 2,
+                note: 60,
+                vel: 135
+            },
+            AudioEvent::NoteOn {
+                chan: 2,
+                inst: 2,
+                note: 72,
+                vel: 90
+            },
+            AudioEvent::NoteOn {
+                chan: 3,
+                inst: 2,
+                note: 79,
+                vel: 45
+            },
+        ],
+        "the organ did not stack its four drawbars"
+    );
+    // Lifting releases exactly the four it started — no more, no fewer.
+    let lifted = c.run_frame(Input::default());
+    assert_eq!(
+        lifted.sound,
+        [
+            AudioEvent::NoteOff { chan: 0 },
+            AudioEvent::NoteOff { chan: 1 },
+            AudioEvent::NoteOff { chan: 2 },
+            AudioEvent::NoteOff { chan: 3 },
+        ],
+        "the organ's release did not match what it started"
+    );
+
+    // --- a drawbar pulled to zero stops contributing a voice ---------------
+    // Bar 3 lives at x = 3*60+4, and the panel's last row is PAR_Y + PAR_H - 1.
+    // A drawbar is dragged rather than tapped, so this is a press on the bar
+    // followed by a drag past the bottom of the panel — which is what the
+    // clamp in `pull_bar` is for, since the hit test that started the drag
+    // never fires again once the finger leaves.
+    c.run_frame(at(200, 60));
+    assert_eq!(
+        tagged(&c.run_frame(at(200, 60)), 13).1,
+        8,
+        "pressing at the top of the drawbar did not pull it to full"
+    );
+    let dragged = c.run_frame(at(200, 210));
+    c.run_frame(Input::default());
+    assert_eq!(
+        tagged(&dragged, 13),
+        (4, 0),
+        "dragging the 2 2/3' drawbar off the bottom did not zero it"
+    );
+    // The finger crossed the whole keybed on its way down and must not have
+    // played anything: it is pulling a drawbar, and it keeps doing that.
+    assert!(
+        dragged.sound.is_empty(),
+        "a drawbar drag over the keys played notes: {:?}",
+        dragged.sound
+    );
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    assert_eq!(
+        obs.sound.len(),
+        3,
+        "a drawbar at zero still started a voice: {:?}",
+        obs.sound
+    );
+    // ...and the release still matches, rather than firing a phantom off for
+    // the partial that never started.
+    assert_eq!(c.run_frame(Input::default()).sound.len(), 3);
+
+    // --- the synth's two knobs pick between pre-declared patches -----------
+    tap(&mut c, 200, 40); // the SYNTH button
+    assert_eq!(tagged(&c.run_frame(Input::default()), 10).0, 3);
+    assert_eq!(
+        tagged(&c.run_frame(Input::default()), 11),
+        (0, 2),
+        "the synth did not boot on triangle at the third cutoff"
+    );
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    let base = match obs.sound[..] {
+        [AudioEvent::NoteOn { inst, .. }] => inst,
+        ref other => panic!("synth mode played {other:?}"),
+    };
+    c.run_frame(Input::default());
+
+    // Waveform on the panel's top row, cutoff on the bottom. The ids are
+    // contiguous in declaration order, so moving one knob moves the id by a
+    // known step — four cutoffs per waveform.
+    tap(&mut c, 90, 65); // SAW
+    assert_eq!(tagged(&c.run_frame(Input::default()), 11), (1, 2));
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    assert_eq!(
+        obs.sound,
+        [AudioEvent::NoteOn {
+            chan: 0,
+            inst: base + 4,
+            note: 60,
+            vel: VEL
+        }],
+        "changing the waveform did not change the patch"
+    );
+    c.run_frame(Input::default());
+
+    tap(&mut c, 200, 90); // the fourth cutoff
+    assert_eq!(tagged(&c.run_frame(Input::default()), 11), (1, 3));
+    let obs = c.run_frame(at(KEY_X, KEY_Y));
+    assert_eq!(
+        obs.sound,
+        [AudioEvent::NoteOn {
+            chan: 0,
+            inst: base + 5,
+            note: 60,
+            vel: VEL
+        }],
+        "changing the cutoff did not change the patch"
     );
 }
