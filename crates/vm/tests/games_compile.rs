@@ -1428,6 +1428,36 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
         "changing mode did not release the held note: {:?}",
         obs.sound
     );
+    // And it stays released. The finger is still down on the key, and a
+    // release that only lasts until the next frame is not a release: the key
+    // would restart in the *new* timbre — four organ voices, here — which is
+    // the note the mode change was meant to end.
+    let still_down = c.run_frame(at(KEY_X, KEY_Y));
+    assert!(
+        still_down.sound.is_empty(),
+        "the released key came back under the finger that never lifted: {:?}",
+        still_down.sound
+    );
+    let still_down = c.run_frame(at(KEY_X, KEY_Y));
+    assert!(
+        still_down.sound.is_empty(),
+        "the released key came back a frame later: {:?}",
+        still_down.sound
+    );
+    c.run_frame(Input::default());
+
+    // Lifting and pressing again does play, in the mode the panel now shows.
+    let repress = c.run_frame(at(KEY_X, KEY_Y));
+    assert!(
+        repress.sound.contains(&AudioEvent::NoteOn {
+            chan: 0,
+            inst: 2,
+            note: 48,
+            vel: VEL
+        }),
+        "a fresh press after the mode change did not play the organ: {:?}",
+        repress.sound
+    );
     c.run_frame(Input::default());
 
     // And the drag that *cannot* switch mode still behaves: a finger that

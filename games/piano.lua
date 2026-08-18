@@ -418,9 +418,10 @@ function voice_off(slot)
   end
 end
 
--- Every note any finger is currently holding, off — used before an octave or
--- mode change so nothing keeps ringing at a pitch, or in a timbre, that the
--- panel no longer shows for it.
+-- Every note any finger is currently holding, off — used before an octave
+-- change so nothing keeps ringing at a pitch the keybed no longer shows for
+-- it. The finger keeps ROLE_KEY, so the key under it starts again at the new
+-- octave: an octave shift retunes what is being held, it does not end it.
 function release_all()
   for s = 0, 3 do
     if active[s] == 1 then
@@ -430,9 +431,30 @@ function release_all()
   end
 end
 
+-- The same, plus the fingers: used before a mode change, where the note must
+-- *not* come back. `release_all` alone leaves a still-down finger holding
+-- ROLE_KEY over a key, and the next frame sees `active == 0` under it and
+-- starts the note again — in the new timbre, which is the note the change was
+-- meant to end. Worse in ORGAN, where one held key comes back as four voices.
+--
+-- Retiring the finger costs nothing a player would want: a role is fixed when
+-- a finger lands, so this one has already done everything it is going to do.
+-- Lift it and put it down again and it plays, in the mode the panel now shows.
+function release_and_retire()
+  for s = 0, 3 do
+    if role[s] == ROLE_KEY then
+      if active[s] == 1 then
+        voice_off(s)
+        active[s] = 0
+      end
+      role[s] = ROLE_NONE
+    end
+  end
+end
+
 function set_mode(m)
   if m ~= mode then
-    release_all()
+    release_and_retire()
     mode = m
   end
 end
