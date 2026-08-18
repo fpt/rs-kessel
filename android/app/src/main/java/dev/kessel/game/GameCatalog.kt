@@ -28,6 +28,11 @@ object GameCatalog {
      * Where shared sources live, both in `games/` and in the APK. A game reaches
      * them by name — `#include "lib/motion.lua"` — so this string is half of a
      * path that appears in the corpus and cannot be renamed on its own.
+     *
+     * It is no longer the only such directory: a game whose art outgrew one file
+     * splits it into `games/<game>/` and includes from there. [libraries] walks
+     * every directory at the root, so this constant now names the *shared* one
+     * rather than the only one.
      */
     const val LIB_DIR = "lib"
 
@@ -50,20 +55,43 @@ object GameCatalog {
         assets.open(game.fileName).bufferedReader().use { it.readText() }
 
     /**
-     * The shared sources under `lib/`, keyed by the path a game `#include`s.
+     * Every includable source below the root, keyed by the path a game
+     * `#include`s: the shared helpers in `lib/`, and the per-game directories a
+     * game splits its art into (`outrun/car.lua`).
      *
      * Handed to the console before a game is loaded — the VM cannot open an
      * asset itself, so every file a game might include has to be pushed across
      * first. All of them, not the ones a given game names: finding that out
      * would mean parsing the source here, which is the compiler's job and would
      * be a second, worse implementation of it.
+     *
+     * Walking every directory rather than just `lib/` is what lets a game split
+     * itself up at all. The alternative was to put one game's art in the shared
+     * directory, and the failure mode of getting this wrong is bad: the game is
+     * listed, the player taps it, and it fails to compile on the device only —
+     * `kessel run` resolves the same include straight off the filesystem.
+     *
+     * One level deep, because that is the shape the corpus has. A nested tree
+     * would want recursion and there is nothing to recurse into.
      */
     fun libraries(assets: AssetManager): Map<String, String> =
-        (assets.list(LIB_DIR) ?: emptyArray())
-            .filter { isSource(it) }
-            .associate { name ->
-                val path = "$LIB_DIR/$name"
-                path to assets.open(path).bufferedReader().use { it.readText() }
+        includePaths { assets.list(it) }
+            .associateWith { path ->
+                assets.open(path).bufferedReader().use { it.readText() }
+            }
+
+    /**
+     * The include paths one level below the root, given a directory lister.
+     *
+     * Separate from [libraries] so it can be tested at all: `AssetManager` is a
+     * throwing stub on the unit-test classpath, and getting this rule wrong is
+     * invisible everywhere except a real device.
+     */
+    internal fun includePaths(list: (String) -> Array<String>?): List<String> =
+        (list("") ?: emptyArray())
+            .filterNot { isSource(it) }
+            .flatMap { dir ->
+                (list(dir) ?: emptyArray()).filter { isSource(it) }.map { "$dir/$it" }
             }
 
     /** Is this asset something the VM can compile? */

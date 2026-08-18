@@ -380,6 +380,24 @@ mod tests {
 
     #[test]
     fn shipped_sample_games_load() {
+        // Sources a shipped game `#include`s. A host with no filesystem pushes
+        // them across before loading, which is what this mirrors — get it wrong
+        // and the game is a load error on that host and fine everywhere else.
+        const INCLUDES: &[(&str, &str)] = &[
+            (
+                "outrun/car.lua",
+                include_str!("../../../games/outrun/car.lua"),
+            ),
+            (
+                "outrun/scenery.lua",
+                include_str!("../../../games/outrun/scenery.lua"),
+            ),
+            (
+                "outrun/smoke.lua",
+                include_str!("../../../games/outrun/smoke.lua"),
+            ),
+        ];
+
         // The games/ assets shipped for `kessel run` must stay valid.
         for (src, name) in [
             (include_str!("../../../games/2048.lua"), "2048.lua"),
@@ -391,6 +409,9 @@ mod tests {
             (include_str!("../../../games/outrun.lua"), "outrun.lua"),
         ] {
             let p = VmPlayer::new();
+            for (path, lib) in INCLUDES {
+                assert!(p.write_source(path, lib).is_empty());
+            }
             let err = p.load(src.to_string(), name.to_string());
             assert!(err.is_empty(), "{name} failed to load: {err}");
             p.tick(0);
