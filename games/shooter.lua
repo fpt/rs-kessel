@@ -173,6 +173,21 @@ local SHIP_HIT_OFF = 12              -- wings are decoration, the fuselage is yo
 local BOSS_HP = 220
 local BOSS_W = 64
 
+-- ----------------------------------------------------------- observation ---
+-- What this game reports to a harness. `entity` is for a thing with a *place*;
+-- `signal` is for a number that moves over *time*, which is most of what a
+-- playtest is actually asking about. These used to be packed into entity
+-- coordinates — `entity(score, lives, 30)` — and a report could only ever print
+-- `30: 0,2`, so every reading of it had to be done by a human with the source
+-- open.
+signal score
+signal lives
+signal power
+signal bombs
+signal state          -- 0 playing, 1 game over, 2 stage clear
+signal foes_alive     -- how much is on the screen right now
+signal boss_hp: int   -- signed: a killing blow overshoots zero
+
 -- ---------------------------------------------------------------- state ----
 record Shot { x: int, y: int, vx: int, vy: int, kind, alive }
 record Foe  { x: int, y: int, vx: int, kind, hp: int, t, ground, alive }
@@ -198,8 +213,18 @@ local score = 0
 local flash = 0            -- bomb screen-flash timer
 
 local scroll = 239         -- world row at the top of the screen
-local spawn = 0
 local wave = 0             -- animates the surf
+
+-- The wave machine. `wv_t` counts down to the next release; when a formation is
+-- spent it counts down the rest instead. See `begin_wave` for why any of this
+-- exists.
+local wv_t: int = 20       -- frames until the next release, or the next wave
+local wv_left = 0          -- enemies still to release in this formation
+local wv_i = 0             -- index within the formation
+local wv_form = 0
+local wv_kind = 0          -- one kind per formation, chosen when it starts
+local wv_base: int = 100   -- where the formation is anchored
+local wv_count = 0         -- formations launched; this is what cycles the shape
 
 local state = 0            -- 0 playing, 1 game over, 2 stage clear
 local warn_t = 0
@@ -215,7 +240,9 @@ function init()
   px = 104  py = 170  lean = 0
   cd = 0  mcd = 0  power = 1  bombs = 3  lives = 3  invuln = 90
   score = 0  flash = 0
-  scroll = 239  spawn = 0  wave = 0
+  scroll = 239  wave = 0
+  wv_t = 20  wv_left = 0  wv_i = 0  wv_form = 0  wv_kind = 0
+  wv_base = 100  wv_count = 0
   state = 0  warn_t = 0
   bx = 88  by = 0 - 64  bhp = 0  bt = 0  bactive = 0
 
@@ -365,6 +392,7 @@ function bomb()
 end
 
 function kill_player()
+  entity(px, py, 42)
   add_boom(px, py, 1)
   sfx(bigboom)
   lives = lives - 1
@@ -398,28 +426,122 @@ function aim_x(fx: int)
   return 0
 end
 
-function spawn_wave()
-  local frontier = scroll
-  if frontier < SEA_END then
-    -- Open sea: jets in from the top, the odd patrol boat riding the swell.
-    if rnd(3) == 0 then
-      add_foe(rnd(200) + 8, 0 - 16, 1, 6, 1)          -- boat
-    else
-      add_foe(rnd(200) + 8, 0 - 16, 0, 3, 0)          -- jet
-    end
-  elseif frontier < BEACH_END then
-    -- The beach: emplacements dug into the sand, jets overhead.
-    if rnd(2) == 0 then
-      add_foe(rnd(200) + 8, 0 - 16, 2, 10, 1)         -- gun
-    else
-      add_foe(rnd(200) + 8, 0 - 16, 0, 3, 0)          -- jet
-    end
+-- A stage is a rhythm, not a metronome.
+--
+-- This released one enemy every forty frames, from the first row to the boss
+-- door, for the whole stage. `vm_playtest` reported it as
+-- `every 40 frames (40..40, sd 0.0)`, identical under every way of playing —
+-- and had a *random flailer* outscoring every deliberate strategy, which is
+-- what a stage with nothing to read looks like from the inside.
+--
+-- Four things replace it, and each is doing a specific job:
+--
+-- * **A wave is a formation**, several enemies on a shape released a few frames
+--   apart, not one enemy alone. A shape is the thing a player can answer.
+-- * **One kind per formation.** A wave of mixed types is not a formation, it is
+--   three unrelated enemies that happened to arrive together — which is what
+--   the old `rnd`-per-spawn produced and why nothing was recognisable.
+-- * **The shape cycles**, it is not drawn at random. A pattern seen a second
+--   time is the only kind anyone can learn.
+-- * **The rest between waves shrinks** as the boss gets closer, so the stage
+--   has a slope. The rest is the load-bearing half: without it the busy
+--   stretches have nothing to be busy against.
+local WV_LINE = 0     -- abreast: one sweep takes the row, if you start in time
+local WV_ECHELON = 1  -- a staircase, so the near end is always the cheap one
+local WV_COLUMN = 2   -- nose to tail down one lane: hold the lane, hold fire
+local WV_PINCER = 3   -- both edges inward; you cannot cover both, so pick
+
+local REST_MAX = 105  -- rest after a wave at the top of the stage
+local REST_MIN = 45   -- ...and at the boss door
+local WV_MAX = 4      -- biggest formation. The pool is ten and they overlap.
+
+-- How long to rest after a wave: linear in how far into the stage we are, so
+-- the last stretch is about twice as dense as the first.
+--
+-- `scroll` is divided down before it is scaled. `71 * 2200` overflows a word,
+-- and an overflow here would read as a *negative* rest — the stage would go
+-- from paced to a solid wall at whatever row the multiply wrapped on.
+function wave_rest()
+  local d = scroll / 32
+  local dmax = BOSS_AT / 32
+  if d > dmax then d = dmax end
+  return REST_MAX - (REST_MAX - REST_MIN) * d / dmax
+end
+
+-- Frames between two enemies of one formation. Per shape, because the gap is
+-- what draws the shape: a line wants them nearly together, a column wants them
+-- strung out down the lane.
+function wave_gap()
+  if wv_form == WV_LINE then return 3 end
+  if wv_form == WV_COLUMN then return 14 end
+  return 6
+end
+
+function foe_hp_for(k)
+  if k == 1 then return 6 end
+  if k == 2 then return 10 end
+  if k == 3 then return 8 end
+  return 3
+end
+
+function begin_wave()
+  wv_form = wv_count % 4
+  wv_left = 2 + wv_count / 5
+  if wv_left > WV_MAX then wv_left = WV_MAX end
+  wv_i = 0
+  wv_base = 24 + rnd(160)
+
+  -- The region still decides what flies, but it decides it once per formation
+  -- and by count rather than by `rnd`, so the same stretch of stage sends the
+  -- same sequence twice.
+  if scroll < SEA_END then
+    if wv_count % 3 == 0 then wv_kind = 1 else wv_kind = 0 end
+  elseif scroll < BEACH_END then
+    if wv_count % 2 == 0 then wv_kind = 2 else wv_kind = 0 end
   else
-    -- Inland: armour.
-    local r = rnd(4)
-    if r == 0 then add_foe(rnd(200) + 8, 0 - 16, 0, 3, 0)
-    elseif r == 1 then add_foe(rnd(200) + 8, 0 - 16, 2, 10, 1)
-    else add_foe(rnd(200) + 8, 0 - 16, 3, 8, 1) end   -- tank
+    local r = wv_count % 4
+    if r == 0 then wv_kind = 0
+    elseif r == 1 then wv_kind = 2
+    else wv_kind = 3 end
+  end
+
+  wv_count = wv_count + 1
+  wv_t = 1
+  entity(scroll, wv_form, 43)   -- a formation began: the coarse rhythm
+end
+
+-- Put the next member of the current formation on the screen.
+function release_foe()
+  local x: int = wv_base
+  local y: int = 0 - 16
+  if wv_form == WV_LINE then
+    x = wv_base + wv_i * 30
+  elseif wv_form == WV_ECHELON then
+    x = wv_base + wv_i * 22
+    y = 0 - 16 - wv_i * 12
+  elseif wv_form == WV_PINCER then
+    if wv_i % 2 == 0 then x = 8 + wv_i * 14 else x = 216 - wv_i * 14 end
+  end
+  if x < 8 then x = 8 end
+  if x > 216 then x = 216 end
+
+  local g = 1
+  if wv_kind == 0 then g = 0 end
+  entity(scroll, wv_kind, 40)   -- an enemy entered play: the fine rhythm
+  add_foe(x, y, wv_kind, foe_hp_for(wv_kind), g)
+end
+
+-- One frame of the wave machine: release, or rest, or start the next formation.
+function update_waves()
+  wv_t = wv_t - 1
+  if wv_t > 0 then return end
+  if wv_left > 0 then
+    release_foe()
+    wv_left = wv_left - 1
+    wv_i = wv_i + 1
+    if wv_left > 0 then wv_t = wave_gap() else wv_t = wave_rest() end
+  else
+    begin_wave()
   end
 end
 
@@ -568,6 +690,7 @@ end
 local kills = 0
 
 function foe_died(i)
+  entity(foes[i].x, foes[i].y, 41)
   add_boom(foes[i].x, foes[i].y, 0)
   sfx(explode)
   score = score + 10
@@ -704,10 +827,9 @@ function update()
     return
   end
 
-  -- Still flying the stage: scroll, spawn, and watch for the boss line.
+  -- Still flying the stage: scroll, run the wave machine, watch for the boss.
   scroll = scroll + SCROLL_SPEED
-  spawn = spawn + 1
-  if spawn % 40 == 0 then spawn_wave() end
+  update_waves()
 
   if scroll > BOSS_AT - 300 and warn_t == 0 then
     warn_t = 1
@@ -840,6 +962,14 @@ function draw_hud()
   end
 end
 
+function live_foes()
+  local n = 0
+  for i = 0, len(foes) - 1 do
+    if foes[i].alive == 1 then n = n + 1 end
+  end
+  return n
+end
+
 function draw()
   draw_terrain()
   draw_props()
@@ -869,6 +999,7 @@ function draw()
       elseif foes[i].kind == 2 then id = gun  f = 2
       elseif foes[i].kind == 3 then id = tank  f = 2 end
       sprn(id, foes[i].x, foes[i].y, 2, 2, f)
+      entity(foes[i].x, foes[i].y, 10 + foes[i].kind)
     end
   end
   sprbank(0)
@@ -938,10 +1069,28 @@ function draw()
     text("STAGE CLEAR", 76, 110, 10)
     text("PRESS A", 92, 124, 7)
   end
-  -- Reported for observation: where the player is and what state the run is in,
-  -- the two upgrade counters (an agent cannot read a HUD), and the boss while it
-  -- is on the screen.
-  entity(px, py, state + 1)
-  entity(power, bombs, 8)
-  if bactive == 1 then entity(bx, by, 9) end
+  -- Reported for observation.
+  --
+  -- Places go through `entity`: the player, the live enemies by kind, and the
+  -- boss while it is on the screen. Tags 40-43 are the *events* — an enemy
+  -- entering play, a kill, a death, a formation starting — reported on the one
+  -- frame they happen, so a playtest can read their spacing as a rhythm rather
+  -- than only count them.
+  --
+  -- Numbers go through `signal`, by name. `state` is one of them now: it used to
+  -- ride in the player's *tag* (`state + 1`), which made a game over arrive as a
+  -- different tag rather than a different value — so the set of things being
+  -- reported changed shape when the player died, and every table had a hole in
+  -- it.
+  entity(px, py, 1)
+  if bactive == 1 then
+    entity(bx, by, 9)
+    signal(boss_hp, bhp)
+  end
+  signal(score, score)
+  signal(lives, lives)
+  signal(power, power)
+  signal(bombs, bombs)
+  signal(state, state)
+  signal(foes_alive, live_foes())
 end

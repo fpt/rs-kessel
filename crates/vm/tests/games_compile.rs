@@ -458,13 +458,23 @@ fn shooter_vulcan_bomb_powerup_and_boss() {
     const SHOOTER: &str = include_str!("../../../games/shooter.lua");
     const DIM: usize = 240;
 
-    // Entity tags the game reports: 1/2/3 = playing/game over/stage clear at the
-    // player, 8 carries (power, bombs), 9 is the boss while it is on screen.
+    // Tag 1 is the player and tag 9 the boss while it is on screen. Everything
+    // that is a *number* — score, lives, power, bombs, the run's state — is a
+    // named signal, so this reads them by name rather than unpacking a
+    // coordinate pair that was never a coordinate.
     fn tagged(obs: &kessel_vm::Observation, tag: u16) -> Option<(u16, u16)> {
         obs.entities
             .iter()
             .find(|e| e.tag == tag)
             .map(|e| (e.x, e.y))
+    }
+
+    fn sig(obs: &kessel_vm::Observation, name: &str) -> i32 {
+        obs.signals
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("no signal named '{name}'"))
+            .1
     }
 
     fn boot(src: &str) -> VmConsole {
@@ -503,17 +513,18 @@ fn shooter_vulcan_bomb_powerup_and_boss() {
     // --- a bomb is spent, and only while you have one -----------------------
     let mut c = boot(SHOOTER);
     c.run_frame(0);
-    let (_, bombs) = tagged(&c.run_frame(0), 8).expect("stats were not reported");
-    assert_eq!(bombs, 3, "the run should start with three bombs");
+    assert_eq!(
+        sig(&c.run_frame(0), "bombs"),
+        3,
+        "the run should start with three bombs"
+    );
     c.run_frame(B);
-    let (_, after) = tagged(&c.run_frame(0), 8).unwrap();
-    assert_eq!(after, 2, "B did not spend a bomb");
+    assert_eq!(sig(&c.run_frame(0), "bombs"), 2, "B did not spend a bomb");
     for _ in 0..8 {
         c.run_frame(B);
         c.run_frame(0);
     }
-    let (_, empty) = tagged(&c.run_frame(0), 8).unwrap();
-    assert_eq!(empty, 0, "bombs went past zero");
+    assert_eq!(sig(&c.run_frame(0), "bombs"), 0, "bombs went past zero");
     // The stock is a *word*: at zero, a HUD loop bounded by `bombs - 1` counts to
     // 65535 and blows the frame cap. Nothing here should fault.
     for _ in 0..30 {
@@ -542,12 +553,12 @@ fn shooter_vulcan_bomb_powerup_and_boss() {
         // ...and enemies fly down the player's own column, so a stationary
         // player holding fire actually kills something. Otherwise whether this
         // test passes is whether `rnd` put an enemy in front of the guns.
-        .replace("rnd(200) + 8", "px");
+        .replace("wv_base = 24 + rnd(160)", "wv_base = px");
     let mut c = boot(&generous);
     let mut power = 0;
     for _ in 0..600 {
         let obs = c.run_frame(A);
-        power = tagged(&obs, 8).unwrap().0;
+        power = sig(&obs, "power");
         if power >= 2 {
             break;
         }
@@ -574,7 +585,7 @@ fn shooter_vulcan_bomb_powerup_and_boss() {
         if tagged(&obs, 9).is_some() {
             saw_boss = true;
         }
-        if tagged(&obs, 3).is_some() {
+        if sig(&obs, "state") == 2 {
             cleared = true;
             break;
         }
@@ -589,11 +600,17 @@ fn shooter_vulcan_bomb_powerup_and_boss() {
     let lethal = SHOOTER
         .replace("lives = 3", "lives = 1")
         .replace("invuln = 90", "invuln = 0")
-        .replace("rnd(200) + 8, 0 - 16, 0, 3, 0", "px, 0 - 16, 0, 3, 0");
+        // Aim every release at the player, so colliding is certain rather than
+        // likely. Coupled to the one `add_foe` call in `release_foe` — if the
+        // wave machine is rewritten again, this is the line to re-point.
+        .replace(
+            "add_foe(x, y, wv_kind, foe_hp_for(wv_kind), g)",
+            "add_foe(px, y, wv_kind, foe_hp_for(wv_kind), g)",
+        );
     let mut c = boot(&lethal);
     let mut over = false;
     for _ in 0..600 {
-        if tagged(&c.run_frame(0), 2).is_some() {
+        if sig(&c.run_frame(0), "state") == 1 {
             over = true;
             break;
         }
@@ -606,7 +623,7 @@ fn shooter_vulcan_bomb_powerup_and_boss() {
         "A did not restart after game over"
     );
     assert_eq!(
-        tagged(&obs, 8).unwrap(),
+        (sig(&obs, "power"), sig(&obs, "bombs")),
         (1, 3),
         "restart did not reset the vulcan and bombs"
     );
