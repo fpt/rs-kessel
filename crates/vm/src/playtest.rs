@@ -36,6 +36,24 @@ use crate::VmConsole;
 /// 30 seconds a blind run stops telling anyone anything.
 pub const MAX_FRAMES: u64 = 1800;
 
+/// A policy's name as a table column, and the width it will occupy.
+///
+/// Both are counted in **characters**, not bytes, and both have to be: a name
+/// comes straight from the tool's JSON with no ASCII restriction, so
+/// `&name[..11]` panics in the middle of a multibyte character and `name.len()`
+/// as a column width over-counts one — a table that either crashes or comes out
+/// ragged, from input the tool accepted without complaint. `Formatter::pad`
+/// counts characters, so this counts them the same way.
+const COL_MAX: usize = 11;
+
+fn column(name: &str) -> String {
+    name.chars().take(COL_MAX).collect()
+}
+
+fn column_width(name: &str) -> usize {
+    name.chars().count().min(COL_MAX)
+}
+
 /// Ceiling on how many ways one call may play. Eight policies at the frame cap
 /// is already four minutes of emulated play per call.
 pub const MAX_POLICIES: usize = 8;
@@ -55,16 +73,31 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// A segment longer than the run is clamped to [`MAX_FRAMES`], and that is
+    /// an **identity**, not a safety clamp: `at` is only ever asked for frames
+    /// below the run's own cap, so shortening a segment to that cap cannot
+    /// change an answer anyone reads. Without it a script of
+    /// `frames: 18446744073709551615` — which the tool's JSON accepts, since
+    /// `as_u64` has no opinion — sums into an overflow, and the period a
+    /// policy loops on is the one number that must not wrap.
     pub fn new(name: impl Into<String>, segments: Vec<(Input, u64)>) -> Self {
         Self {
             name: name.into(),
-            segments: segments.into_iter().filter(|(_, n)| *n > 0).collect(),
+            segments: segments
+                .into_iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(input, n)| (input, n.min(MAX_FRAMES)))
+                .collect(),
         }
     }
 
     /// The input for frame `i` of this policy's run, looping the segments.
     fn at(&self, i: u64) -> Input {
-        let period: u64 = self.segments.iter().map(|(_, n)| *n).sum();
+        // Saturating, so the sum stays honest however many segments arrive.
+        let period: u64 = self
+            .segments
+            .iter()
+            .fold(0u64, |acc, (_, n)| acc.saturating_add(*n));
         if period == 0 {
             return Input::default();
         }
@@ -402,7 +435,7 @@ impl PlaytestSummary {
             let cw = self
                 .runs
                 .iter()
-                .map(|r| r.name.len().min(11))
+                .map(|r| column_width(&r.name))
                 .max()
                 .unwrap_or(8)
                 .max(6);
@@ -410,11 +443,7 @@ impl PlaytestSummary {
             out.push_str("\nsignals — where each way of playing left each named scalar:\n");
             out.push_str(&format!("  {:<label$}", "signal", label = label));
             for r in &self.runs {
-                out.push_str(&format!(
-                    " {:>cw$}",
-                    &r.name[..r.name.len().min(11)],
-                    cw = cw
-                ));
+                out.push_str(&format!(" {:>cw$}", column(&r.name), cw = cw));
             }
             out.push('\n');
             for n in &names {
@@ -595,14 +624,14 @@ impl PlaytestSummary {
         let w = self
             .runs
             .iter()
-            .map(|r| r.name.len().min(11))
+            .map(|r| column_width(&r.name))
             .max()
             .unwrap_or(8)
             .max(6);
         let header = |out: &mut String| {
             out.push_str(&format!("  {:<8}", "tag"));
             for r in &self.runs {
-                out.push_str(&format!(" {:>w$}", &r.name[..r.name.len().min(11)], w = w));
+                out.push_str(&format!(" {:>w$}", column(&r.name), w = w));
             }
             out.push('\n');
         };
@@ -767,6 +796,42 @@ function draw()
   if t % 7 == 0 then entity(t, 0, 2) end
 end
 "#;
+
+    /// A policy name is agent-supplied JSON with no ASCII restriction, and the
+    /// report puts it in a fixed-width column. Truncating by byte offset split
+    /// a multibyte character and panicked — turning a valid call into a failed
+    /// one, and only for names nobody types while testing.
+    #[test]
+    fn a_non_ascii_policy_name_does_not_split_a_character() {
+        let mut c = console(ALIVE);
+        let policies = vec![
+            Policy::new("ししししししししし", vec![(Input::default(), 4)]),
+            Policy::new("mash-a", vec![(held(&["A"]), 2), (Input::default(), 2)]),
+        ];
+        let text = playtest(&mut c, &policies, 40).unwrap().report();
+        assert!(
+            text.contains("ししししししししし"),
+            "the name was mangled out of the report:\n{text}"
+        );
+    }
+
+    /// `frames` arrives as an unbounded `as_u64`, so a script may name a segment
+    /// longer than any run. Summing two of those overflowed the period a policy
+    /// loops on — a panic in debug, a wrapped period in release.
+    #[test]
+    fn an_absurd_segment_length_does_not_overflow_the_period() {
+        let huge = u64::MAX;
+        let p = Policy::new("huge", vec![(held(&["A"]), huge), (Input::default(), huge)]);
+        // Clamping is an identity here: every frame of any run still reads the
+        // first segment, exactly as an unbounded period would have given.
+        for i in [0u64, 1, MAX_FRAMES - 1] {
+            assert_eq!(p.at(i), held(&["A"]), "frame {i} left the first segment");
+        }
+
+        let mut c = console(ALIVE);
+        let text = playtest(&mut c, &[p], 30).unwrap().report();
+        assert!(text.contains("huge"), "the policy never ran:\n{text}");
+    }
 
     #[test]
     fn a_game_that_ignores_input_is_named_as_one() {
