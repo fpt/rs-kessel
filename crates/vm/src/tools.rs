@@ -16,6 +16,8 @@ use crate::device::{Input, Touch, MAX_TOUCHES, STICK_FULL};
 
 use super::{buttons_from_names, VmConsole};
 
+use crate::playtest;
+
 /// A console shared between everything that drives it. Exported because a host
 /// that wants an attached player needs to hold one alongside the tools.
 pub type Shared = Arc<Mutex<VmConsole>>;
@@ -65,6 +67,7 @@ pub fn vm_tool_handlers_on(console: Shared) -> Vec<Box<dyn VmTool>> {
         Box::new(Snapshot(console.clone())),
         Box::new(Restore(console.clone())),
         Box::new(Reset(console.clone())),
+        Box::new(Playtest(console.clone())),
         Box::new(RenderAudio(console)),
     ]
 }
@@ -756,6 +759,98 @@ impl VmTool for Restore {
         let id = str_arg(&args, "id")?;
         self.0.lock().restore(&id).map_err(VmToolError)?;
         Ok(ToolResult::text(format!("restored snapshot {id}")))
+    }
+}
+
+// ---- vm_playtest ----
+
+struct Playtest(Shared);
+impl VmTool for Playtest {
+    fn name(&self) -> &str {
+        "vm_playtest"
+    }
+    fn description(&self) -> &str {
+        "Play the CURRENT state several ways at once and report the difference: \
+         how evenly the game's events are spaced, how much is on screen, and \
+         whether two ways of playing end up anywhere different. Answers the one \
+         question a screenshot cannot — does this game respond to how it is \
+         played? Reads the game's own entity() reports, so a game that reports \
+         nothing can only be measured by whether the screen changed. Leaves the \
+         machine exactly where it found it."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "frames": {
+                    "type": "integer",
+                    "description": "Frames per policy (default 600 = 10 seconds; max 1800)."
+                },
+                "policies": {
+                    "type": "array",
+                    "description": "Ways of playing to compare. Each is a name plus a \
+                                    script that LOOPS for the whole run, so \"mash A\" is \
+                                    two segments, not six hundred. Omit for the default \
+                                    five (idle, mash-a, hold-right, sweep, random).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "script": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "buttons": {"type": "array", "items": {"type": "string"}},
+                                        "frames": {"type": "integer"}
+                                    }
+                                }
+                            }
+                        },
+                        "required": ["name", "script"]
+                    }
+                }
+            }
+        })
+    }
+    fn call(&self, args: Value) -> Result<ToolResult, VmToolError> {
+        let frames = args
+            .get("frames")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(600)
+            .clamp(1, playtest::MAX_FRAMES);
+
+        let policies = match args.get("policies").and_then(|v| v.as_array()) {
+            Some(items) if !items.is_empty() => items
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let name = p
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("policy")
+                        .to_string();
+                    let name = if name.is_empty() {
+                        format!("policy{i}")
+                    } else {
+                        name
+                    };
+                    playtest::Policy::new(name, script_segments(p, 1))
+                })
+                .collect(),
+            _ => playtest::default_policies(frames),
+        };
+
+        let mut c = self.0.lock();
+        if !c.rom_loaded {
+            return Ok(ToolResult::text(
+                "no ROM loaded — call vm_load_rom first".into(),
+            ));
+        }
+        match playtest::playtest(&mut c, &policies, frames) {
+            Ok(s) => Ok(ToolResult::text(s.report())),
+            Err(e) => Ok(ToolResult::text(format!("playtest failed: {e}"))),
+        }
     }
 }
 
