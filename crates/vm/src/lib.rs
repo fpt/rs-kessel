@@ -26,6 +26,7 @@ pub mod device;
 pub mod isa;
 pub mod luax;
 pub mod player;
+pub mod playtest;
 pub mod png;
 pub mod tool;
 pub mod tools;
@@ -68,6 +69,8 @@ pub struct VmConsole {
     controls: HashMap<String, luax::Controls>,
     /// Sound banks per source path, and the one the loaded ROM declared.
     banks: HashMap<String, kessel_audio::SoundBank>,
+    /// Declared signal names per source path (see [`luax::SignalDef`]).
+    signals: HashMap<String, Vec<luax::SignalDef>>,
     /// Sound the **reset vector** asked for, waiting for a host to collect it.
     ///
     /// `init()` runs at load, outside any frame, and the device's log is
@@ -90,6 +93,9 @@ pub struct VmConsole {
     /// Control metadata of the currently loaded ROM (default until a load).
     active_controls: luax::Controls,
     active_bank: kessel_audio::SoundBank,
+    /// Signal metadata of the currently loaded ROM, so an observation can say
+    /// `score` where the device only knows `id 0`.
+    active_signals: Vec<luax::SignalDef>,
     /// Host-play pause state (managed by [`play_tick`](Self::play_tick)).
     paused: bool,
     prev_pause_down: bool,
@@ -125,12 +131,14 @@ impl VmConsole {
             roms: HashMap::new(),
             controls: HashMap::new(),
             banks: HashMap::new(),
+            signals: HashMap::new(),
             reset_sound: Vec::new(),
             audio_epoch: 0,
             modes: HashMap::new(),
             active_mode: VideoMode::default(),
             active_controls: luax::Controls::default(),
             active_bank: kessel_audio::SoundBank::default(),
+            active_signals: Vec::new(),
             paused: false,
             prev_pause_down: false,
             snapshots: HashMap::new(),
@@ -147,6 +155,7 @@ impl VmConsole {
         self.roms.clear();
         self.controls.clear();
         self.banks.clear();
+        self.signals.clear();
         self.modes.clear();
     }
 
@@ -313,7 +322,7 @@ impl VmConsole {
         // luax (Lua-ish) dialect: compile to assembler first. Compiler
         // diagnostics are returned in an otherwise-empty `Assembled`. The
         // control-layout metadata rides along and is cached for `load_rom`.
-        let (built, controls, mode, bank) = if is_lua(path) {
+        let (built, controls, mode, bank, signals) = if is_lua(path) {
             let compiled = luax::compile_with(src, &mut |inc: &str| self.get_source(inc));
             if !compiled.ok() {
                 return Ok(assembler::Assembled {
@@ -327,6 +336,7 @@ impl VmConsole {
                 compiled.controls,
                 compiled.mode,
                 compiled.bank,
+                compiled.signals,
             )
         } else {
             // Raw assembly has no `controls`, `screen`, or `instrument` block;
@@ -336,6 +346,7 @@ impl VmConsole {
                 luax::Controls::default(),
                 VideoMode::default(),
                 kessel_audio::SoundBank::default(),
+                Vec::new(),
             )
         };
 
@@ -343,6 +354,7 @@ impl VmConsole {
             self.roms.insert(path.to_string(), built.rom.clone());
             self.controls.insert(path.to_string(), controls);
             self.banks.insert(path.to_string(), bank);
+            self.signals.insert(path.to_string(), signals);
             self.modes.insert(path.to_string(), mode);
         }
         Ok(built)
@@ -364,6 +376,7 @@ impl VmConsole {
         self.prev_fb = self.vm.devices.framebuffer.clone();
         self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
         self.active_bank = self.banks.get(path).cloned().unwrap_or_default();
+        self.active_signals = self.signals.get(path).cloned().unwrap_or_default();
         self.reset_sound = self.vm.devices.sound.clone();
         self.audio_epoch += 1;
         self.paused = false;
@@ -467,6 +480,27 @@ impl VmConsole {
             data_stack: self.vm.data_stack(),
             return_stack_depth: self.vm.return_stack_depth(),
             entities: self.vm.devices.entities.clone(),
+            // Resolved here, because this is the only layer that holds both the
+            // device's ids and the ROM's names. A signal the ROM never declared
+            // is dropped rather than reported as a number: the device cannot
+            // produce one from luax, so it means hand-written assembly wrote a
+            // port it did not declare, and inventing `signal 7` for it would put
+            // a name in the report that is in no source file.
+            signals: self
+                .vm
+                .devices
+                .signals
+                .iter()
+                .filter_map(|s| {
+                    let def = self.active_signals.get(s.id as usize)?;
+                    let value = if def.signed {
+                        s.value as i16 as i32
+                    } else {
+                        s.value as i32
+                    };
+                    Some((def.name.clone(), value, def.signed))
+                })
+                .collect(),
             sound: self.vm.devices.sound.clone(),
             halted: self.vm.halted,
         }
@@ -540,6 +574,7 @@ impl VmConsole {
         // that kept the ROM but forgot its instruments would reload a game
         // that had gone silent.
         let keep_banks = std::mem::take(&mut self.banks);
+        let keep_signals = std::mem::take(&mut self.signals);
         let keep_modes = std::mem::take(&mut self.modes);
         let epoch = self.audio_epoch;
         *self = VmConsole::new();
@@ -548,6 +583,7 @@ impl VmConsole {
         self.roms = keep_roms;
         self.controls = keep_controls;
         self.banks = keep_banks;
+        self.signals = keep_signals;
         self.modes = keep_modes;
         self.audio_epoch = epoch + 1;
     }
@@ -570,6 +606,11 @@ pub struct Observation {
     pub data_stack: Vec<u16>,
     pub return_stack_depth: usize,
     pub entities: Vec<device::Entity>,
+    /// Named scalars the game reported, already resolved against the ROM's
+    /// declarations. `(name, value, signed)` — the name is carried rather than
+    /// the id because an id is not readable and the console is the only party
+    /// that holds the mapping.
+    pub signals: Vec<(String, i32, bool)>,
     pub sound: Vec<kessel_audio::AudioEvent>,
     pub halted: bool,
 }
@@ -592,6 +633,9 @@ impl Observation {
             },
             "entities": self.entities.iter().map(|e| serde_json::json!({
                 "tag": e.tag, "x": e.x, "y": e.y,
+            })).collect::<Vec<_>>(),
+            "signals": self.signals.iter().map(|(n, v, _)| serde_json::json!({
+                "name": n, "value": v,
             })).collect::<Vec<_>>(),
             "sound": self.sound.iter().map(audio::event_json).collect::<Vec<_>>(),
             "stick": self.analog.map(|i| serde_json::json!([i.stick_x, i.stick_y])),
