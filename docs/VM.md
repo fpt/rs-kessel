@@ -95,6 +95,7 @@ documents own the detail.
 | rng | `0x30` | read next `u16` / write to set the seed |
 | storage | `0x40` `0x41` `0x42` | addr / read / write (256 bytes) |
 | debug | `0x50` `0x51` `0x52` | entity x, y, commit(tag) — reported in the observation |
+| debug | `0x53` `0x54` | signal value, commit(id) — a *named* scalar, likewise |
 | console | `0x60` | write a byte to the text buffer |
 | tilemap | `0x70`–`0x78` | base, width, and the `map` draw parameters — [graphics](VM_GRAPHICS.md) |
 | time | `0x80` | frame counter (frames since power-on; wraps at 65536) |
@@ -299,7 +300,8 @@ end
 - **Operators (Lua):** `+ - * / %`, `& | ~ << >>` (binary `~` is xor), `== ~= < <=
   > >=`, `and or not`, unary `-` `~` (bitwise not). Assignment is a statement.
 - **Builtins:** `entity(x,y,tag)` (report a game object, so it shows up in the
-  observation an agent reads), `rnd(n)→0..n-1`, `peek/poke(addr[,v])` (8-bit) and
+  observation an agent reads), `signal(name,value)` (report a *named number* —
+  see below), `rnd(n)→0..n-1`, `peek/poke(addr[,v])` (8-bit) and
   `peek16/poke16`, `min(a,b)` / `max(a,b)`, and
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
 - **Drawing:** `cls(c)`, `pset(x,y,c)`, sprites (`spr`/`sprn`), the `tilemap`
@@ -327,6 +329,49 @@ end
   [**VM_CONTROLS.md**](VM_CONTROLS.md).
 - **Several files:** `#include "lib/motion.lua"` — see below.
 - Comments: `--` line, `--[[ … ]]` block.
+
+### Reporting for observation: `entity` and `signal`
+
+An agent driving this console cannot see the screen the way a player does and
+cannot play. Both of its senses are things the game hands it on purpose:
+
+```lua
+signal score          -- declare the named scalars, once, at the top level
+signal hp: int        -- `: int` when the value can go negative
+
+function draw()
+  entity(px, py, 1)         -- a thing with a PLACE, under a tag
+  signal(score, score)      -- a NUMBER that moves over time, under a name
+  signal(hp, hp)
+end
+```
+
+**`entity` is for places, `signal` is for numbers**, and the split is the point.
+Packing a scalar pair into coordinates (`entity(score, lives, 30)`, which is how
+`games/shooter.lua` did it before `signal` existed) reads back as `tag 30: 0,2`
+and nothing downstream can name either half. `vm_playtest` prints signals by
+name and tags as tags, so a game that reports its numbers properly gets a report
+that says `score` where the other says `tag 30`.
+
+Three rules:
+
+- **Both are authored, never inferred.** The game says what matters, which is
+  what lets one game expose its internals for an experiment and another stay
+  quiet. Guessing which entity is the player would be guessing at something the
+  ROM already knows.
+- **A signal's name is resolved at the call site**, not bound as a global
+  constant like a sprite or an `sfx` id. A signal is named after the variable it
+  mirrors, so `signal score` beside `local score` is the *normal* case — and a
+  global binding would quietly compile `score = score + 10` into arithmetic on
+  an id. Position 1 of `signal()` is a declared signal name and nothing else.
+- **Signedness is declared.** `signal hp: int` reads back as `-3`; without the
+  annotation the same bits read as `65533`. Neither default is right for
+  everything and only the author knows which this is.
+
+An **event** is a tag reported on the one frame it happens and absent otherwise
+— a spawn, a kill, a death. That is what makes its *spacing* readable as a
+rhythm; a tag reported every frame can be counted but never timed. See
+[`GAMEPLAY_METRICS.md`](GAMEPLAY_METRICS.md).
 
 ### Splitting a game across files (`#include`)
 

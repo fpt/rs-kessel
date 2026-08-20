@@ -44,6 +44,28 @@ use kessel_audio::Patch;
 use super::assembler::Diagnostic;
 use super::device::VideoMode;
 
+/// One `signal` declaration: what it is called, and whether it is signed.
+///
+/// Rides along as ROM metadata beside [`Controls`] and the sound bank — never
+/// in the ROM bytes, because the machine has no use for a name and a report
+/// has no use for anything else.
+///
+/// **Signedness is declared, not guessed.** `signal speed: int` reads back as
+/// `-3`; `signal score` reads back as `40000`. Picking one for everything gets
+/// one of those wrong — an unsigned reading turns every velocity into 65533,
+/// and a signed one wraps a score at 32767 — and the author is the only party
+/// who knows which. luax already spells this `: int` everywhere else, so it
+/// costs one optional token to ask.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignalDef {
+    pub name: String,
+    pub signed: bool,
+}
+
+/// Ceiling on declared signals. Not a machine limit — a report limit. Sixty
+/// four named scalars is already more than anyone reads in one sitting.
+pub const MAX_SIGNALS: usize = 64;
+
 /// Result of compiling luax source: generated assembler text plus diagnostics
 /// and the game's control-layout metadata (see [`Controls`]).
 pub struct Compiled {
@@ -57,6 +79,8 @@ pub struct Compiled {
     /// Metadata beside the ROM, like `controls` and `mode` — not bytes in the
     /// 64 KiB space. The host hands it to the audio engine at load time.
     pub bank: SoundBank,
+    /// Declared signals, in id order. See [`SignalDef`].
+    pub signals: Vec<SignalDef>,
 }
 
 impl Compiled {
@@ -293,6 +317,7 @@ pub fn compile_with(src: &str, resolver: &mut dyn SourceResolver) -> Compiled {
             controls,
             mode,
             bank: SoundBank::default(),
+            signals: Vec::new(),
         };
     }
     let mut compiler = Compiler::new();
@@ -304,6 +329,7 @@ pub fn compile_with(src: &str, resolver: &mut dyn SourceResolver) -> Compiled {
         controls,
         mode,
         bank: std::mem::take(&mut compiler.bank),
+        signals: std::mem::take(&mut compiler.signals),
     }
 }
 
@@ -846,6 +872,13 @@ enum Decl {
         fields: Vec<(String, OwnedValue, usize)>,
         line: usize,
     },
+    /// `signal NAME` / `signal NAME: int` — a named scalar the game reports for
+    /// observation. Emits no code; the name is a constant equal to its id.
+    Signal {
+        name: String,
+        signed: bool,
+        line: usize,
+    },
     /// `fx { reverb_size = … }` — what the one shared chorus and reverb sound
     /// like. Nameless, because there is only ever one of each.
     Fx {
@@ -944,6 +977,8 @@ impl Parser {
                 decls.push(self.parse_sound_decl("sfx", d));
             } else if self.is_kw("track") {
                 decls.push(self.parse_sound_decl("track", d));
+            } else if self.is_kw("signal") {
+                decls.push(self.parse_signal(d));
             } else if self.is_kw("fx") {
                 decls.push(self.parse_fx(d));
             } else if matches!(self.peek(), Tok::Sym("#")) {
@@ -957,7 +992,7 @@ impl Parser {
                 d.push(err(
                     self.line(),
                     "expected 'record', 'function', 'local', 'sprite', 'tilemap', 'controls', \
-                     'instrument', 'sfx', 'track', 'fx', or '#include'",
+                     'instrument', 'sfx', 'track', 'signal', 'fx', or '#include'",
                 ));
                 self.advance();
             }
@@ -1129,6 +1164,28 @@ impl Parser {
             "sfx" => Decl::Sfx { name, fields, line },
             _ => Decl::Track { name, fields, line },
         }
+    }
+
+    /// `signal NAME` — one line, optionally `: int` to say it is signed.
+    ///
+    /// No block: a signal has nothing to configure. It is a name, an id, and
+    /// how to read the sixteen bits back.
+    fn parse_signal(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("signal");
+        let name = self.ident(d);
+        let mut signed = false;
+        if self.eat_sym(":") {
+            match self.ident(d).as_str() {
+                "int" => signed = true,
+                "word" => {}
+                other => d.push(err(
+                    line,
+                    format!("a signal is 'int' or 'word', not '{other}'"),
+                )),
+            }
+        }
+        Decl::Signal { name, signed, line }
     }
 
     /// `fx { … }` — the shared effects. Unnamed: there is one chorus and one
@@ -1732,6 +1789,10 @@ struct Compiler {
     instrument_ids: HashMap<String, u16>,
     sfx_ids: HashMap<String, u16>,
     track_ids: HashMap<String, u16>,
+    /// Declared signals in id order, and the name→id map. Same deal again:
+    /// each `NAME` is a constant equal to its id.
+    signals: Vec<SignalDef>,
+    signal_ids: HashMap<String, u16>,
     /// The single declared tilemap: (label, width, height). `mget`/`mset`/`map`/
     /// `solid` need it.
     tilemap: Option<(String, u16, u16)>,
@@ -1808,6 +1869,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "sprn" => (6, false),
         "sspr" => (4, false),
         "entity" => (3, false),
+        "signal" => (2, false),
         "camera" => (2, false),
         "pal" => (4, false),
         "sprbank" => (1, false),
@@ -1889,6 +1951,8 @@ impl Compiler {
             bank: SoundBank::default(),
             instrument_ids: HashMap::new(),
             sfx_ids: HashMap::new(),
+            signals: Vec::new(),
+            signal_ids: HashMap::new(),
             track_ids: HashMap::new(),
             tilemap: None,
             data: Vec::new(),
@@ -2102,6 +2166,32 @@ impl Compiler {
                 }
                 let id = self.bank.add_track(name.clone(), def);
                 self.track_ids.insert(name.clone(), id);
+            }
+        }
+
+        // Pass 1.565: signals. Ids in declaration order, names bound as
+        // constants — the same shape as sprites and sound, for the same reason:
+        // `signal(score, …)` has to survive someone inserting a declaration
+        // above it.
+        for decl in decls {
+            if let Decl::Signal { name, signed, line } = decl {
+                if self.signals.len() >= MAX_SIGNALS {
+                    d.push(err(
+                        *line,
+                        format!("too many signals (limit {MAX_SIGNALS})"),
+                    ));
+                    continue;
+                }
+                if self.signal_ids.contains_key(name) {
+                    d.push(err(*line, name_conflict("signal", name, "signal")));
+                    continue;
+                }
+                let id = self.signals.len() as u16;
+                self.signals.push(SignalDef {
+                    name: name.clone(),
+                    signed: *signed,
+                });
+                self.signal_ids.insert(name.clone(), id);
             }
         }
 
@@ -2846,6 +2936,52 @@ impl Compiler {
         if name == "spr" || name == "sprn" {
             self.check_sprite_call(name, args, d, line);
         }
+        // `signal(NAME, value)` resolves NAME in its own namespace, at the call
+        // site, instead of binding it as a global constant.
+        //
+        // Sprites and sound effects are named after *assets*, so one shared
+        // namespace costs nothing. A signal is named after the variable it
+        // mirrors — `signal score` next to `local score` is the normal case,
+        // not the edge — and binding it globally would quietly compile
+        // `score = score + 10` against the signal's id. That is precisely the
+        // silent-wrong-value failure `name_taken` exists to prevent, so the
+        // answer is to keep the name out of that namespace rather than to make
+        // every game invent a second word for one thing.
+        //
+        // luax already resolves a name contextually in the sound blocks, where
+        // `sfx { inst = blip }` means an instrument and nothing else.
+        if name == "signal" {
+            if args.len() != 2 {
+                d.push(err(
+                    line,
+                    format!("signal() takes 2 argument(s), got {}", args.len()),
+                ));
+                return false;
+            }
+            let id = match &args[0] {
+                Expr::Var(n, _) => self.signal_ids.get(n).copied().or_else(|| {
+                    d.push(err(
+                        line,
+                        format!(
+                            "no signal named '{n}' — declare it with `signal {n}` at the top level"
+                        ),
+                    ));
+                    None
+                }),
+                _ => {
+                    d.push(err(
+                        line,
+                        "signal()'s first argument is a declared signal name, not an expression",
+                    ));
+                    None
+                }
+            };
+            let Some(id) = id else { return false };
+            out.push(id.to_string());
+            self.gen_expr(&args[1], out, d);
+            self.gen_builtin("signal", out, d);
+            return false;
+        }
         if let Some((argc, yields)) = builtin(name) {
             // On an arity mismatch, report it and emit nothing — a partial call
             // would leave the data stack unbalanced.
@@ -3083,6 +3219,10 @@ impl Compiler {
                 self.helpers.tmp = true;
                 "lx_tmp STORE16 #51 DEO #50 DEO lx_tmp LOAD16 #52 DEO"
             }
+            // ( id value ) — the value latches, the id commits. No scratch
+            // cell, because the stack already hands them over in that order:
+            // `signal(score, v)` pushes the name first, so `v` pops first.
+            "signal" => "#53 DEO #54 DEO",
             "fget" => {
                 self.helpers.flags = true;
                 self.helpers.fget = true;
@@ -3738,6 +3878,66 @@ mod tests {
         let o = c.run_frame(0);
         assert_eq!(o.entities[0].x, 6);
         assert_eq!(o.entities[1].x, 10);
+    }
+
+    #[test]
+    fn a_signal_is_reported_by_name() {
+        let src = r#"
+            signal score
+            signal drift: int
+            local n: word
+            function draw()
+              n = n + 7
+              signal(score, n)
+              signal(drift, 0 - 3)
+            end
+        "#;
+        let mut c = load(src);
+        let o = c.run_frame(0);
+        assert_eq!(
+            o.signals,
+            vec![
+                ("score".to_string(), 7, false),
+                ("drift".to_string(), -3, true),
+            ]
+        );
+    }
+
+    /// The whole reason a signal name is resolved at the call site: a game
+    /// names a signal after the variable it mirrors, and `signal score` must
+    /// not turn `score = score + 10` into arithmetic on an id.
+    #[test]
+    fn a_signal_may_share_a_name_with_the_global_it_reports() {
+        let src = r#"
+            signal score
+            local score: word
+            function draw()
+              score = score + 10
+              signal(score, score)
+            end
+        "#;
+        let mut c = load(src);
+        c.run_frame(0);
+        let o = c.run_frame(0);
+        assert_eq!(o.signals, vec![("score".to_string(), 20, false)]);
+    }
+
+    #[test]
+    fn signalling_something_undeclared_is_a_diagnostic() {
+        let c = compile("function draw() signal(hp, 1) end");
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("no signal named 'hp'")),
+            "{:?}",
+            c.diagnostics
+        );
+    }
+
+    #[test]
+    fn two_signals_may_not_share_a_name() {
+        let c = compile("signal hp\nsignal hp\nfunction draw() end");
+        assert!(!c.ok(), "a duplicate signal name compiled");
     }
 
     #[test]

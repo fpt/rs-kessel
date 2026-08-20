@@ -276,6 +276,24 @@ pub struct Entity {
     pub y: u16,
 }
 
+/// One named scalar the game reported this frame.
+///
+/// `entity` hands the harness a thing with a *place*; this hands it a number
+/// that moves over *time* — speed, score, hit points, distance remaining. They
+/// are separate ports because they are separate questions, and packing a
+/// scalar into a coordinate pair (`entity(score, lives, 30)`, which is how
+/// `games/shooter.lua` did it before this existed) leaves every reader parsing
+/// a position that is not one.
+///
+/// The `id` is a declaration's index, and the **name** lives in ROM metadata
+/// beside `controls` and the sound bank, never in the ROM bytes. That is what
+/// lets a report say `score` instead of `tag 30`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Signal {
+    pub id: u16,
+    pub value: u16,
+}
+
 /// An out-of-range argument to a note port makes the whole note a **no-op**.
 ///
 /// Neither truncating nor clamping works here, and the reason is that a channel
@@ -429,6 +447,8 @@ pub struct Devices {
     pub halt_requested: bool,
     /// Entities reported this frame (cleared each frame by the console).
     pub entities: Vec<Entity>,
+    /// Named scalars reported this frame (cleared with the entities).
+    pub signals: Vec<Signal>,
     /// Bytes written to the console this frame (cleared each frame).
     pub console: Vec<u8>,
     /// Sound the game asked for this frame (cleared each frame).
@@ -460,6 +480,9 @@ pub struct Devices {
     // pending entity coords
     ex: u16,
     ey: u16,
+    // pending signal value; the id commits it, exactly as a tag commits an
+    // entity and an index commits a palette entry.
+    sval: u16,
     // camera offset (world→screen translation), signed
     cam_x: i16,
     cam_y: i16,
@@ -521,6 +544,7 @@ impl Devices {
             frame_vector: 0,
             halt_requested: false,
             entities: Vec::new(),
+            signals: Vec::new(),
             console: Vec::new(),
             sound: Vec::new(),
             sound_dropped: 0,
@@ -535,6 +559,7 @@ impl Devices {
             pg: 0,
             pb: 0,
             ex: 0,
+            sval: 0,
             ey: 0,
             cam_x: 0,
             cam_y: 0,
@@ -774,6 +799,11 @@ impl Devices {
                     x: self.ex,
                     y: self.ey,
                 }),
+                0x3 => self.sval = val,
+                0x4 => self.signals.push(Signal {
+                    id: val,
+                    value: self.sval,
+                }),
                 _ => {}
             },
             0x6 => {
@@ -979,6 +1009,7 @@ impl Devices {
         self.stick_y = input.stick_y.clamp(-STICK_FULL, STICK_FULL);
         self.frame_count = self.frame_count.wrapping_add(1);
         self.entities.clear();
+        self.signals.clear();
         self.console.clear();
         self.sound.clear();
         self.halt_requested = false;

@@ -136,6 +136,47 @@ which covers the layouts this console is for; widening `gamepad` to `u16` would
 touch the attach protocol, the C ABI, every host's plumbing and every
 `buttons_from_names` caller to buy one more key.
 
+### Observation: places and numbers
+
+An agent has no eyes for *play* and no hands, so both of its senses are things
+the game hands over on purpose. `entity(x, y, tag)` reports a thing with a
+**place**; `signal(name, value)` reports a **number** that moves over time. Both
+are authored, never inferred — which is what lets one game expose its internals
+for an experiment while another stays quiet, and what keeps the harness from
+guessing at something the ROM already knows.
+
+The split is load-bearing. Packing a scalar pair into coordinates
+(`entity(score, lives, 30)`, which is how `games/shooter.lua` did it) reads back
+as `tag 30: 0,2` and nothing downstream can name either half — so every reading
+of it was done by a human with the source open, which is the exact failure the
+whole observation surface exists to remove.
+
+Three decisions there, and none should be re-litigated:
+
+- **A signal's name is resolved at the call site**, not bound as a global
+  constant the way a sprite or an `sfx` id is. This is the one place the
+  *one name means one thing* rule is deliberately set aside, because signals are
+  unlike every other named thing here: a sprite is named after an *asset*, a
+  signal after the *variable it mirrors*. `signal score` beside `local score` is
+  what every use looks like, and a global binding would have compiled
+  `score = score + 10` into arithmetic on an id — silently and wrongly. The
+  alternative was making every game invent a second word for one thing. luax
+  already resolves a name contextually in the sound blocks (`sfx { inst = blip }`).
+- **Signedness is declared** (`signal hp: int`), not guessed. Unsigned turns
+  every velocity into 65533; signed wraps a score at 32767. Only the author
+  knows which this is, and luax spells it `: int` everywhere else already.
+- **An event is a tag reported on the one frame it happens**, and absent
+  otherwise. That is what makes its *spacing* readable as a rhythm — a tag
+  reported every frame can be counted but never timed. `playtest.rs` classifies
+  the two apart by whether the appearances are isolated, and reading a
+  persistent tag as an event produced a confident report of a "1-frame
+  metronome" before it did.
+
+A run's *state* is a number about the run, not a place: reporting it as
+`entity(px, py, state + 1)` made a game over arrive as a different **tag**, so
+the set of things being reported changed shape when the player died and every
+table in the report grew a hole. See `docs/GAMEPLAY_METRICS.md`.
+
 The load-bearing rule: **`kessel-vm` is host-free.** It does no I/O beyond the
 files under its working directory, synthesizes no audio, and touches no GPU.
 Drawing is a software rasterizer into an indexed framebuffer; sound is an event
@@ -202,11 +243,12 @@ pixels; a game's logic and its pixels in one file means neither can be read.
 | `src/audio.rs` | Offline render: run the game, render its sound, and report what happened in numbers — the agent has no ears. |
 | `src/isa.rs` | The 34-opcode instruction set. |
 | `src/vm.rs` | The stack machine: memory, stacks, fetch/execute, frame runner. |
-| `src/device.rs` | Varvara-lite device layer — screen, gamepad, rng, storage, debug, console, sound (recorded only). |
+| `src/device.rs` | Varvara-lite device layer — screen, gamepad, rng, storage, debug (`entity` places and `signal` numbers), console, sound (recorded only). |
 | `src/assembler.rs` | Two-pass textual assembler → ROM + diagnostics. |
 | `src/luax.rs` | The statically-typed Lua-ish front-end that compiles to assembly. |
 | `src/png.rs` | Dependency-free PNG + base64 for framebuffer output. |
 | `src/player.rs` | `VmPlayer` — a standalone handle for human play (load, tick, framebuffer_rgba). |
+| `src/playtest.rs` | Differential play: run one state several ways and report the difference — the agent has no hands, so a playtest returns numbers rather than a screenshot. |
 | `src/tool.rs` | The crate's own tool surface: `VmTool`, `ToolResult`, `ImageContent`, `VmToolError`. Deliberately not borrowed from any host framework. |
 | `src/tools.rs` | The `vm_*` tools and `VmToolSet` (name-dispatch over the set). |
 
@@ -607,7 +649,9 @@ kessel/
 ├── docs/VM_GRAPHICS.md screens, palette, sprites, tilemap, drawing
 ├── docs/VM_CONTROLS.md buttons, stick, touch, gestures, controls metadata
 ├── docs/VM_AUDIO.md    declaring/triggering sound, the render report
-└── docs/SYNTH.md       synth architecture, event surface, build order
+├── docs/SYNTH.md       synth architecture, event surface, build order
+└── docs/GAMEPLAY_METRICS.md
+                     giving the agent a sense of play
 ```
 
 ## Testing notes
