@@ -4,30 +4,81 @@ Nothing here runs at play time. These turn generated art into the `sprite`
 declarations a `games/*.lua` file carries, and they touch the network and the
 disk, which is why they live outside `crates/`.
 
-The pipeline is two steps, and they are separate on purpose: generation costs an
-API call and is nondeterministic, quantisation is free and is the part you
+The pipeline is two steps, and they are separate on purpose: generation costs a
+paid turn and is nondeterministic, quantisation is free and is the part you
 iterate on.
 
 ```
-prompt ──imgen.py gen──▶ 1024² PNG on magenta ──imgen.py process──▶ one trimmed PNG per cell
+prompt ──imgen.py gen──▶ one big PNG on magenta ──imgen.py process──▶ one trimmed PNG per cell
                                                                           │
                                                          spritegen.py ────┘
                                                                           ▼
                                                 luax `sprite` blocks (+ `pal` lines)
+                                                                          │
+                                                       framediff.py ──────┘
+                                                                          ▼
+                                                  "will this actually animate?"
 ```
 
 Both are Python, run through uv — the dependencies are in `pyproject.toml`:
 
 ```bash
 uv run --project tools tools/imgen.py --help
+uv sync --project tools --extra codex     # once, for the default backend
 ```
 
 ## imgen.py
 
-`gen` calls OpenAI's image model, `edit` does the same conditioned on reference
-images, and `process` keys out the background and splits a grid sheet into cells.
-Generation needs `OPENAI_API_KEY` (this repo's `.envrc` loads `.env`); `process`
-is offline.
+`gen` calls an image model, `edit` does the same conditioned on reference images,
+and `process` keys out the background and splits a grid sheet into cells.
+`process` is offline; the other two are not.
+
+### Two backends, and `codex` is the default
+
+| | `--backend codex` (default) | `--backend api` |
+|---|---|---|
+| pays | a ChatGPT/Codex subscription | API credits |
+| needs | `codex login status` saying **ChatGPT** | `OPENAI_API_KEY` (this repo's `.envrc` loads `.env`) |
+| how | the local Codex agent's built-in `image_gen` tool, driven over its Python SDK | `POST /v1/images/{generations,edits}` |
+| control | none | `--model`, `--size`, `--quality`, exact `-n` |
+
+The subscription path is the default because it is the one that does not spend
+credits per sprite, and iterating on art means generating a lot of sprites. What
+it costs you is every knob: the built-in tool takes a prompt and returns an image
+at a size of its own choosing (1254² turned up in testing, which is not even a
+size the API would accept), writes it to
+`$CODEX_HOME/generated_images/<thread>/<call_id>.png`, and the only way to learn
+that path is the `imageGeneration` thread item the SDK hands back. `imgen.py`
+reads it from there and copies the file to `--out`, leaving the original in place
+so a rerun does not destroy the attempt you were comparing against.
+
+So reach for `--backend api` when the size matters — a sheet whose cell count
+divides its pixel width crops without rounding — or when you need
+`gpt-image-1.5`'s true transparency instead of the magenta key.
+
+Two more differences worth knowing before you blame the prompt:
+
+* **`-n` is exact on `api` and a request on `codex`.** The agent decides how many
+  built-in calls to make; `imgen.py` reports the shortfall rather than hiding it.
+* **The skill rewrites your prompt.** Codex's `imagegen` skill normalises what
+  you wrote into its own `Use case: / Subject: / Style:` spec. It is told here
+  not to add creative requirements, and mostly does not, but the prompt the model
+  saw is not the prompt you typed. On `api` it is.
+
+The SDK is an **extra**, because `openai-codex` hard-depends on a ~300 MB Codex
+binary and the half of this pipeline you actually iterate on does not need it:
+
+```bash
+uv sync --project tools --extra codex
+```
+
+Without it, `gen`/`edit` say so and point at `--backend api`.
+
+If the codex backend reports no image at all, check `codex login status` first.
+Under **API-key** auth the built-in tool is simply absent from the agent's
+toolset — and misleadingly, `codex features list` still shows
+`image_generation  stable  true`, because the flag is on and the *provider
+capability* underneath it is not.
 
 Reach for `edit` when the sprite is a *particular* thing rather than a generic
 one. `games/outrun.lua`'s car came from two photographs of a real Lotus Esprit —
@@ -113,6 +164,43 @@ dark-green posts under `games/outrun.lua`'s billboard, and it took regenerating
 the art and diffing it against the game to find it. Re-running the two commands
 above and diffing is the check.
 
+## framediff.py
+
+Reads `sprite` blocks back — out of `spritegen.py`'s output, or out of a
+`games/*.lua` — and answers the two questions a still frame cannot:
+
+```bash
+uv run --project tools tools/framediff.py /tmp/set.txt --pairs wd0:wd1,wu0:wu1
+```
+
+```
+wd0 vs wd1: 66/384 nibbles differ (17%), 3/16 rows identical  <- reads as motion
+wu0 vs wu1: 36/384 nibbles differ (9%), 4/16 rows identical
+```
+
+**Do two frames differ enough to read as motion?** A model asked for "walking"
+moves a leg by less than one console pixel: measured on a real 16×16 sheet, the
+two frames differed by 7 nibbles out of 256 and animated into a held pose. The
+same character respun with the delta spelled out in pixels differed by 73. The
+threshold is a *share* of the sprite, not a count, because the same set padded
+out to 24×16 for a sword that leaves the silhouette would otherwise look like it
+had improved on its own.
+
+**Are the frames the same size?** With `--pairs` it also reports each sprite's
+drawn bounds and complains when they disagree — art drawn at four different
+heights makes the character pop as the player turns, and `spritegen --uniform`
+cannot fix that because it scales by one factor rather than fitting a silhouette.
+
+`.claude/skills/sprite-art/SKILL.md` has the prompt recipe these numbers came
+from: what to write so a set comes out consistent in the first place.
+
+## Notes
+
 And always look at `--preview`. Quantisation failures do not error, they just
 look slightly wrong: a magenta pixel in a white number plate, a grey tower gone
 purple, a tree outline that ate the whole canopy.
+
+Look at the *generation* too, and not only for quality. Asked for "a small
+roadside billboard", the model returned one reading **SEGA OUTRUN** with a red
+Ferrari on it — a real trademark, unprompted, in a file that was one paste away
+from being committed. Say what the sign says, or say that it is blank.

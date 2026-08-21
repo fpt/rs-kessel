@@ -645,6 +645,14 @@ kessel/
 ├── crates/audio/       kessel-audio: the synth (host-free, VM-free)
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
+├── tools/              build-time asset pipeline (see tools/README.md) —
+│                     generate art, quantise it, print `sprite` blocks, and
+│                     check a frame set actually animates. Defaults to the
+│                     Codex SDK backend, so a sprite costs a subscription
+│                     turn rather than API credits.
+├── .claude/skills/    sprite-art: the prompt recipe that survives being
+│                     quantised to a 16-pixel sprite, and the measurements
+│                     that catch a set which will not read as motion.
 ├── docs/VM.md          machine, ISA, device map, luax, agent loop
 ├── docs/VM_GRAPHICS.md screens, palette, sprites, tilemap, drawing
 ├── docs/VM_CONTROLS.md buttons, stick, touch, gestures, controls metadata
