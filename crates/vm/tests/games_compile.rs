@@ -484,6 +484,7 @@ fn outrun_can_be_driven_to_its_goal() {
     }
 
     let mut input = device::BTN_A;
+    let mut heard: Vec<u16> = Vec::new();
     let mut best = 0;
     let mut cps = 0;
     let mut goal = false;
@@ -512,6 +513,16 @@ fn outrun_can_be_driven_to_its_goal() {
             input |= device::BTN_LEFT;
         }
 
+        // The sound the *stage* makes, as opposed to the sound the car makes.
+        // `games_audio.rs` renders 300 frames, and the first checkpoint is a
+        // thousand out — so nothing there can reach the announcements, and this
+        // is the only place they are heard at all.
+        for ev in &obs.sound {
+            if let kessel_audio::AudioEvent::PlaySfx { id } = ev {
+                heard.push(*id);
+            }
+        }
+
         best = best.max(sig(&obs, "dist"));
         cps = cps.max(sig(&obs, "checkpoints"));
         if sig(&obs, "state") == 2 {
@@ -526,6 +537,23 @@ fn outrun_can_be_driven_to_its_goal() {
     assert!(
         goal,
         "a driver holding the road never reached the goal (best {best} m, {cps} checkpoints)"
+    );
+
+    // Ids are assigned in declaration order: gravel, squeal, checkpoint, tick,
+    // timeup, goal. Asserting on the id rather than a name keeps this a test of
+    // the *game* — reordering the declarations moves these, and that is a
+    // change to the ROM this should notice.
+    const CHECKPOINT: u16 = 2;
+    const GOAL_FANFARE: u16 = 5;
+    assert_eq!(
+        heard.iter().filter(|id| **id == CHECKPOINT).count(),
+        cps as usize,
+        "{cps} checkpoints passed but the chime fired {} time(s)",
+        heard.iter().filter(|id| **id == CHECKPOINT).count()
+    );
+    assert!(
+        heard.contains(&GOAL_FANFARE),
+        "the run reached the goal in silence"
     );
 }
 

@@ -9,7 +9,8 @@
 --
 -- Arrows steer / accelerate, A boosts, Down brakes. Hold a turn at speed and the
 -- tail comes round and the tyres smoke. Drop a wheel off the tarmac and the car
--- bogs down in the dirt.
+-- bogs down in the dirt — and you hear all three of those, because the engine is
+-- a held note whose pitch is the speedometer.
 --
 -- **The stage is a clock, not a cruise.** You start with twenty seconds, every
 -- checkpoint buys fifteen more, and the goal is 1800 m out. That is the arcade
@@ -128,13 +129,109 @@ local RUMB_A = 160   local RUMB_B = 231
 local RUMB_1 = 174   local RUMB_2 = 217   local RUMB_3 = 224
 local LINE_C = 231                        -- centre dashes
 
--- This game is still silent, deliberately: what outrun wants is an engine that
--- rises with `speed`, and a blip on a checkpoint would be a placeholder for it
--- rather than a start on it. `games_audio.rs` derives "must be audible" from
--- whether a source declares instruments, so half a sound design would also have
--- to fire inside that guard's 300 frames — and the first checkpoint is a
--- thousand frames out.
+-- ---------------------------------------------------------------- sound ----
+-- The engine is the point, and everything else sits around it. A racer's sound
+-- is one continuous note that rises with the throttle — a blip on a checkpoint
+-- would have been a placeholder for that rather than a start on it, which is why
+-- this game shipped silent until the engine could be built.
 --
+-- Outdoors, so the room is a short slap and not a hall: a reverb long enough to
+-- hear would put the car in a tunnel for the whole stage.
+fx {
+  reverb_size = 80
+  reverb_damping = 200
+  chorus_rate = 40  chorus_depth = 110
+}
+
+-- A saw through a nearly-closed filter, driven hard. The distortion is the part
+-- that makes it an engine rather than a synth lead: what a cylinder does to air
+-- is clipping, and a clean saw at this pitch is a bassline.
+--
+-- `sustain = 255` and a real `release`, because this note is *held* — see `rev`.
+-- The attack is 12 ms rather than 0 so that stepping to the next note crossfades
+-- instead of clicking, which at these repetition rates would be the loudest
+-- thing in the mix.
+instrument engine {
+  wave = saw
+  attack = 12  decay = 40  sustain = 255  release = 60
+  filter = lpf  cutoff = 96  resonance = 30
+  distortion = 90
+  volume = 58
+  chorus = 30                -- two cylinders' worth of detune, near enough
+}
+
+-- Everything the tyres do. Noise, and the *note* picks how bright it is: gravel
+-- is low and dry, a squeal is high and rings a little.
+instrument tyres {
+  wave = noise
+  attack = 0  decay = 90  sustain = 0
+  filter = lpf  cutoff = 150
+  volume = 85
+  reverb = 40
+}
+
+-- The bell every announcement is made on, so a checkpoint, the clock and the
+-- goal are recognizably one voice saying different things.
+instrument bell {
+  wave = square
+  attack = 0  decay = 70  sustain = 40  release = 90
+  filter = lpf  cutoff = 220
+  volume = 105
+  reverb = 70
+}
+
+instrument bass {
+  wave = triangle
+  attack = 0  decay = 120  sustain = 0
+  pitch_env = 10  pitch_decay = 40
+  volume = 92
+}
+
+instrument lead {
+  wave = square
+  attack = 0  decay = 80  sustain = 50  release = 60
+  filter = lpf  cutoff = 170
+  volume = 58
+  chorus = 60                -- wide, because this is the one thing that is not
+  reverb = 50                -- trying to sound mechanical
+}
+
+instrument hat {
+  wave = noise
+  attack = 0  decay = 26  sustain = 0
+  filter = hpf  cutoff = 200
+  volume = 38
+}
+
+-- Sixteen rows rather than shooter's eight: this one has to survive a stage
+-- rather than a wave, and a 1.2-second loop under a minute of driving is a
+-- stuck record. D major, and the hats are on the offbeat because that is what
+-- makes it drive rather than march.
+track cruise {
+  tempo = 8
+  vel = 105                  -- under the engine, which is the instrument here
+  bass = "38 . 38 45 35 . 35 42 31 . 31 38 33 . 33 40"
+  lead = "69 .  66 69 71 . 69 66 62 .  64 66 69 .  71 69"
+  hat  = ".  60 .  60 .  60 .  60 .  60 .  60 .  60 .  60"
+}
+
+-- Fired on a period while a wheel is off the tarmac, so the rate is the game's
+-- and not the effect's: one long gravel loop would keep playing after the car
+-- came back onto the road.
+sfx gravel { inst = tyres speed = 3  notes = "34 -" }
+sfx squeal { inst = tyres speed = 4  notes = "79 -" }
+
+sfx checkpoint { inst = bell speed = 4  notes = "72 79 84 - -" }
+sfx tick       { inst = bell speed = 2  notes = "84" }
+sfx timeup     { inst = bell speed = 6  notes = "60 55 51 46 - -" }
+sfx goal       { inst = bell speed = 5  notes = "72 76 79 84 - - -" }
+
+-- The engine's channel. A channel is a label the synth matches on, not a voice,
+-- so the number is arbitrary and only has to be one nothing else here uses.
+local ENG_CH = 3
+local ENG_STEP = 4          -- speed units per step of the engine's pitch
+local ENG_BASE = 24         -- ...and the note the bottom step sounds
+
 -- The race: distance in metres (8 world units each, so the odometer cannot
 -- overflow a word over a whole stage), time in frames.
 -- These numbers were picked with `vm_playtest`, not by feel. The first attempt
@@ -192,14 +289,62 @@ local cps = 0               -- checkpoints passed
 local state = 0             -- 0 driving, 1 out of time, 2 goal
 local cp_flash = 0          -- frames left on the CHECKPOINT banner
 
+local eng_speed = 0         -- the speed the engine's held note was sounded at
+local eng_on = 0            -- ...and whether it is holding one at all
+
 function init()
   px = 0  speed = 0  sub = 0  travel = 0  dsub = 0
   curve = 0  ctarget = 0  cmag = 0  cneg = 0  next_curve = 0
   lean = 0  pose = 0  offroad = 0  shake = 0
   adv = 0  msub = 0  dist = 0  time_t = START_T  cps = 0
   state = 0  cp_flash = 0
+  eng_speed = 0  eng_on = 0
   car_palette()
   scenery_palette()
+  -- Both of these are triggered from the reset vector, which runs outside any
+  -- frame; the console carries them to frame 0 rather than dropping them. This
+  -- is also the restart path — `update` calls `init` on the button — so the
+  -- tune starts over and the engine catches at idle.
+  music(cruise)
+  rev()
+end
+
+-- Hold the engine note for the current speed, and retrigger it only when the
+-- step it lands on has changed.
+--
+-- There is no pitch-bend port: a note is a MIDI integer, so a rising engine can
+-- only be *stepped*. Retriggering every frame would be a machine gun, and one
+-- fixed note would not be an engine at all — so the note is re-sounded when the
+-- speed has moved a step's worth. Thirteen steps over 0..SPEED_MAX reads as a
+-- gearbox, which is what the car has anyway.
+--
+-- **The test is against the speed the note was sounded at, not against the
+-- bucket it falls in**, and that difference is the whole function. Bucketing
+-- chatters on the boundary: two wheels in the dirt hold `speed` at OFF_TOP by
+-- scrubbing 3 off and letting the throttle put 2 back, so it dithers across one
+-- bucket edge and the render report showed the engine alternating between two
+-- notes every other frame for as long as the car was off the road. Anchoring on
+-- the last sounded speed is a dead band, and a dead band cannot chatter.
+--
+-- Retriggering a channel replaces the note on it rather than stacking, so this
+-- cannot leak voices however often it is called.
+function rev()
+  local d: int = speed - eng_speed
+  if d < 0 then d = 0 - d end
+  if eng_on == 1 and d < ENG_STEP then return end
+  eng_speed = speed
+  eng_on = 1
+  local step = speed / ENG_STEP
+  note_on(ENG_CH, engine, ENG_BASE + step * 2, 100 + step * 4)
+end
+
+-- Cut it. The run being over is the one moment this game is quiet, and the
+-- announcement has to land in that silence rather than over a held saw.
+function engine_off()
+  if eng_on == 1 then
+    note_off(ENG_CH)
+    eng_on = 0
+  end
 end
 
 -- How far there is left to drive before something happens. The goal once the
@@ -246,6 +391,8 @@ function update()
   end
   if speed < 0 then speed = 0 end
   if speed > SPEED_MAX then speed = SPEED_MAX end
+  rev()                     -- after the clamps: the engine sounds the speed the
+                            -- car actually has, not the one the throttle asked for
 
   -- Scroll in fractions of a world unit: `sub` carries what a frame could not
   -- spend, so a slow crawl still creeps instead of standing still.
@@ -268,14 +415,20 @@ function update()
       cps = cps + 1
       time_t = time_t + CP_BONUS
       cp_flash = 90
+      sfx(checkpoint)
     end
   end
   if cp_flash > 0 then cp_flash = cp_flash - 1 end
+  -- The last five seconds, once a second. The clock is already on screen; this
+  -- is for the half of the run the player spends looking at the road.
+  if time_t > 0 and time_t <= 300 and time_t % 60 == 0 then sfx(tick) end
   if dist >= GOAL then
     state = 2
+    engine_off()  music_stop()  sfx(goal)
   elseif time_t <= 0 then
     time_t = 0
     state = 1
+    engine_off()  music_stop()  sfx(timeup)
   end
 
   -- Steering: faster the faster you are going, but the floor is 2 px/frame and
@@ -338,6 +491,16 @@ function update()
   offroad = 0
   if px > OFF_LIMIT then offroad = 1 end
   if px < 0 - OFF_LIMIT then offroad = 1 end
+
+  -- Tyres, retriggered on a period rather than held. The period is the game's
+  -- clock on purpose: a held gravel loop would need a note_off on the frame the
+  -- car came back onto the tarmac, and one missed edge is a rumble that never
+  -- stops. A dropped repeat is nothing.
+  if offroad == 1 and frame_count() % 5 == 0 then sfx(gravel) end
+  -- Full opposite lock and moving: the tail is out far enough to be drawn as
+  -- out, so it should be audible as out too. `pose` is that judgement already
+  -- made, in the same units the artwork uses.
+  if pose == 3 and speed > 24 and frame_count() % 7 == 0 then sfx(squeal) end
 
   shake = 0
   if offroad == 1 then
