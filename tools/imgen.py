@@ -10,14 +10,25 @@ candidate cars — are generated as one grid image and split into cells, because
 one generation gives four cells in a consistent style for the price of one, and
 a set that will share a 15-colour sprite bank wants that consistency.
 
+**Two backends, and `codex` is the default.** `--backend codex` drives the local
+Codex agent through its Python SDK and lets the built-in `image_gen` tool do the
+work, which bills a ChatGPT/Codex subscription and needs no API key at all.
+`--backend api` posts to `/v1/images/*` with `OPENAI_API_KEY`, which is what this
+tool did originally and is still the only path with real control: `--size`,
+`--model` and `--quality` reach the model there and are ignored under `codex`.
+
 Usage:
   uv run --project tools tools/imgen.py gen --out raw.png --prompt "..."
   uv run --project tools tools/imgen.py edit --out raw.png --prompt "..." --ref photo.jpg
+  uv run --project tools tools/imgen.py gen --backend api --size 1024x1024 --out raw.png ...
   uv run --project tools tools/imgen.py process --in raw.png --out sprite.png
   uv run --project tools tools/imgen.py process --in sheet.png --out-dir cells \
       --rows 2 --cols 2 --labels se,sw,nw,ne
 
-`gen`/`edit` read the API key from OPENAI_API_KEY (this repo's .envrc loads .env).
+The codex backend needs the SDK, which is an extra because it drags a ~300 MB
+Codex binary along: `uv sync --project tools --extra codex`. `process` and
+`spritegen.py` — the free half of the pipeline, and the half you iterate on —
+need neither backend.
 """
 
 from __future__ import annotations
@@ -25,6 +36,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -35,6 +47,11 @@ from PIL import Image
 API = "https://api.openai.com/v1/images"
 KEY_RGB = (255, 0, 255)
 TIMEOUT = 480.0  # a high-quality 1024² generation really can take minutes
+
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+# Codex ships `imagegen` as a system skill. Naming it explicitly beats hoping the
+# agent picks it: the turn is one sentence long and has no other context to go on.
+IMAGEGEN_SKILL = CODEX_HOME / "skills" / ".system" / "imagegen"
 
 MIME = {".png": "image/png", ".webp": "image/webp"}
 
@@ -82,7 +99,101 @@ def prompt_text(args: argparse.Namespace) -> str:
     return text
 
 
+# ---- codex backend ---------------------------------------------------------
+
+
+def codex_generate(args: argparse.Namespace, refs: list[str]) -> list[Path]:
+    """Generate through the local Codex agent's built-in `image_gen` tool.
+
+    No API key: the tool runs on whatever account `codex login` holds, so a
+    ChatGPT/Codex subscription pays for this instead of API credits. The catch is
+    that the built-in tool exposes no size, model or output-path control — Codex
+    writes into `$CODEX_HOME/generated_images/<thread>/<call_id>.png` and the
+    only way to learn that path is the thread item this reads back.
+    """
+    try:
+        from openai_codex import (
+            Codex,
+            CodexConfig,
+            LocalImageInput,
+            Sandbox,
+            SkillInput,
+            TextInput,
+        )
+    except ModuleNotFoundError:
+        fail(
+            "the codex backend needs the Codex SDK: "
+            "`uv sync --project tools --extra codex` "
+            "(or `--backend api` to use OPENAI_API_KEY and the Images API)"
+        )
+
+    if not IMAGEGEN_SKILL.is_dir():
+        fail(f"no imagegen skill at {IMAGEGEN_SKILL} — is the Codex CLI installed?")
+
+    # Say "do not move it" out loud. The skill's own policy is to copy a
+    # project-bound asset into the workspace, which for us is a race: we want the
+    # original path back and then place the file ourselves.
+    plural = "one image" if args.n == 1 else f"{args.n} images"
+    instructions = (
+        f"Use $imagegen to generate exactly {plural} from the prompt below. "
+        "Use the prompt verbatim as the specification; do not add creative "
+        "requirements of your own. Do not copy, move, rename or delete the "
+        "generated file, and do not write anything to the workspace — report the "
+        "path Codex saved it to and stop.\n\nPrompt:\n" + prompt_text(args)
+    )
+    items = [SkillInput(name="imagegen", path=str(IMAGEGEN_SKILL)), TextInput(instructions)]
+    # A reference image has to be *in* the conversation for the built-in editor to
+    # see it; a filesystem path in the prompt is not enough.
+    items += [LocalImageInput(path=str(Path(r).resolve())) for r in refs]
+
+    config = CodexConfig(codex_bin=args.codex_bin) if args.codex_bin else None
+    saved: list[Path] = []
+    with Codex(config=config) as codex:
+        # read_only on purpose: nothing here needs to write, and the one thing
+        # that does write (Codex saving the image) is not a sandboxed command.
+        thread = codex.thread_start(sandbox=Sandbox.read_only)
+        result = thread.run(items)
+        for item in result.items:
+            inner = getattr(item, "root", item)
+            if getattr(inner, "type", None) != "imageGeneration":
+                continue
+            if getattr(inner, "status", None) not in (None, "completed"):
+                print(f"imgen: an image reported status {inner.status}", file=sys.stderr)
+            path = getattr(inner, "saved_path", None)
+            if path is None:
+                continue
+            saved.append(Path(getattr(path, "root", path)))
+
+    if not saved:
+        note = result.final_response or "(the agent said nothing)"
+        fail(
+            "codex returned no image. The usual cause is authentication: the "
+            "built-in image tool is absent under API-key auth even though "
+            "`codex features list` shows image_generation enabled. Check "
+            "`codex login status` — it has to say ChatGPT. The agent said: " + note
+        )
+    if len(saved) != args.n:
+        print(f"imgen: asked for {args.n} image(s), got {len(saved)}", file=sys.stderr)
+    return saved
+
+
+def place(out: Path, sources: list[Path]) -> None:
+    """Copy what Codex saved to where the caller asked for it.
+
+    Copy rather than move: the originals under `$CODEX_HOME` are the only record
+    of a generation, and a rerun that overwrites `--out` should not also destroy
+    the previous attempt you were comparing against.
+    """
+    for i, src in enumerate(sources):
+        path = out if len(sources) == 1 else out.with_stem(f"{out.stem}-{i}")
+        shutil.copyfile(src, path)
+        print(f"wrote {path} ({path.stat().st_size} bytes, from {src})")
+
+
 def cmd_gen(args: argparse.Namespace) -> None:
+    if args.backend == "codex":
+        place(args.out, codex_generate(args, []))
+        return
     resp = httpx.post(
         f"{API}/generations",
         headers={"Authorization": f"Bearer {api_key()}"},
@@ -103,6 +214,9 @@ def cmd_edit(args: argparse.Namespace) -> None:
     """Generate conditioned on reference images, e.g. a photo of the real thing."""
     if not args.ref:
         fail("edit: at least one --ref image is required")
+    if args.backend == "codex":
+        place(args.out, codex_generate(args, args.ref))
+        return
     files = []
     for ref in args.ref:
         p = Path(ref)
@@ -235,11 +349,21 @@ def main() -> None:
         p.add_argument("--out", required=True, type=Path)
         p.add_argument("--prompt")
         p.add_argument("--prompt-file")
-        p.add_argument("--model", default="gpt-image-2")
+        p.add_argument("--backend", default="codex", choices=("codex", "api"),
+                       help="codex: the local agent's built-in tool, no API key "
+                            "(default). api: /v1/images with OPENAI_API_KEY, and "
+                            "the only backend where --model/--size/--quality do "
+                            "anything")
+        p.add_argument("--codex-bin",
+                       help="a specific `codex` executable for the codex backend "
+                            "(default: the one the SDK ships)")
+        p.add_argument("--model", default="gpt-image-2", help="api backend only")
         p.add_argument("--size", default="1024x1024",
-                       help="gpt-image-2's minimum is 1024x1024")
-        p.add_argument("--quality", default="medium", choices=("low", "medium", "high"))
-        p.add_argument("-n", type=int, default=1)
+                       help="api backend only; gpt-image-2's minimum is 1024x1024")
+        p.add_argument("--quality", default="medium", choices=("low", "medium", "high"),
+                       help="api backend only")
+        p.add_argument("-n", type=int, default=1,
+                       help="exact on the api backend, a request on the codex one")
         if name == "edit":
             p.add_argument("--ref", action="append", default=[],
                            help="reference image (repeatable)")

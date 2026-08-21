@@ -9,5 +9,15 @@ dependencies = [
     "httpx>=0.28",
 ]
 
+# The Codex SDK is `imgen.py`'s default generation backend, and it is an extra
+# rather than a dependency because `openai-codex` hard-depends on
+# `openai-codex-cli-bin` — a ~300 MB Codex binary. The half of this pipeline you
+# actually iterate on (`imgen.py process`, `spritegen.py`) touches neither the
+# network nor the SDK, and should not have to download that to run.
+#
+#   uv sync --project tools --extra codex
+[project.optional-dependencies]
+codex = ["openai-codex>=0.144.4"]
+
 [dependency-groups]
 dev = []
