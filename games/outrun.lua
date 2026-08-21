@@ -9,7 +9,16 @@
 --
 -- Arrows steer / accelerate, A boosts, Down brakes. Hold a turn at speed and the
 -- tail comes round and the tyres smoke. Drop a wheel off the tarmac and the car
--- bogs down in the dirt. There is no crash — it is an endless cruise.
+-- bogs down in the dirt.
+--
+-- **The stage is a clock, not a cruise.** You start with twenty seconds, every
+-- checkpoint buys fifteen more, and the goal is 1800 m out. That is the arcade
+-- OutRun answer rather than a lap count or a finish line alone, and it is one
+-- number doing three jobs: it is the reason to go fast, it is what the dirt
+-- costs you, and it is a tension curve that steepens on its own as the gap to
+-- the next checkpoint stops shrinking. Without it there was nothing to play —
+-- `vm_playtest` could only report that every way of driving ended in the same
+-- place, because there was no place to end.
 --
 -- The art is in `outrun/`, one file per set, because a 48x32 car in four poses
 -- is 128 rows of pixels and the game is 200 lines of arithmetic — together in
@@ -119,6 +128,47 @@ local RUMB_A = 160   local RUMB_B = 231
 local RUMB_1 = 174   local RUMB_2 = 217   local RUMB_3 = 224
 local LINE_C = 231                        -- centre dashes
 
+-- This game is still silent, deliberately: what outrun wants is an engine that
+-- rises with `speed`, and a blip on a checkpoint would be a placeholder for it
+-- rather than a start on it. `games_audio.rs` derives "must be audible" from
+-- whether a source declares instruments, so half a sound design would also have
+-- to fire inside that guard's 300 frames — and the first checkpoint is a
+-- thousand frames out.
+--
+-- The race: distance in metres (8 world units each, so the odometer cannot
+-- overflow a word over a whole stage), time in frames.
+-- These numbers were picked with `vm_playtest`, not by feel. The first attempt
+-- put the opening checkpoint 600 m out on a 40-second clock, and the report said
+-- flatly that `checkpoints` and `state` never moved under any policy and that
+-- `time_left` ended identical for all of them — the one thing that can add to
+-- the clock was out of reach, so the clock was decoration. A first segment
+-- nobody reaches is also just bad arcade design: the earliest feedback should
+-- arrive well inside the opening timer.
+local MPU = 8               -- world units per metre
+local GOAL = 1800           -- metres to the finish
+local CP_EVERY = 350        -- ...and to each checkpoint on the way
+local CP_COUNT = 4          -- checkpoints at 350/700/1050/1400
+local START_T = 1200        -- 20 s, and 350 m needs 10 s of clean driving
+local CP_BONUS = 900        -- 15 s for reaching one, so the margin never grows
+
+-- What this game reports for observation. `entity` is for the car's *place*;
+-- everything below is a *number*, and every one of them is also something the
+-- player needs on the HUD — the speedometer and the clock were missing for both
+-- audiences at once, which is why they are one job and not two.
+--
+-- Every name here is also the name of the local it mirrors. That is the normal
+-- case for a signal and the reason `signal(speed, speed)` resolves its first
+-- argument at the call site instead of binding `speed` as a constant.
+signal speed
+signal dist                 -- metres travelled
+signal to_next              -- metres to the next checkpoint, or to the goal
+signal time_left            -- seconds on the clock
+signal checkpoints
+signal offroad
+signal state                -- 0 driving, 1 out of time, 2 goal
+signal drift: int           -- how far the tail is out; signed, so a left slide
+                            -- reads as a negative and not as 65512
+
 local px: int = 0           -- road's lateral offset (car sits at screen centre)
 local speed: int = 0        -- forward speed
 local sub = 0               -- fractional world units not yet handed to `travel`
@@ -134,15 +184,53 @@ local pose = 0              -- which car sprite that works out as, 0..3
 local offroad = 0
 local shake = 0
 
+local adv = 0               -- world units advanced this frame
+local msub = 0              -- fractional metres not yet handed to `dist`
+local dist = 0              -- metres travelled
+local time_t: int = START_T -- frames left on the clock
+local cps = 0               -- checkpoints passed
+local state = 0             -- 0 driving, 1 out of time, 2 goal
+local cp_flash = 0          -- frames left on the CHECKPOINT banner
+
 function init()
   px = 0  speed = 0  sub = 0  travel = 0  dsub = 0
   curve = 0  ctarget = 0  cmag = 0  cneg = 0  next_curve = 0
   lean = 0  pose = 0  offroad = 0  shake = 0
+  adv = 0  msub = 0  dist = 0  time_t = START_T  cps = 0
+  state = 0  cp_flash = 0
   car_palette()
   scenery_palette()
 end
 
+-- How far there is left to drive before something happens. The goal once the
+-- last checkpoint is behind you, the next checkpoint until then — one number,
+-- because from the driver's seat they are the same question.
+function target_m()
+  if cps < CP_COUNT then return (cps + 1) * CP_EVERY end
+  return GOAL
+end
+
+-- Scroll the world under the car. Split out because the run being over must not
+-- freeze the picture: the car still rolls to a stop, and the road still moves
+-- under it while it does.
+function advance()
+  sub = sub + speed
+  adv = sub / SCROLL
+  sub = sub % SCROLL
+  travel = travel + adv
+  if travel >= WRAP then travel = travel - WRAP end
+end
+
 function update()
+  if state > 0 then
+    if btnp(A) then init()  return end
+    -- Over, but not stopped dead: drag the car down and keep the road rolling.
+    speed = speed - 1
+    if speed < 0 then speed = 0 end
+    advance()
+    return
+  end
+
   -- throttle / brake, with drag when coasting
   if btn(A) then speed = speed + 2
   elseif btn(UP) then speed = speed + 1
@@ -161,10 +249,34 @@ function update()
 
   -- Scroll in fractions of a world unit: `sub` carries what a frame could not
   -- spend, so a slow crawl still creeps instead of standing still.
-  sub = sub + speed
-  travel = travel + sub / SCROLL
-  sub = sub % SCROLL
-  if travel >= WRAP then travel = travel - WRAP end
+  advance()
+
+  -- The odometer runs off the same advance, in metres, and does **not** wrap:
+  -- `travel` folds at WRAP so the stripes and scenery stay in phase, which makes
+  -- it useless as a distance. A stage measured in the scrolling counter would
+  -- reset the race every 55296 world units.
+  msub = msub + adv
+  dist = dist + msub / MPU
+  msub = msub % MPU
+
+  -- The clock. A checkpoint is the only thing that adds to it, and the gap to
+  -- the next one is constant while the bonus is fixed — so the margin a good
+  -- driver banks shrinks by itself as the stage goes on.
+  time_t = time_t - 1
+  if cps < CP_COUNT then
+    if dist >= (cps + 1) * CP_EVERY then
+      cps = cps + 1
+      time_t = time_t + CP_BONUS
+      cp_flash = 90
+    end
+  end
+  if cp_flash > 0 then cp_flash = cp_flash - 1 end
+  if dist >= GOAL then
+    state = 2
+  elseif time_t <= 0 then
+    time_t = 0
+    state = 1
+  end
 
   -- Steering: faster the faster you are going, but the floor is 2 px/frame and
   -- not 1. In the dirt `speed` is pinned at OFF_TOP, and a floor that fell below
@@ -312,6 +424,18 @@ function puff_at(cx: int, n)
   spr2(puff0 + n * 4, cx, BOTTOM, 352)
 end
 
+-- A backing plate for the banners. The sky is a sunset and there is a 32-pixel
+-- sun sitting right where a centred message wants to be, so text drawn straight
+-- onto it is legible everywhere except over the sun — and the banner is the one
+-- thing on the screen that has to read every time.
+function plate()
+  local y = 50
+  while y < 72 do
+    hline(28, 99, y, 0)
+    y = y + 1
+  end
+end
+
 function draw()
   -- sunset sky, in bands
   local y = 0
@@ -427,9 +551,48 @@ function draw()
   sprn(id, 64 - CAR_W / 2, BOTTOM + 1 - CAR_H + shake, CAR_W / 8, CAR_H / 8, flip)
   sprbank(0)
 
-  number(speed * 4, 2, 2, 7)                -- speed HUD
+  -- The HUD. Glyphs advance 4 px, so all three readouts fit on one row of a
+  -- 128-wide screen. `speed * 4` is a speedometer's worth of numbers rather than
+  -- the engine's 0..48 — the *signal* below reports the raw value, because that
+  -- is the one a person tuning the handling is looking at.
+  text("SPD", 2, 2, 7)
+  number(speed * 4, 18, 2, 7)
+  text("TIME", 40, 2, 10)
+  number((time_t + 59) / 60, 60, 2, 10)
+  text("NEXT", 84, 2, 7)
+  number(target_m() - dist, 104, 2, 7)
+
   if offroad == 1 then
     if frame_count() % 20 < 12 then text("OFF ROAD", 48, 88, 8) end
   end
-  entity(px, speed, 1)                      -- report for observation
+  if cp_flash > 0 then
+    if cp_flash % 20 < 12 then
+      plate()
+      text("CHECKPOINT", 44, 54, 10)
+      text("+15 SEC", 50, 63, 7)
+    end
+  end
+  if state == 1 then
+    plate()
+    text("TIME UP", 50, 54, 8)
+    text("PRESS A", 50, 63, 7)
+  end
+  if state == 2 then
+    plate()
+    text("GOAL", 56, 54, 10)
+    text("PRESS A", 50, 63, 7)
+  end
+
+  -- Reported for observation: the car's place, then the numbers. These used to
+  -- be one call, `entity(px, speed, 1)`, which put a speed in a y coordinate and
+  -- left every reader parsing a position that was not one.
+  entity(px, speed, 1)
+  signal(speed, speed)
+  signal(dist, dist)
+  signal(to_next, target_m() - dist)
+  signal(time_left, (time_t + 59) / 60)
+  signal(checkpoints, cps)
+  signal(offroad, offroad)
+  signal(state, state)
+  signal(drift, lean)
 end

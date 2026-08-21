@@ -233,8 +233,8 @@ work.
 1. ~~**shooter: prototype A with `entity()` only.**~~ **Built** — see below.
 2. ~~**Design `signal` from what step 1 could not express.**~~ **Built** — see
    *Signals* below.
-3. **outrun: goal (probably checkpoints) + `signal`,** exposing speed and time
-   remaining to the HUD and the harness in one move.
+3. ~~**outrun: goal (probably checkpoints) + `signal`.**~~ **Built** — see
+   *outrun gets a clock* below.
 4. D and E follow the first real report — reference ranges are worth writing down
    only once there are measurements to range.
 
@@ -399,3 +399,79 @@ report says it.
 
 The differential names things too — `differs on 7 of 15 reported values:
 foes_alive, lives, score, tag 10, …` rather than a list of numbers.
+
+## outrun gets a clock
+
+Checkpoint extension, as recommended above: forty… **twenty** seconds to start,
+fifteen more at each of four checkpoints, a goal 1800 m out. One number — the
+time left — is simultaneously the reason to go fast, what the dirt costs you, and
+a tension curve that steepens on its own, because the gap to the next checkpoint
+stays constant while the bonus is fixed.
+
+The HUD and the harness got the same values in one move, which was the argument
+for doing outrun this way round: `SPD`, `TIME` and `NEXT` on one row of a 128-wide
+screen, and `speed`, `dist`, `to_next`, `time_left`, `checkpoints`, `offroad`,
+`state`, `drift` as signals. `entity(px, speed, 1)` no longer has a speed in a y
+coordinate.
+
+Every signal name here is also the name of the local it mirrors — `signal speed`
+next to `local speed: int` — so this is the case call-site resolution was built
+for, eight times over in one file.
+
+### The odometer is not the scroll counter
+
+`travel` folds at `WRAP` so the stripes and scenery stay in phase, which makes it
+useless as a distance: a stage measured in it would restart the race every 55296
+world units. `dist` is a second accumulator in metres (8 world units each, so a
+whole stage cannot overflow a word).
+
+### Two things the instrument found
+
+**The first tuning made the stage unwinnable, and the report said so.** 600 m to
+the opening checkpoint on a 40-second clock:
+
+```
+NOTE: checkpoints, state never moved under any policy — nothing anyone did touched it.
+NOTE: time_left moved during the run but every policy left it in the same
+      place. Playing well does not change where it ends up.
+```
+
+The only thing that can add to the clock was out of reach, so the clock was
+decoration. Distances came down to 350/1800 and the opening timer to 20 s. That
+is also better arcade design independent of the tool — the earliest feedback
+should arrive well inside the first timer.
+
+**A fixed policy cannot drive.** This is a real limit of differential play, not a
+fact about outrun: steering is *feedback*, and no loop of held buttons keeps a car
+on a road whose curves are random. Every policy in the report ends up in the dirt
+with speed pinned, so the tool can prove a stage is *unreachable* but never that
+one is *reachable*.
+
+So the reachability guard is a closed loop instead —
+`outrun_can_be_driven_to_its_goal` in `games_compile.rs` holds the throttle and
+steers back toward the middle, three lines of driver. It doubles as the
+definition of "driving competently" for this game: if the goal is unreachable for
+that, no human is getting there.
+
+### A false positive worth knowing about
+
+```
+WARNING: brake reached the same place as doing nothing.
+```
+
+True, and not a defect: `DOWN` on a car that has not moved yet *is* doing
+nothing. The verdict is only as good as the policy set — a policy that cannot
+express itself from the starting state will always read as deaf. Worth
+remembering before acting on one of these.
+
+### …and one thing only a screenshot could catch
+
+The `TIME UP` banner was drawn straight onto the sky, where a 32-pixel sun sits
+exactly where a centred message wants to be. Half of it was unreadable. No
+signal, tag, interval or differential says anything about that — a screenshot
+said it immediately.
+
+Which is the honest boundary of everything above: **this replaces the screenshot
+loop for questions about play, not for questions about the picture.** Legibility,
+composition, colour, whether a sprite reads as the thing it is — those are still
+seen, and the fix here was a black plate behind the text.

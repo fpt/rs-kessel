@@ -451,6 +451,84 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
     );
 }
 
+/// The stage has to be drivable to the goal, and only a closed loop can show it.
+///
+/// A `vm_playtest` policy is a fixed script, and steering a car is *feedback* —
+/// no loop of held buttons keeps a car on a road whose curves are random. So the
+/// tool can say a stage is unreachable (it did, which is why the distances came
+/// down) but it cannot say one is reachable. That needs a driver, and the
+/// cheapest honest driver is three lines: hold the throttle, and steer back
+/// towards the middle whenever the road has pushed you off it.
+///
+/// It doubles as the definition of "driving competently" for this game. If a
+/// change makes the goal unreachable for *this*, no human is getting there.
+#[test]
+fn outrun_can_be_driven_to_its_goal() {
+    const OUTRUN: &str = include_str!("../../../games/outrun.lua");
+
+    let mut c = console();
+    for (path, lib) in LIBS {
+        c.write_source(path, lib).unwrap();
+    }
+    c.write_source("o.lua", OUTRUN).unwrap();
+    let built = c.assemble("o.lua").unwrap();
+    assert!(built.ok(), "{:?}", built.diagnostics);
+    c.load_rom("o.lua").unwrap();
+
+    fn sig(obs: &kessel_vm::Observation, name: &str) -> i32 {
+        obs.signals
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("no signal named '{name}'"))
+            .1
+    }
+
+    let mut input = device::BTN_A;
+    let mut best = 0;
+    let mut cps = 0;
+    let mut goal = false;
+    for _ in 0..5000 {
+        let obs = c.run_frame(input);
+        assert!(
+            obs.fault.is_none(),
+            "faulted while driving: {:?}",
+            obs.fault
+        );
+        // `px` is the road's lateral offset and is `int`, so a left-hand
+        // excursion comes back as a large word. Read it signed or the driver
+        // steers the wrong way for exactly half the track.
+        let px = obs
+            .entities
+            .iter()
+            .find(|e| e.tag == 1)
+            .expect("the car was not reported")
+            .x as i16;
+        // LEFT raises px and RIGHT lowers it, so correct towards zero. The dead
+        // band keeps it from sawing at the centre line, which costs speed.
+        input = device::BTN_A;
+        if px > 8 {
+            input |= device::BTN_RIGHT;
+        } else if px < -8 {
+            input |= device::BTN_LEFT;
+        }
+
+        best = best.max(sig(&obs, "dist"));
+        cps = cps.max(sig(&obs, "checkpoints"));
+        if sig(&obs, "state") == 2 {
+            goal = true;
+            break;
+        }
+    }
+    assert!(
+        cps > 0,
+        "a driver holding the road never reached the first checkpoint (best {best} m)"
+    );
+    assert!(
+        goal,
+        "a driver holding the road never reached the goal (best {best} m, {cps} checkpoints)"
+    );
+}
+
 #[test]
 fn shooter_vulcan_bomb_powerup_and_boss() {
     const A: u8 = 0x10;
