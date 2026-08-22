@@ -110,6 +110,19 @@ of an invalid value onto the valid range steals someone else's note.
 `games/piano.lua` is the worked example: each finger on the keybed holds a note on
 its own touch slot as a channel, and lifting that finger releases it.
 
+**Retriggering a channel replaces the note on it** rather than stacking one on
+top, which is what makes a channel usable as a continuously *changing* voice and
+not only a held one. `games/outrun.lua`'s engine is one channel re-sounded as the
+car accelerates — there is no pitch-bend port, so a rising engine can only be
+stepped, and a `note_on` on the channel it is already using is the step.
+
+Step on a change in the *value*, not on the bucket it falls in. outrun's first
+version compared buckets, and a car scrubbing speed in the dirt sat on a bucket
+edge and alternated between two notes every other frame — audible as a machine
+gun, and visible in the render report as pages of `note_on`. Anchoring the test
+on the value the note was last sounded at is a dead band, and a dead band cannot
+chatter.
+
 ## Chorus and reverb are shared sends
 
 A patch says how much of itself to send (`reverb = 40`, `chorus = 15`, both
@@ -178,5 +191,6 @@ sound rather than hear it.
 `shooter` (six instruments, effects fired from gameplay, and two `track`s —
 the stage tune and the one that replaces it when the boss arrives), `popn`
 (a rhythm game — a `track` plus the effect its keys trigger), `platform` (three
-instruments and their effects, no music), and `piano` (`note_on`/`note_off` per
-touch slot, one instrument, nothing declared in advance).
+instruments and their effects, no music), `piano` (`note_on`/`note_off` per
+touch slot, one instrument, nothing declared in advance), and `outrun` (one held
+note *retuned* as the car accelerates — the other way to use a channel).

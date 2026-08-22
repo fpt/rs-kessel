@@ -134,6 +134,53 @@ fn the_games_with_sound_are_audible() {
     }
 }
 
+/// outrun holds a note forever, so its mix has to be measured over more than a
+/// glance.
+///
+/// Every other game in the corpus makes sound in *bursts*: a shot, a coin, a
+/// row of a track. outrun holds one engine note from `init()` until the run
+/// ends, and a continuous voice under the music is a sustained level rather
+/// than a peak — which is the one thing 300 frames cannot show. The first mix
+/// passed the shared guard above comfortably and pinned the master limiter for
+/// a third of a 1300-frame render.
+///
+/// It is a test of one game rather than a longer run of all of them because it
+/// is a property of one game: nothing else here holds a voice, and tripling the
+/// corpus render to catch it would cost every game the runtime.
+#[test]
+fn outruns_held_engine_does_not_pin_the_limiter() {
+    let (name, src) = *GAMES
+        .iter()
+        .find(|(n, _)| *n == "outrun.lua")
+        .expect("outrun is in the corpus");
+    // Every throttle: `A` reaches top speed and then bogs down in the dirt,
+    // `UP` holds a mid-range note on the road for far longer, and that second
+    // one is what the first tuning failed on.
+    for buttons in [0x10u8, 0x04, 0x01] {
+        let mut c = loaded(name, src);
+        let r = c
+            .render_audio(&[(Input::from(buttons), 1300)])
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let s = &r.summary;
+        let frames = (r.samples.len() / 2) as u64;
+        assert!(
+            s.limited * 4 < frames,
+            "outrun on buttons {buttons:#04x} keeps the master limiter engaged for \
+             {} of {frames} samples — the engine and the track are fighting",
+            s.limited
+        );
+        assert!(s.peak <= 1.0, "outrun left full scale: peak {}", s.peak);
+        // Held, not retriggered: a `rev` that re-sounded on every frame instead
+        // of on a step would put thousands of voices through here.
+        assert!(
+            s.voices_started < 1000,
+            "outrun started {} voices in 1300 frames — the engine is retriggering, \
+             not holding",
+            s.voices_started
+        );
+    }
+}
+
 /// A game with no sound declarations must render silence rather than noise.
 ///
 /// The synth is shared state across a render; a game that never asks for a

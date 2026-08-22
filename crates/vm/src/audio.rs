@@ -54,6 +54,15 @@ pub fn event_json(ev: &AudioEvent) -> serde_json::Value {
     }
 }
 
+/// The event kinds that carry no id of a declaration at all.
+///
+/// Everything else in the trace is a *reference* — an sfx, a track, an
+/// instrument — so a missing name there means the game named something the bank
+/// does not have, and the report says so. These two reference nothing, and
+/// running them through the same branch had the report telling a correct game
+/// that `music_stop 0` was "no such declaration".
+const NAMES_NOTHING: [&str; 2] = ["music_stop", "panic"];
+
 /// Name an event for the trace: what kind it is, and the id it names.
 ///
 /// A note has no single id, so its instrument and pitch are packed into one —
@@ -155,6 +164,11 @@ impl AudioSummary {
             for e in &self.events {
                 match &e.name {
                     Some(n) => out.push_str(&format!("  frame {:<5} {} {}\n", e.frame, e.kind, n)),
+                    // Nothing to name, because this kind never names anything —
+                    // not a reference to a declaration that came up missing.
+                    None if NAMES_NOTHING.contains(&e.kind) => {
+                        out.push_str(&format!("  frame {:<5} {}\n", e.frame, e.kind))
+                    }
                     None => out.push_str(&format!(
                         "  frame {:<5} {} {} (no such declaration)\n",
                         e.frame, e.kind, e.id
@@ -238,6 +252,9 @@ impl VmConsole {
                 .instrument_names
                 .get(inst as usize)
                 .map(|n| format!("{n} {note}")),
+            // A release names the channel it frees, which is the only thing
+            // about it worth reading — and is emphatically not a declaration.
+            AudioEvent::NoteOff { chan } => Some(format!("chan {chan}")),
             _ => None,
         };
         AudioTrace {
@@ -431,6 +448,38 @@ function draw() cls(0) end
         let text = r.summary.report();
         assert!(text.contains("no such declaration"), "{text}");
         assert!(text.contains("WARNING"), "{text}");
+    }
+
+    /// The opposite case, and the one that used to read as the case above.
+    ///
+    /// `music_stop` and `note_off` reference no declaration, so a report that
+    /// files them under "no such declaration" is accusing a correct game of a
+    /// typo it did not make — in the one artefact an agent has instead of ears.
+    #[test]
+    fn an_event_that_names_nothing_is_not_reported_as_missing() {
+        let mut c = console(
+            r#"
+            instrument i { wave = sine  attack = 0  decay = 0  sustain = 200  release = 10 }
+            track t { tempo = 4  i = "60 . 60 ." }
+            local n: word
+            function update()
+              n = n + 1
+              if n == 1 then music(t)  note_on(3, i, 60, 200) end
+              if n == 4 then music_stop()  note_off(3) end
+            end
+            function draw() cls(0) end
+            "#,
+        );
+        let r = c.render_audio(&[(Input::default(), 10)]).unwrap();
+        let text = r.summary.report();
+        assert!(!text.contains("no such declaration"), "{text}");
+        assert_eq!(r.summary.unknown_sfx, 0);
+        assert_eq!(r.summary.unknown_track, 0);
+        // A release still says which channel it freed — that is readable, and
+        // it is the whole content of the event.
+        assert!(text.contains("note_off chan 3"), "{text}");
+        // ...while a stop has nothing to say beyond having happened.
+        assert!(text.contains("music_stop\n"), "{text}");
     }
 
     #[test]
