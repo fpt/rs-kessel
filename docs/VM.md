@@ -90,7 +90,7 @@ documents own the detail.
 |--------|-------|---------|
 | system | `0x00` | halt (non-zero halts the machine) |
 | system | `0x01`–`0x04` | palette: stage r, g, b, then commit on the index — [graphics](VM_GRAPHICS.md) |
-| screen | `0x10`–`0x1e` | frame vector, x/y, colour, pixel, sprite, cls, camera, flags, blit-id, tileset base, glyph, hspan, sprite bank — [graphics](VM_GRAPHICS.md) |
+| screen | `0x10`–`0x1f` | frame vector, x/y, colour, pixel, sprite, cls, camera, flags, blit-id, tileset base, glyph, hspan, sprite bank, vspan — [graphics](VM_GRAPHICS.md) |
 | gamepad | `0x20`–`0x24` | buttons, edges, and the analog stick — [controls](VM_CONTROLS.md) |
 | rng | `0x30` | read next `u16` / write to set the seed |
 | storage | `0x40` `0x41` `0x42` | addr / read / write (256 bytes) |
@@ -306,7 +306,8 @@ end
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
 - **Drawing:** `cls(c)`, `pset(x,y,c)`, sprites (`spr`/`sprn`), the `tilemap`
   declaration and its collision helpers, `camera`, the palette (`pal`/`sprbank`),
-  `text`/`number`, and the pseudo-3D pieces (`hline`, `spr_scaled`, `sin`/`cos`).
+  `text`/`number`, and the pseudo-3D pieces (`hline`, `vline`, `spr_scaled`,
+  `sin`/`cos`).
   Full reference in [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
 - **Input:** `btn`/`btnp`/`btnr(mask)→0/1` (held / pressed this frame /
   released this frame), the analog stick, touch, and `swipe`. Full reference in
@@ -481,7 +482,8 @@ rotation, a `tilemap` well + line clears, `min`-clamped difficulty), `rogue`
 `platform` (tile collision, gravity, wall-jumps, collectibles, and enemies), and
 `sokoban` (grid puzzle — `btnp` step input, a board held in the `tilemap` and
 mutated with `mset`, `text`/`number` HUD), and `outrun` (a pseudo-3D road racer
-— per-scanline `hline` road with a parabolic curve, a 32×32 `sprn` car and
+— per-scanline `hline` road with a parabolic curve and a linear bank, a
+`vline` horizon tilted to match, a 32×32 `sprn` car and
 `spr_scaled` roadside scenery each in their own `pal`/`sprbank` palette, and a
 `sin`-bobbed sun), `popn` (a six-key rhythm game with **no directions** —
 the four direction bits declared as labelled keys, so a host draws a button row),

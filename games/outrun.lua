@@ -49,6 +49,15 @@
 --   `(51/83)²` would have made every stripe forty rows long and left one tree
 --   per screen.
 --
+-- * **The bank is drawn twice, in two different directions.** The road is
+--   *sheared* — a term linear in distance, which is what a roll looks like to
+--   everything vertical — and the horizon is *tilted* with `vline`, because a
+--   boundary that moves with x is the one thing a row-at-a-time renderer cannot
+--   draw. The shear alone reads, but a dead-level sky/ground line gives it away.
+--   The order is load-bearing: the column pass sits between the road and the
+--   scenery, because before the road the road paints over it and after the
+--   scenery it guillotines the far trees.
+--
 -- * Scenery is a second pass over the rows, walked horizon → bottom, after the
 --   whole road is down. The road loop runs bottom → horizon (each row needs the
 --   row's own width), so an object drawn inside it is painted over by the grass
@@ -265,6 +274,7 @@ signal offroad
 signal state                -- 0 driving, 1 out of time, 2 goal
 signal drift: int           -- how far the tail is out; signed, so a left slide
                             -- reads as a negative and not as 65512
+signal roll: int            -- the bank, same reason
 
 local px: int = 0           -- road's lateral offset (car sits at screen centre)
 local speed: int = 0        -- forward speed
@@ -281,6 +291,15 @@ local pose = 0              -- which car sprite that works out as, 0..3
 local offroad = 0
 local shake = 0
 
+-- The bank. Two things are drawn from it and they have to agree: the road is
+-- sheared (a term *linear in distance* is a shear, and a shear is what a roll
+-- looks like to everything vertical), and the horizon is tilted with `vline`.
+-- The shear alone was the cheap version and it reads — but the sky/ground line
+-- staying dead level is the give-away, and that line is exactly what a
+-- row-at-a-time renderer cannot draw.
+local ROLL_MAX = 20
+local roll: int = 0
+
 local adv = 0               -- world units advanced this frame
 local msub = 0              -- fractional metres not yet handed to `dist`
 local dist = 0              -- metres travelled
@@ -296,7 +315,7 @@ function init()
   px = 0  speed = 0  sub = 0  travel = 0  dsub = 0
   curve = 0  ctarget = 0  cmag = 0  cneg = 0  next_curve = 0
   lean = 0  pose = 0  offroad = 0  shake = 0
-  adv = 0  msub = 0  dist = 0  time_t = START_T  cps = 0
+  adv = 0  msub = 0  dist = 0  time_t = START_T  cps = 0  roll = 0
   state = 0  cp_flash = 0
   eng_speed = 0  eng_on = 0
   car_palette()
@@ -502,10 +521,40 @@ function update()
   -- made, in the same units the artwork uses.
   if pose == 3 and speed > 24 and frame_count() % 7 == 0 then sfx(squeal) end
 
+  -- Bank with the road, and harder the faster you are going: a parked car on a
+  -- bend is not leaning. `cmag`/`cneg` are used rather than `curve` for the
+  -- reason they exist at all — `/` is unsigned, and dividing a negative curve
+  -- directly banks the world the wrong way by several hundred degrees.
+  local rw = cmag * speed / SPEED_MAX
+  if rw > ROLL_MAX then rw = ROLL_MAX end
+  local rwant: int = rw
+  if cneg == 1 then rwant = 0 - rw end
+  -- Eased, not set. `pose` picks one of four drawn car angles off `lean` and the
+  -- same argument applies here: snapping the whole horizon to a new angle in one
+  -- frame is a flicker, not a bank.
+  if roll < rwant then roll = roll + 1
+  elseif roll > rwant then roll = roll - 1 end
+
   shake = 0
   if offroad == 1 then
     if speed > 6 then shake = frame_count() % 2 end
   end
+end
+
+-- Screen row of the horizon in column `x`.
+--
+-- The magnitude and the sign are split apart before the divide for the same
+-- reason `cmag`/`cneg` exist: `/` is unsigned, so a negative numerator here puts
+-- the horizon about six hundred rows below the screen and the sky vanishes.
+function hz_at(x: int)
+  local dx: int = x - 64
+  local r: int = roll
+  local neg = 0
+  if r < 0 then r = 0 - r  neg = 1 end
+  if dx < 0 then dx = 0 - dx  neg = 1 - neg end
+  local m = r * dx / 96
+  if neg == 1 then return HORIZON - m end
+  return HORIZON + m
 end
 
 -- Where the road's centre is at row depth `d`. The bend is a parabola in the
@@ -513,8 +562,18 @@ end
 -- put back by hand from `cneg`.
 function road_cx(k)
   local bend = cmag * (k * k / 128) / 8
-  if cneg == 1 then return 64 + px - bend end
-  return 64 + px + bend
+  -- The bank, linear in distance. `k` is 0 at the bottom row, so the pivot is
+  -- the car: the near tarmac stays under it and the far road swings, which is
+  -- what a driver's-eye roll does. Pivoting at the horizon instead slides the
+  -- road out from under a car that is drawn at a fixed screen x.
+  local r: int = roll
+  local rneg = 0
+  if r < 0 then r = 0 - r  rneg = 1 end
+  local tilt = r * k / 64
+  local base: int = 64 + px
+  if rneg == 1 then base = base - tilt else base = base + tilt end
+  if cneg == 1 then return base - bend end
+  return base + bend
 end
 
 -- Draw a 16x16 sprite scaled by `sc`, standing with its base at (`cx`, `base`) —
@@ -561,7 +620,11 @@ function scene_at(y, cx: int, half, side: int, kind)
   local sz = 8 * sc / 256
   local dist = half + sz
   if kind == 2 then dist = dist + half / 3 end
-  spr2(id, cx + side * dist, y, sc)
+  -- Scenery stands on the ground, so it rides the bank with the ground. Left at
+  -- its level row it floats off a tilted horizon on one side and sinks into it
+  -- on the other, which reads as the trees sliding rather than the world turning.
+  local ox: int = cx + side * dist
+  spr2(id, ox, y + hz_at(ox) - HORIZON, sc)
 end
 
 -- What stands in scenery slot `n`: 0 tree, 1 palm, 2 building, 3 billboard,
@@ -621,6 +684,9 @@ function draw()
   local s: int = sin(a)
   local sun_y = 48
   if s > 0 then sun_y = 48 - s / 80 else sun_y = 48 + (0 - s) / 80 end
+  -- ...and it rides the bank with the horizon it is sitting on. Left level while
+  -- the horizon tilted under it, the sun reads as a sticker on the glass.
+  sun_y = sun_y + hz_at(78) - HORIZON
   spr_scaled(sun, 78, sun_y, 1024, 0)      -- 4x, drawn before the road
 
   -- Road, one scanline at a time from the near bottom row up to the horizon.
@@ -658,6 +724,35 @@ function draw()
     end
 
     y = y - 1
+  end
+
+  -- Bank the horizon, one column at a time.
+  --
+  -- The sky is drawn in rows and the road is drawn in rows, so both meet on a
+  -- level line at HORIZON. This walks the columns and moves that line, in both
+  -- directions: where the bank lifts the boundary, grass is painted over sky;
+  -- where it drops it, sky is painted back over grass — and over the far tarmac
+  -- with it, which is what keeps the road from poking out above its own horizon.
+  --
+  -- Between the road and the scenery, and neither side is arbitrary. Before the
+  -- road, the road would draw straight back over it. After the scenery, it
+  -- guillotines the far trees — which is what the first version did, and it
+  -- looked like the sky was eating them.
+  --
+  -- 128 columns rather than the whole sky repainted per column: the sunset's
+  -- bands are horizontal and stay that way, which nobody reads as wrong, while
+  -- the one line everybody does read is the edge between sky and ground.
+  if roll ~= 0 then
+    local hx = 0
+    while hx < 128 do
+      local h: int = hz_at(hx)
+      if h < HORIZON then
+        vline(h + 1, HORIZON, hx, GRASS_3)
+      elseif h > HORIZON then
+        vline(HORIZON + 1, h, hx, SKY7)
+      end
+      hx = hx + 1
+    end
   end
 
   -- Scenery, horizon → bottom so a near object covers a far one. A slot lands
@@ -758,4 +853,5 @@ function draw()
   signal(offroad, offroad)
   signal(state, state)
   signal(drift, lean)
+  signal(roll, roll)
 end

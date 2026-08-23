@@ -28,6 +28,7 @@ what an index means.
 | `0x1c` | out | draw one 3×5 glyph (ASCII code) at screen x/y |
 | `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
 | `0x1e` | out | sprite palette bank (0–15): a sprite nibble `n` draws as `bank*16 + n` |
+| `0x1f` | out | vertical span: fill from screen y to y2(=val) down column x, in colour (endpoints signed, same as the horizontal one) |
 | `0xa0`–`0xa3` | out | `sprn`: base id, w, h, then draw a `w×h` block at screen x/y |
 | `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id |
 | `0xc0` `0xc1` | in/out | trig: write angle (0..255 = a turn) → read sin / cos. Signed 8.8 fixed (-256..256) |
@@ -156,7 +157,7 @@ luax; see `games/platform.lua`.
 
 ## Drawing builtins
 
-`cls(c)`, `pset(x,y,c)`, `spr(id,x,y,flags)`, `sprn(…)` (above),
+`cls(c)`, `pset(x,y,c)`, `hline(x,x2,y,c)`, `vline(y,y2,x,c)`, `spr(id,x,y,flags)`, `sprn(…)` (above),
 `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, and the
 tilemap builtins above. `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool` is here too,
 since it is what sprites are usually tested with.
@@ -177,6 +178,10 @@ For racers and mode-7-ish effects:
 - `hline(x1,x2,y,c)` — fill a horizontal span at row `y`. The endpoints are
   signed, so a span whose left edge runs off-screen clips cleanly. One span per
   scanline gives a perspective road or floor cheaply (see `games/outrun.lua`).
+- `vline(y,y2,x,c)` — `hline`'s mirror, and the one primitive a row-at-a-time
+  renderer cannot fake: a boundary that moves with **x**. A tilted horizon is
+  exactly that. `games/outrun.lua` draws its sky and grass a column at a time for
+  this reason, and its road a row at a time for the opposite one.
 - `spr_scaled(id,x,y,scale,flags)` — nearest-neighbour scaled sheet tile; `scale`
   is 8.8 fixed (`256` = 1.0, `512` = 2×, `128` = ½×). For distance-scaled cars,
   trees and signs. Prefer angle-specific sprites over runtime rotation (there is
@@ -200,7 +205,8 @@ with no usable GPU.
 ## Sample games
 
 `spectrum` (240×240, the 256-colour palette, sprite banks), `outrun` (per-scanline
-`hline` road, `spr_scaled` roadside trees, a `sin`-bobbed sun), `platform` (tile
+`hline` road sheared into a bank, a `vline` horizon tilted with it,
+`spr_scaled` roadside trees, a `sin`-bobbed sun), `platform` (tile
 collision, gravity, wall-jumps), `rogue` and `sokoban` (`tilemap` +
 `fset`/`solid`, a board mutated with `mset`), `shooter` (sprite pools, three
 sprite banks plus a `pal` ramp of its own for the terrain, and a `text`/`number`
