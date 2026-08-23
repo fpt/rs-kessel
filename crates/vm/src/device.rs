@@ -779,6 +779,11 @@ impl Devices {
                 // Horizontal span from the pending sx to x2 (=val) at row sy in
                 // scolor — the pseudo-3D road/scanline primitive.
                 0xd => self.draw_hline(self.sx, val, self.sy, self.scolor),
+                // Vertical span, hline's mirror. It exists for the one thing a
+                // row-at-a-time renderer cannot draw: a boundary that moves with
+                // **x**. A tilted horizon is exactly that, and so is a column of
+                // anything — a bar chart, a wipe, a lift shaft.
+                0xf => self.draw_vline(self.sy, val, self.sx, self.scolor),
                 _ => {}
             },
             0x3 => {
@@ -1112,6 +1117,29 @@ impl Devices {
         while sx <= sxb {
             self.framebuffer[row + sx as usize] = c;
             sx += 1;
+        }
+    }
+
+    /// Vertical span from `ya` to `yb` down column `x`, in `color`.
+    ///
+    /// The exact mirror of [`draw_hline`](Self::draw_hline), down to reading its
+    /// endpoints as **signed**: a column whose top runs off the screen has to
+    /// clip rather than wrap to a huge positive y and vanish, which is what a
+    /// tilted horizon does the moment the tilt lifts one end above row 0.
+    fn draw_vline(&mut self, ya: u16, yb: u16, x: u16, color: u8) {
+        let sx = x as i32 - self.cam_x as i32;
+        if !(0..self.dim as i32).contains(&sx) {
+            return;
+        }
+        let (ya, yb) = (ya as i16 as i32, yb as i16 as i32);
+        let (lo, hi) = if ya <= yb { (ya, yb) } else { (yb, ya) };
+        let sya = (lo - self.cam_y as i32).max(0);
+        let syb = (hi - self.cam_y as i32).min(self.dim as i32 - 1);
+        let c = color;
+        let mut sy = sya;
+        while sy <= syb {
+            self.framebuffer[sy as usize * self.dim + sx as usize] = c;
+            sy += 1;
         }
     }
 
@@ -1926,6 +1954,37 @@ mod tests {
         assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 10], 5);
         assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 14], 5);
         assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 15], 0);
+    }
+
+    #[test]
+    fn vline_via_device_port() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 5, &mem); // scolor = 5
+        d.write(0x11, 3, &mem); // sx = 3
+        d.write(0x12, 10, &mem); // sy = 10 (y1)
+        d.write(0x1f, 14, &mem); // y2 = 14 -> draw column 3, rows 10..=14
+        assert_eq!(d.framebuffer[9 * CLASSIC_DIM + 3], 0);
+        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 3], 5);
+        assert_eq!(d.framebuffer[14 * CLASSIC_DIM + 3], 5);
+        assert_eq!(d.framebuffer[15 * CLASSIC_DIM + 3], 0);
+    }
+
+    /// The reason the endpoints are read signed. A tilted horizon lifts one end
+    /// of the sky above row 0 as soon as the tilt is steep enough, and an
+    /// unsigned reading turns that into y = 65516 and draws nothing — a sky that
+    /// silently disappears at one corner.
+    #[test]
+    fn vline_clips_above_the_top_edge() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 9, &mem);
+        d.write(0x11, 2, &mem); // column 2
+        d.write(0x12, 0xFFEC, &mem); // y1 = -20 as u16
+        d.write(0x1f, 30, &mem); // y2 = 30
+        assert_eq!(d.framebuffer[2], 9, "top edge drawn");
+        assert_eq!(d.framebuffer[30 * CLASSIC_DIM + 2], 9, "bottom end drawn");
+        assert_eq!(d.framebuffer[31 * CLASSIC_DIM + 2], 0);
     }
 
     #[test]

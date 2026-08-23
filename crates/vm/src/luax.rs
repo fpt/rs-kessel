@@ -1864,6 +1864,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "cls" => (1, false),
         "pset" => (3, false),
         "hline" => (4, false),
+        "vline" => (4, false),
         "spr" => (4, false),
         "spr_scaled" => (5, false),
         "sprn" => (6, false),
@@ -3161,6 +3162,10 @@ impl Compiler {
             "pset" => "#13 DEO #12 DEO #11 DEO #00 #14 DEO", // ( x y color )
             // ( x1 x2 y color ) fill a horizontal span at row y — pseudo-3D road.
             "hline" => "#13 DEO #12 DEO SWAP #11 DEO #1d DEO",
+            // ( y y2 x c ) — the same shape as hline with the axes swapped, so
+            // the two read alike at a call site: span endpoints, then the fixed
+            // coordinate, then the colour.
+            "vline" => "#13 DEO #11 DEO SWAP #12 DEO #1f DEO",
             "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO", // ( id x y flags ) blit by id
             // ( id x y scale flags ) nearest-neighbour scaled tile (256 = 1.0).
             "spr_scaled" => "#19 DEO #b0 DEO #12 DEO #11 DEO #b1 DEO",
@@ -4542,6 +4547,35 @@ mod tests {
             "{:?}",
             c.diagnostics
         );
+    }
+
+    #[test]
+    fn vline_fills_a_column() {
+        // vline(10, 20, 5, 7): column 5, rows 10..=20 become colour 7. The
+        // argument order mirrors hline's — span endpoints, fixed coordinate,
+        // colour — so the two read alike at a call site and neither has to be
+        // looked up.
+        let src = r#"
+            function draw()
+              cls(0)
+              vline(10, 20, 5, 7)
+              vline(30, 25, 6, 3)   -- reversed args draw the same column
+            end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!(fb[9 * 128 + 5], 0, "above the span untouched");
+        assert_eq!(fb[10 * 128 + 5], 7);
+        assert_eq!(fb[20 * 128 + 5], 7);
+        assert_eq!(fb[21 * 128 + 5], 0, "below the span untouched");
+        assert_eq!(
+            fb[25 * 128 + 6],
+            3,
+            "reversed endpoints draw the same column"
+        );
+        assert_eq!(fb[30 * 128 + 6], 3);
     }
 
     #[test]
