@@ -28,9 +28,5 @@ end
 
 function draw()
   cls(1)                         -- dark-blue background
-  for dy = 0, 2 do
-    for dx = 0, 2 do
-      pset(b.x + dx, b.y + dy, 8) -- a 3x3 red block
-    end
-  end
+  rect(b.x, b.y, 3, 3, 8)        -- a 3x3 red block
 end

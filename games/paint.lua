@@ -90,12 +90,17 @@ function update()
   touched = touch_count()
 end
 
--- A filled square, since the console has no rect primitive and a single pixel
--- is invisible on a 240×240 screen scaled to a phone.
+-- A filled square centred on (x, y) -- a single pixel is invisible on a 240×240
+-- screen scaled to a phone. This was a loop of `hline` before the console grew
+-- `rect`; the centring is the only part of it left.
+--
+-- The loop ran `r = 0, size`, one row more than it drew columns, so every brush
+-- was a pixel taller than it was wide. Nobody sees that in a paint smear, which
+-- is exactly why it survived -- `2 * d + 1` on both axes is the square it was
+-- always meant to be.
 function blob(x, y, size, c)
-  for r = 0, size do
-    hline(x - size / 2, x + size / 2, y - size / 2 + r, c)
-  end
+  local d = size / 2
+  rect(x - d, y - d, 2 * d + 1, 2 * d + 1, c)
 end
 
 function draw()
@@ -125,13 +130,7 @@ function draw()
   blob(cx, cy, 1, 7)
 
   -- HUD on a cleared strip, so the readout never disappears into the painting.
-  hline(0, 239, 0, 0)
-  hline(0, 239, 1, 0)
-  hline(0, 239, 2, 0)
-  hline(0, 239, 3, 0)
-  hline(0, 239, 4, 0)
-  hline(0, 239, 5, 0)
-  hline(0, 239, 6, 0)
+  rect(0, 0, 240, 7, 0)
   text("FINGERS", 4, 1, 6)
   number(touched, 66, 1, 7)
   text("COLOUR", 100, 1, 6)

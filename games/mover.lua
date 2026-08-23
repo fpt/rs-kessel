@@ -25,9 +25,6 @@ end
 
 function draw()
   cls(0)
-  pset(p.x, p.y, 11)             -- green 2x2 block
-  pset(p.x + 1, p.y, 11)
-  pset(p.x, p.y + 1, 11)
-  pset(p.x + 1, p.y + 1, 11)
+  rect(p.x, p.y, 2, 2, 11)       -- green 2x2 block
   entity(p.x, p.y, 1)
 end

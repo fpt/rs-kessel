@@ -60,12 +60,10 @@ function hits(ax, ay, bx, by, size)
   return ax < bx + size and bx < ax + size and ay < by + size and by < ay + size
 end
 
--- Fill a `size`-square block. Every game that draws a solid sprite-less thing
--- writes this loop; here it is once.
+-- Fill a `size`-square block. This was a nested `pset` loop until the console
+-- grew `rect` -- every game that drew a solid sprite-less thing wrote that loop,
+-- which is what argued the primitive into existence. It stays a helper because
+-- a square is one number, not two.
 function block(x, y, size, color)
-  for dy = 0, size - 1 do
-    for dx = 0, size - 1 do
-      pset(x + dx, y + dy, color)
-    end
-  end
+  rect(x, y, size, size, color)
 end

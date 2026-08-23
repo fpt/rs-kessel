@@ -955,10 +955,8 @@ function draw_hud()
   if bactive == 1 then
     -- Boss health, drawn as a bar because a number would not read at a glance.
     local w = bhp * 232 / BOSS_HP
-    hline(4, 235, 18, 5)
-    if bhp > 0 then hline(4, 4 + w, 18, 8) end
-    hline(4, 235, 19, 5)
-    if bhp > 0 then hline(4, 4 + w, 19, 8) end
+    rect(4, 18, 232, 2, 5)
+    if bhp > 0 then rect(4, 18, w + 1, 2, 8) end
   end
 end
 

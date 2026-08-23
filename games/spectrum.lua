@@ -99,11 +99,7 @@ function draw()
   while c < 216 do
     local sx = 8 + (c % 24) * 9
     local sy = 150 + (c / 24) * 9
-    local r = 0
-    while r < 8 do
-      hline(sx, sx + 7, sy + r, 16 + c)
-      r = r + 1
-    end
+    rect(sx, sy, 8, 8, 16 + c)
     c = c + 1
   end
   text("DEFAULT 216-COLOUR CUBE", 8, 138, 6)

@@ -29,6 +29,7 @@ what an index means.
 | `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
 | `0x1e` | out | sprite palette bank (0–15): a sprite nibble `n` draws as `bank*16 + n` |
 | `0x1f` | out | vertical span: fill from screen y to y2(=val) down column x, in colour (endpoints signed, same as the horizontal one) |
+| `0xe0` `0xe1` `0xe2` | out | filled rect: h, w, then **draw** taking x (y and colour come from the screen page). Both axes signed, so a box off the top-left clips |
 | `0xa0`–`0xa3` | out | `sprn`: base id, w, h, then draw a `w×h` block at screen x/y |
 | `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id |
 | `0xc0` `0xc1` | in/out | trig: write angle (0..255 = a turn) → read sin / cos. Signed 8.8 fixed (-256..256) |
@@ -157,10 +158,25 @@ luax; see `games/platform.lua`.
 
 ## Drawing builtins
 
-`cls(c)`, `pset(x,y,c)`, `hline(x,x2,y,c)`, `vline(y,y2,x,c)`, `spr(id,x,y,flags)`, `sprn(…)` (above),
+`cls(c)`, `pset(x,y,c)`, `rect(x,y,w,h,c)`, `hline(x,x2,y,c)`, `vline(y,y2,x,c)`,
+`spr(id,x,y,flags)`, `sprn(…)` (above),
 `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, and the
 tilemap builtins above. `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool` is here too,
 since it is what sprites are usually tested with.
+
+`rect` takes an **origin and a size**, deliberately the same four numbers
+`rect_overlap` takes — a game that tests a box and then draws it hands both the
+same values, where corners-and-a-size mixed together is an off-by-one waiting
+for the second reader. A zero `w` or `h` draws nothing, the answer
+`rect_overlap` gives it too. Both axes are signed, so a box that has scrolled
+off the top-left clips instead of wrapping.
+
+It is also the difference between a filled box costing one device write and
+costing one per row: a 32×32 box is ~35 cycles as `rect`, 1,071 as a loop of
+`hline`, and 36,879 as a nested `pset` loop, against a 200,000-cycle frame. Most
+of the corpus wrote one of the latter two before this existed — `piano`'s
+`box`, `paint`'s `blob` and `lib/motion.lua`'s `block` were all the same missing
+primitive.
 
 ### On-screen text
 
@@ -175,6 +191,9 @@ every 4 px — the argument must be a `"..."` literal, luax has no runtime strin
 
 For racers and mode-7-ish effects:
 
+- `rect(x,y,w,h,c)` — a filled box, above. Reach for it before either span: a
+  solid rectangle is what most HUD bars, panels and sprite-less things are, and
+  drawing one a row at a time is the corpus's most common avoidable cost.
 - `hline(x1,x2,y,c)` — fill a horizontal span at row `y`. The endpoints are
   signed, so a span whose left edge runs off-screen clips cleanly. One span per
   scanline gives a perspective road or floor cheaply (see `games/outrun.lua`).

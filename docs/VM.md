@@ -91,6 +91,7 @@ documents own the detail.
 | system | `0x00` | halt (non-zero halts the machine) |
 | system | `0x01`–`0x04` | palette: stage r, g, b, then commit on the index — [graphics](VM_GRAPHICS.md) |
 | screen | `0x10`–`0x1f` | frame vector, x/y, colour, pixel, sprite, cls, camera, flags, blit-id, tileset base, glyph, hspan, sprite bank, vspan — [graphics](VM_GRAPHICS.md) |
+| rect | `0xe0`–`0xe2` | filled box: h, w, then draw at x — [graphics](VM_GRAPHICS.md) |
 | gamepad | `0x20`–`0x24` | buttons, edges, and the analog stick — [controls](VM_CONTROLS.md) |
 | rng | `0x30` | read next `u16` / write to set the seed |
 | storage | `0x40` `0x41` `0x42` | addr / read / write (256 bytes) |
@@ -304,7 +305,8 @@ end
   see below), `rnd(n)→0..n-1`, `peek/poke(addr[,v])` (8-bit) and
   `peek16/poke16`, `min(a,b)` / `max(a,b)`, and
   `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool`.
-- **Drawing:** `cls(c)`, `pset(x,y,c)`, sprites (`spr`/`sprn`), the `tilemap`
+- **Drawing:** `cls(c)`, `pset(x,y,c)`, `rect(x,y,w,h,c)` (a filled box — the
+  same four numbers `rect_overlap` takes), sprites (`spr`/`sprn`), the `tilemap`
   declaration and its collision helpers, `camera`, the palette (`pal`/`sprbank`),
   `text`/`number`, and the pseudo-3D pieces (`hline`, `vline`, `spr_scaled`,
   `sin`/`cos`).

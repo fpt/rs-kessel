@@ -228,15 +228,13 @@ function draw()
     for y = 0, 5 do
       hline(x + 1, x + LANE_W - 2, 12 + y * 34, 1)
     end
-    -- The key face. Bright while flashing, dim otherwise.
+    -- The key face. Bright while flashing, dim otherwise. The colour is picked
+    -- once and the face drawn once -- it used to be a 23-row loop with the
+    -- `flash` test inside it, asking the same question twenty-three times.
     local top = BAR_Y + WINDOW
-    for y = 0, 22 do
-      if flash[l] > 0 then
-        hline(x + 2, x + LANE_W - 3, top + y, c)
-      else
-        hline(x + 2, x + LANE_W - 3, top + y, 5)
-      end
-    end
+    local face = 5
+    if flash[l] > 0 then face = c end
+    rect(x + 2, top, LANE_W - 4, 23, face)
     -- A stripe of the lane's colour, so an unpressed key still says which is
     -- which.
     hline(x + 2, x + LANE_W - 3, top, c)
@@ -252,9 +250,7 @@ function draw()
     if notes[i].alive == 1 then
       local x = lane_x(notes[i].lane)
       local c = lane_color(notes[i].lane)
-      for y = 0, 7 do
-        hline(x + 4, x + LANE_W - 5, notes[i].y + y, c)
-      end
+      rect(x + 4, notes[i].y, LANE_W - 8, 8, c)
       entity(x + LANE_W / 2, notes[i].y, 1)
     end
   end
