@@ -655,11 +655,7 @@ end
 -- onto it is legible everywhere except over the sun — and the banner is the one
 -- thing on the screen that has to read every time.
 function plate()
-  local y = 50
-  while y < 72 do
-    hline(28, 99, y, 0)
-    y = y + 1
-  end
+  rect(28, 50, 72, 22, 0)
 end
 
 function draw()

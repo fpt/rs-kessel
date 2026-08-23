@@ -114,15 +114,13 @@ end
 function draw()
   cls(1)
 
-  -- The arena, so the walls the sparks bounce off are visible.
-  for x = 0, DIM - 1 do
-    pset(x, 0, 13)
-    pset(x, DIM - 1, 13)
-  end
-  for y = 0, DIM - 1 do
-    pset(0, y, 13)
-    pset(DIM - 1, y, 13)
-  end
+  -- The arena, so the walls the sparks bounce off are visible. Four spans
+  -- rather than four loops of `pset`: 512 device writes a frame went to drawing
+  -- a box outline, which was most of this game's frame.
+  hline(0, DIM - 1, 0, 13)
+  hline(0, DIM - 1, DIM - 1, 13)
+  vline(0, DIM - 1, 0, 13)
+  vline(0, DIM - 1, DIM - 1, 13)
 
   for i = 0, SPARKS - 1 do
     block(sparks[i].x, sparks[i].y, SIZE, 8)
@@ -136,9 +134,7 @@ function draw()
 
   -- The score bar: one pixel per eight frames survived, capped at the width.
   local bar = min(score / 8, DIM - 8)
-  for x = 0, bar do
-    pset(4 + x, 4, 10)
-  end
+  hline(4, 4 + bar, 4, 10)
 
   -- 4 px per glyph, so these are centred by hand on a 128-wide screen.
   if dead == 1 then

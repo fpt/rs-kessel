@@ -1865,6 +1865,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "pset" => (3, false),
         "hline" => (4, false),
         "vline" => (4, false),
+        "rect" => (5, false),
         "spr" => (4, false),
         "spr_scaled" => (5, false),
         "sprn" => (6, false),
@@ -3166,6 +3167,10 @@ impl Compiler {
             // the two read alike at a call site: span endpoints, then the fixed
             // coordinate, then the colour.
             "vline" => "#13 DEO #11 DEO SWAP #12 DEO #1f DEO",
+            // ( x y w h c ) filled box. The arguments pop in exactly the order
+            // the ports want them, so unlike hline/vline this one needs no SWAP:
+            // colour, then the size, then y, and x commits the draw.
+            "rect" => "#13 DEO #e0 DEO #e1 DEO #12 DEO #e2 DEO",
             "spr" => "#19 DEO #12 DEO #11 DEO #1a DEO", // ( id x y flags ) blit by id
             // ( id x y scale flags ) nearest-neighbour scaled tile (256 = 1.0).
             "spr_scaled" => "#19 DEO #b0 DEO #12 DEO #11 DEO #b1 DEO",
@@ -4547,6 +4552,58 @@ mod tests {
             "{:?}",
             c.diagnostics
         );
+    }
+
+    #[test]
+    fn rect_fills_a_box() {
+        // rect(x, y, w, h, c) — origin and size, the same four numbers
+        // `rect_overlap` takes, so a game can test a box and draw it without
+        // converting between two descriptions of one rectangle.
+        let src = r#"
+            function draw()
+              cls(0)
+              rect(10, 20, 5, 3, 7)
+              rect(100, 100, 4, 4, 9)   -- clips against the right/bottom edges
+            end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!(fb[20 * 128 + 9], 0, "left of the box");
+        assert_eq!(fb[20 * 128 + 10], 7, "top-left corner");
+        assert_eq!(fb[20 * 128 + 14], 7, "top-right corner");
+        assert_eq!(fb[20 * 128 + 15], 0, "w is a size, not a second x");
+        assert_eq!(fb[22 * 128 + 14], 7, "bottom-right corner");
+        assert_eq!(fb[23 * 128 + 10], 0, "h is a size, not a second y");
+        assert_eq!(fb[19 * 128 + 10], 0, "above the box");
+        assert_eq!(fb[103 * 128 + 103], 9, "the second box is whole on screen");
+    }
+
+    /// `rect` leaves the stack balanced. It is the only drawing builtin whose
+    /// five arguments pop straight into their ports with no `SWAP`, so a wrong
+    /// port order would show up as a drift rather than a fault — draw many and
+    /// check the last one still lands.
+    #[test]
+    fn rect_leaves_the_stack_clean() {
+        let src = r#"
+            function draw()
+              cls(0)
+              local i = 0
+              while i < 40 do
+                rect(2, 2, 3, 3, 5)
+                i = i + 1
+              end
+              rect(60, 60, 2, 2, 8)
+            end
+        "#;
+        compile_ok(src);
+        let mut c = load(src);
+        let obs = c.run_frame(0);
+        assert!(obs.fault.is_none(), "faulted: {:?}", obs.fault);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!(fb[60 * 128 + 60], 8, "the 41st rect still lands");
+        assert_eq!(fb[2 * 128 + 2], 5);
     }
 
     #[test]

@@ -614,17 +614,9 @@ function update()
   entity(bars[2], bars[3], 13)
 end
 
--- A filled box. `hline` is the only filled primitive the console has, so every
--- panel, key and bar in this game is a run of them.
-function box(x0, y0, w, h, c)
-  for y = y0, y0 + h - 1 do
-    hline(x0, x0 + w - 1, y, c)
-  end
-end
-
 function draw_header()
-  box(OCT_DN_X, OCT_Y, OCT_W, OCT_H, 5)
-  box(OCT_UP_X, OCT_Y, OCT_W, OCT_H, 5)
+  rect(OCT_DN_X, OCT_Y, OCT_W, OCT_H, 5)
+  rect(OCT_UP_X, OCT_Y, OCT_W, OCT_H, 5)
   text("DN", OCT_DN_X + 16, OCT_Y + 8, 7)
   text("UP", OCT_UP_X + 16, OCT_Y + 8, 7)
 
@@ -637,7 +629,7 @@ function draw_modes()
   for i = 0, 3 do
     local c = 1
     if i == mode then c = 12 end
-    box(i * MODE_W, MODE_Y, MODE_W - 2, MODE_H, c)
+    rect(i * MODE_W, MODE_Y, MODE_W - 2, MODE_H, c)
   end
   -- `text` takes a literal, so the four names are four calls rather than a
   -- lookup — there is no string type to hold them in.
@@ -653,10 +645,10 @@ function draw_bars()
   for b = 0, NUM_BARS - 1 do
     local x0 = b * MODE_W + 4
     local w = MODE_W - 10
-    box(x0, BAR_Y, w, BAR_H, 1)
+    rect(x0, BAR_Y, w, BAR_H, 1)
     local fill = bars[b] * BAR_H / 8
     if fill > 0 then
-      box(x0, BAR_Y + BAR_H - fill, w, fill, 9)
+      rect(x0, BAR_Y + BAR_H - fill, w, fill, 9)
     end
     number(bars[b], x0 + w - 6, PAR_Y + 2, 10)
   end
@@ -674,11 +666,11 @@ function draw_synth()
   for i = 0, 3 do
     local c = 1
     if i == syn_wave then c = 12 end
-    box(i * MODE_W, PAR_Y, MODE_W - 2, h, c)
+    rect(i * MODE_W, PAR_Y, MODE_W - 2, h, c)
 
     local c2 = 1
     if i == syn_cut then c2 = 9 end
-    box(i * MODE_W, PAR_Y + PAR_H / 2, MODE_W - 2, h, c2)
+    rect(i * MODE_W, PAR_Y + PAR_H / 2, MODE_W - 2, h, c2)
   end
   text("TRI", 12, PAR_Y + 6, 7)
   text("SAW", 72, PAR_Y + 6, 7)
@@ -699,7 +691,7 @@ function draw_panel()
   elseif mode == MODE_SYNTH then
     draw_synth()
   else
-    box(0, PAR_Y, DIM, PAR_H, 1)
+    rect(0, PAR_Y, DIM, PAR_H, 1)
     if mode == MODE_PIANO then
       text("STRUCK STRING", 8, PAR_Y + 20, 6)
     else
@@ -716,7 +708,7 @@ function draw_keys()
     local x0 = i * WHITE_W
     local c = 7
     if key_is_active(base_note + white_offset(i)) == 1 then c = 10 end
-    box(x0 + 1, KB_Y, WHITE_W - 2, KB_H, c)
+    rect(x0 + 1, KB_Y, WHITE_W - 2, KB_H, c)
   end
 
   -- Black keys on top, shorter and narrower, centred on the boundary between
@@ -726,7 +718,7 @@ function draw_keys()
       local bx = (i + 1) * WHITE_W - BLACK_W / 2
       local c = 0
       if key_is_active(base_note + black_offset(i)) == 1 then c = 9 end
-      box(bx, KB_Y, BLACK_W, BLACK_H, c)
+      rect(bx, KB_Y, BLACK_W, BLACK_H, c)
     end
   end
 end

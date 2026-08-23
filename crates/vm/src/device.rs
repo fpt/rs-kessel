@@ -511,6 +511,11 @@ pub struct Devices {
     trig_angle: u16,
     // touch device (page 0xd): which slot the next x/y/state read describes
     touch_slot: u16,
+    // rect device (page 0xe): the pending box's size. The origin is the screen
+    // page's own (sx, sy) and the colour its `scolor`, the same way `hline` and
+    // `vline` borrow them — a rectangle is not a different kind of drawing.
+    rect_w: u16,
+    rect_h: u16,
 }
 
 impl Default for Devices {
@@ -580,6 +585,8 @@ impl Devices {
             scale_fp: 256,
             trig_angle: 0,
             touch_slot: 0,
+            rect_w: 0,
+            rect_h: 0,
         }
     }
 
@@ -912,6 +919,15 @@ impl Devices {
             // one, which is a truthful answer, where clamping would hand back
             // some *other* finger's position.
             0xd if reg == 0x0 => self.touch_slot = val,
+            // Rect device: latch a size, then commit with the left edge. The
+            // size is latched rather than the second corner so `rect` takes the
+            // same four numbers `rect_overlap` does — see `draw_rect`.
+            0xe => match reg {
+                0x0 => self.rect_h = val,
+                0x1 => self.rect_w = val,
+                0x2 => self.draw_rect(val, self.sy, self.rect_w, self.rect_h, self.scolor),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -1139,6 +1155,48 @@ impl Devices {
         let mut sy = sya;
         while sy <= syb {
             self.framebuffer[sy as usize * self.dim + sx as usize] = c;
+            sy += 1;
+        }
+    }
+
+    /// Filled `w × h` rectangle with its top-left corner at (`x`, `y`), in
+    /// `color`.
+    ///
+    /// **Origin and size, not two corners.** `rect_overlap` — the builtin that
+    /// already describes a rectangle in luax — takes `x, y, w, h`, and a game
+    /// that tests a box and then draws it should hand both the same four
+    /// numbers. Two spellings of one rectangle is an off-by-one waiting for the
+    /// second reader, and the three helpers the corpus wrote before this port
+    /// existed (`piano`'s `box`, `motion`'s `block`, `paint`'s `blob`) all took
+    /// a size too.
+    ///
+    /// A zero-width or zero-height box draws nothing, which is the answer
+    /// `rect_overlap` gives it as well.
+    ///
+    /// Both axes are read **signed**, for the reason [`draw_hline`](Self::draw_hline)
+    /// reads its endpoints that way: a box that has scrolled off the left or top
+    /// edge must clip rather than wrap to a huge positive coordinate and vanish.
+    /// The clip is computed once rather than per row — stacking `h` calls to
+    /// `draw_hline` would make `rect(0, 0, 4, 60000)` cost sixty thousand calls
+    /// to be told the rows are off-screen.
+    fn draw_rect(&mut self, x: u16, y: u16, w: u16, h: u16, color: u8) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let (x, y) = (x as i16 as i32, y as i16 as i32);
+        let (w, h) = (w as i32, h as i32);
+        let x0 = (x - self.cam_x as i32).max(0);
+        let x1 = (x + w - 1 - self.cam_x as i32).min(self.dim as i32 - 1);
+        let y0 = (y - self.cam_y as i32).max(0);
+        let y1 = (y + h - 1 - self.cam_y as i32).min(self.dim as i32 - 1);
+        let mut sy = y0;
+        while sy <= y1 {
+            let row = sy as usize * self.dim;
+            let mut sx = x0;
+            while sx <= x1 {
+                self.framebuffer[row + sx as usize] = color;
+                sx += 1;
+            }
             sy += 1;
         }
     }
@@ -1985,6 +2043,93 @@ mod tests {
         assert_eq!(d.framebuffer[2], 9, "top edge drawn");
         assert_eq!(d.framebuffer[30 * CLASSIC_DIM + 2], 9, "bottom end drawn");
         assert_eq!(d.framebuffer[31 * CLASSIC_DIM + 2], 0);
+    }
+
+    #[test]
+    fn rect_via_device_port() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 4, &mem); // scolor = 4
+        d.write(0xe0, 3, &mem); // h = 3
+        d.write(0xe1, 5, &mem); // w = 5
+        d.write(0x12, 10, &mem); // y = 10
+        d.write(0xe2, 20, &mem); // x = 20 -> draw 20..=24 x 10..=12
+        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 19], 0, "left of the box");
+        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 20], 4);
+        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 24], 4);
+        assert_eq!(
+            d.framebuffer[10 * CLASSIC_DIM + 25],
+            0,
+            "w is a size, not x2"
+        );
+        assert_eq!(d.framebuffer[12 * CLASSIC_DIM + 24], 4, "last row");
+        assert_eq!(
+            d.framebuffer[13 * CLASSIC_DIM + 20],
+            0,
+            "h is a size, not y2"
+        );
+    }
+
+    /// A zero-sized box draws nothing — the same answer `rect_overlap` gives it.
+    /// Treating 0 as "one pixel wide" would put a stray dot wherever a game
+    /// drew a bar that had shrunk to empty, which is precisely when nothing
+    /// should be there.
+    #[test]
+    fn rect_of_zero_size_draws_nothing() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 7, &mem);
+        d.write(0xe0, 0, &mem); // h = 0
+        d.write(0xe1, 9, &mem);
+        d.write(0x12, 4, &mem);
+        d.write(0xe2, 4, &mem);
+        assert!(
+            d.framebuffer.iter().all(|&p| p == 0),
+            "h = 0 drew something"
+        );
+
+        d.write(0xe0, 9, &mem);
+        d.write(0xe1, 0, &mem); // w = 0
+        d.write(0xe2, 4, &mem);
+        assert!(
+            d.framebuffer.iter().all(|&p| p == 0),
+            "w = 0 drew something"
+        );
+    }
+
+    /// The reason both axes are read signed: a box scrolling off the top-left
+    /// has a negative corner, and an unsigned reading turns that into x = 65526
+    /// and draws nothing — the box vanishes instead of sliding off.
+    #[test]
+    fn rect_clips_a_negative_corner() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 6, &mem);
+        d.write(0xe0, 12, &mem); // h = 12
+        d.write(0xe1, 12, &mem); // w = 12
+        d.write(0x12, 0xFFFA, &mem); // y = -6
+        d.write(0xe2, 0xFFFA, &mem); // x = -6 -> only the 6x6 at the origin shows
+        assert_eq!(d.framebuffer[0], 6, "the visible corner");
+        assert_eq!(d.framebuffer[5 * CLASSIC_DIM + 5], 6, "last visible pixel");
+        assert_eq!(d.framebuffer[6 * CLASSIC_DIM + 5], 0, "one row past");
+        assert_eq!(d.framebuffer[5 * CLASSIC_DIM + 6], 0, "one column past");
+    }
+
+    /// A box far wider than the screen clips instead of panicking on the
+    /// framebuffer index, and does not walk rows that are not on screen.
+    #[test]
+    fn rect_larger_than_the_screen_clips() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x13, 2, &mem);
+        d.write(0xe0, 60000, &mem);
+        d.write(0xe1, 60000, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0xe2, 0, &mem);
+        assert!(
+            d.framebuffer.iter().all(|&p| p == 2),
+            "the screen is filled"
+        );
     }
 
     #[test]
