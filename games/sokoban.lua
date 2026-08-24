@@ -213,5 +213,45 @@ function draw()
     text("PRESS A", 50, 65, 7)
   end
 
+  -- ---- light ---------------------------------------------------------------
+  -- A puzzle has to stay readable, so this is mood rather than fog: the board
+  -- sits just under neutral and the lights only pick out what matters. See
+  -- docs/VM_GRAPHICS.md ("Light"); `games/lantern.lua` is the dark end of the
+  -- same three calls.
+
+  ambient(33, 32, 41)                       -- a cold warehouse, one lamp lit
+
+  -- Walls and crates stop light — which is the one hint this puzzle gives for
+  -- free: a box you have shoved into a corner casts into it, and the dead space
+  -- behind it is the dead space you just made.
+  for y = 0, 7 do
+    for x = 0, 7 do
+      local t = mget(x, y)
+      if t == wall or t == box or t == boxt then
+        shadow_rect(OX + x * 8, OY + y * 8, 8, 8)
+      end
+    end
+  end
+
+  -- Goals glow amber and parked boxes glow green, which is the state the player
+  -- is actually tracking. A box on a goal already changes sprite; the light is
+  -- what makes the count readable at a glance instead of tile by tile.
+  for y = 0, 7 do
+    for x = 0, 7 do
+      local t = mget(x, y)
+      if t == target then
+        light(OX + x * 8 + 4, OY + y * 8 + 4, 11, 30, 15, 4)
+      elseif t == boxt then
+        light(OX + x * 8 + 4, OY + y * 8 + 4, 12, 5, 28, 14)
+      end
+    end
+  end
+
+  light(OX + px * 8 + 4, OY + py * 8 + 4, 34, 30, 25, 13)
+
+  light_rect(0, 0, 128, 26, 64, 64, 64)     -- title / stage
+  light_rect(0, 104, 128, 24, 64, 64, 64)   -- move counter
+  if won == 1 then light_rect(28, 52, 74, 21, 64, 64, 64) end
+
   entity(px, py, stage)      -- report player position and active stage
 end

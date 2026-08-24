@@ -66,8 +66,10 @@ Three things follow, and none of them should be re-litigated:
 
 Lighting is **one r/g/b light level per pixel, resolved on the way to RGBA** —
 `framebuffer_rgba_into` and nowhere else. `64` is neutral, `0` black, `255` 4×.
-Three ops: `ambient` floods the layer, `light` adds a radial source, `light_rect`
-sets a box. See `docs/VM_GRAPHICS.md` and `games/lantern.lua`.
+Four ops: `ambient` floods the layer, `light` adds a radial source, `light_rect`
+sets a box, `shadow_rect` marks a box solid to light. See `docs/VM_GRAPHICS.md`;
+`games/lantern.lua`, `games/rogue.lua` and `games/sokoban.lua` are the corpus's
+worked examples, at three different depths of darkness.
 
 It is deliberately **not** per-sprite alpha, and that is the whole reason it is
 cheap. Blending would have to happen in *index* space, where there is no answer:
@@ -96,6 +98,19 @@ Five things follow, and none should be re-litigated:
   false by default and `framebuffer_rgba_into` takes exactly the path it always
   did. `set_mode` drops the layer, because it is sized off `dim` and a stale one
   reads at the new stride.
+- **Obstacles are boxes, cleared by the flood.** A frame reads flood → walls →
+  lamps, and `ambient` clears the occluders with the light because they belong to
+  one frame: a wall left over is in the wrong place the moment the world scrolls.
+  A solid pixel is *lit*; what is behind it is not — otherwise the wall facing a
+  torch is the one thing the torch cannot show you. Opacity taken from the art
+  instead would mean deciding which palette indices are solid, which no palette
+  can answer for every game.
+- **Shadows propagate, they do not ray-cast.** A pixel is lit when the one pixel
+  nearer the lamp is lit and not solid — one Bresenham step back, reusing the
+  answer a neighbour already computed. Walking a whole ray per pixel is the
+  obvious version and is `O(r³)`: a radius-64 lamp would be eight hundred
+  thousand steps per lamp per frame. This is `O(r²)`, the same order as drawing
+  the light at all. A ROM that declares nothing solid skips the walk entirely.
 - **The layer is part of the frame's identity.** `framebuffer_hash` folds it in
   and `changed_bbox` counts a pixel changed when its *light* moved. A torch
   drifting over a static dungeon redraws nothing, and an observation blind to

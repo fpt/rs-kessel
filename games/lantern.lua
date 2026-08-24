@@ -336,6 +336,14 @@ function draw()
 
   ambient(5, 5, 9)                      -- cave dark, and cold
 
+  -- Walls stop light. Declared after the flood (which clears them) and before
+  -- any lamp, because a blocker only affects the lamps that come after it.
+  for ty = 0, 15 do
+    for tx = 0, 15 do
+      if fget(mget(tx, ty), SOLID) then shadow_rect(tx * 8, ty * 8, 8, 8) end
+    end
+  end
+
   i = 0
   while i < 3 do
     if fires[i].lit == 1 then

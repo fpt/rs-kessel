@@ -1878,6 +1878,7 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "ambient" => (3, false),
         "light" => (6, false),
         "light_rect" => (7, false),
+        "shadow_rect" => (4, false),
         "poke" => (2, false),
         "poke16" => (2, false),
         "btn" => (1, true),
@@ -3198,6 +3199,9 @@ impl Compiler {
             // registers with the other two and the screen page's own origin
             // convention: size latches, x commits.
             "light_rect" => "#22 DEO #21 DEO #20 DEO #27 DEO #28 DEO #24 DEO #29 DEO",
+            // ( x y w h ) — mark a box solid to light. No colour: it is not a
+            // thing that glows, it is a thing light stops at.
+            "shadow_rect" => "#2a DEO #2b DEO #24 DEO #2c DEO",
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
             "btn" => "#20 DEI AND #00 NE",

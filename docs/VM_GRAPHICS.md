@@ -36,6 +36,8 @@ what an index means.
 | `0x26` | out | **flood** the light layer with r(=val) and the staged g/b — sets |
 | `0x27` `0x28` | out | light box: h, w |
 | `0x29` | out | **fill** the light box at x(=val) — sets |
+| `0x2a` `0x2b` | out | shadow box: h, w |
+| `0x2c` | out | **mark** the shadow box solid to light at x(=val) |
 | `0xe0` `0xe1` `0xe2` | out | filled rect: h, w, then **draw** taking x (y and colour come from the screen page). Both axes signed, so a box off the top-left clips |
 | `0xa0`–`0xa3` | out | `sprn`: base id, w, h, then draw a `w×h` block at screen x/y |
 | `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id |
@@ -109,6 +111,8 @@ allocated and the pixels come out byte-for-byte as they always did.
   bright core easing to nothing at the rim.
 - `light_rect(x,y,w,h,r,g,b)` — set a box of the layer. Origin and size, signed
   and clipped, the same four numbers `rect` takes.
+- `shadow_rect(x,y,w,h)` — mark a box **solid to light**. No colour: it is not a
+  thing that glows, it is a thing light stops at.
 
 **Sources add, fills set.** A `light` is a lamp: it adds to whatever is already
 there and saturates, so two torches overlap brighter and a red lamp beside a
@@ -120,6 +124,36 @@ the room behind it — so set the strip back to neutral and draw on it.
 
 Over neutral a light *brightens*. That headroom is the reason a coloured light
 can tint what it touches instead of merely failing to darken it.
+
+### Shadows
+
+`shadow_rect` declares an obstacle, and every `light` after it is stopped by
+that obstacle. A frame therefore reads **flood → walls → lamps**:
+
+```lua
+ambient(5, 5, 9)                    -- clears the layer AND its obstacles
+for ty = 0, 15 do                   -- the walls, before any lamp
+  for tx = 0, 15 do
+    if fget(mget(tx, ty), SOLID) then shadow_rect(tx * 8, ty * 8, 8, 8) end
+  end
+end
+light(hx + 4, hy + 4, 30, 56, 40, 20)
+```
+
+`ambient` clears the obstacles as well as the light, because they belong to one
+frame: a wall left over from the previous frame is in the wrong place the moment
+the world scrolls. A blocker only affects the lamps declared *after* it.
+
+**A solid pixel is lit; what is behind it is not.** A wall facing a torch is the
+one thing in the room the torch most needs to show you.
+
+A box rather than a per-pixel mask taken from the art, because opacity from art
+would mean deciding which palette indices are solid — a rule no palette can
+answer for every game. What stops light in games like these is a wall, a crate
+or a pillar, and a game already knows those bounds.
+
+A ROM that declares nothing solid pays nothing: the lamp takes the plain radial
+path with no ray walk at all.
 
 ```lua
 function draw()
@@ -307,5 +341,8 @@ collision, gravity, wall-jumps), `rogue` and `sokoban` (`tilemap` +
 `fset`/`solid`, a board mutated with `mset`), `shooter` (sprite pools, three
 sprite banks plus a `pal` ramp of its own for the terrain, and a `text`/`number`
 HUD), `2048` (a 16×16 `sprn` panel frame), `lantern` (the light layer: a dark cave, a
-torch whose radius is its fuel, coloured glows on the things hunting you, and a
-`light_rect` HUD).
+torch whose radius is its fuel, coloured glows on the things hunting you, walls
+that cast, and a `light_rect` HUD). `rogue` and `sokoban` light the same three
+ways at two very different depths — a dungeon you can only half see, and a
+puzzle that stays fully readable while its crates cast into the corners they are
+stuck in.

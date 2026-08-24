@@ -30,6 +30,18 @@ fn libs(path: &str) -> Option<String> {
         .map(|(_, src)| (*src).to_string())
 }
 
+/// The palette **index** at a screen pixel.
+///
+/// Prefer this over `framebuffer_rgba()` for "was this thing drawn": the RGBA is
+/// what the *presented* frame looks like, and a game that lights itself (or
+/// rewrites a palette entry) changes that without drawing anything differently.
+/// `rogue` picked up a light layer and every point-assert against its RGBA broke
+/// at once, all of them about sprites that were still exactly where they were.
+fn index_at(c: &VmConsole, x: usize, y: usize) -> u8 {
+    let dim = c.screen_dim() as usize;
+    c.vm.devices.framebuffer[y * dim + x]
+}
+
 fn assert_game_ok(name: &str, src: &str) {
     // --- compile (luax) ---
     let compiled = luax::compile_with(src, &mut libs);
@@ -766,13 +778,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
             .any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
         "sword did not defeat the adjacent orc"
     );
-    let rgba = c.framebuffer_rgba();
-    let sword_tip = (19 * 128 + 31) * 4;
-    assert_eq!(
-        &rgba[sword_tip..sword_tip + 4],
-        &[0xff, 0xec, 0x27, 0xff],
-        "sword attack was not rendered"
-    );
+    assert_eq!(index_at(&c, 31, 19), 10, "sword attack was not rendered");
 
     // Keep one adjacent orc alive to exercise repeated contact attempts.
     let contact = adjacent
@@ -784,12 +790,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
     c.load_rom("r.lua").unwrap();
 
     c.run_frame(0);
-    let rgba = c.framebuffer_rgba();
-    let fifth_heart = (3 * 128 + 38) * 4;
-    assert_eq!(
-        &rgba[fifth_heart..fifth_heart + 4],
-        &[0xff, 0x00, 0x4d, 0xff]
-    );
+    assert_eq!(index_at(&c, 38, 3), 8, "fifth heart should start full");
 
     let mut obs = c.run_frame(0);
     let mut player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
@@ -798,24 +799,18 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
     }
     assert_eq!(player.tag, 4, "contact did not remove exactly one heart");
-    let rgba = c.framebuffer_rgba();
-    assert_eq!(
-        &rgba[fifth_heart..fifth_heart + 4],
-        &[0xc2, 0xc3, 0xc7, 0xff]
-    );
+    assert_eq!(index_at(&c, 38, 3), 6, "fifth heart should have emptied");
 
-    let hero_pixel = (16 * 128 + 18) * 4;
     assert_eq!(
-        &rgba[hero_pixel..hero_pixel + 4],
-        &[0x5f, 0x57, 0x4f, 0xff],
+        index_at(&c, 18, 16),
+        5,
         "hero should begin the blink hidden"
     );
     obs = c.run_frame(0);
     player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
-    let rgba = c.framebuffer_rgba();
     assert_eq!(
-        &rgba[hero_pixel..hero_pixel + 4],
-        &[0xff, 0xf1, 0xe8, 0xff],
+        index_at(&c, 18, 16),
+        7,
         "hero should alternate visible during invulnerability"
     );
 
