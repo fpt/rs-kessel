@@ -337,8 +337,8 @@ with no usable GPU.
 `spectrum` (240×240, the 256-colour palette, sprite banks), `outrun` (per-scanline
 `hline` road sheared into a bank, a `vline` horizon tilted with it,
 `spr_scaled` roadside trees, a `sin`-bobbed sun), `platform` (tile
-collision, gravity, wall-jumps), `rogue` and `sokoban` (`tilemap` +
-`fset`/`solid`, a board mutated with `mset`), `shooter` (sprite pools, three
+collision, gravity, wall-jumps), `rogue` (`tilemap` + `fset`/`solid`), `sokoban` (twelve Microban puzzles as
+`data` grids, centred from their own bounding box), `shooter` (sprite pools, three
 sprite banks plus a `pal` ramp of its own for the terrain, and a `text`/`number`
 HUD), `2048` (a 16×16 `sprn` panel frame), `lantern` (the light layer: a dark cave, a
 torch whose radius is its fuel, coloured glows on the things hunting you, walls

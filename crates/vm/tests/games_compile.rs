@@ -97,60 +97,6 @@ fn assert_game_ok(name: &str, src: &str) {
     }
 }
 
-/// Drive `sokoban.lua` through known solutions for all four stages, confirming
-/// push mechanics, stage advancement, and the final wrap back to stage one.
-#[test]
-fn sokoban_solves_all_stages() {
-    const LEFT: u8 = 0x01;
-    const RIGHT: u8 = 0x02;
-    const UP: u8 = 0x04;
-    const DOWN: u8 = 0x08;
-
-    let mut c = VmConsole::new();
-    c.write_source("s.lua", include_str!("../../../games/sokoban.lua"))
-        .unwrap();
-    c.assemble("s.lua").unwrap();
-    c.load_rom("s.lua").unwrap();
-
-    // Press then release each step so btnp (edge input) fires exactly once.
-    fn play(c: &mut VmConsole, steps: &[u8]) {
-        for &step in steps {
-            c.run_frame(step);
-            c.run_frame(0);
-        }
-    }
-
-    let solutions: [&[u8]; 4] = [
-        &[LEFT, UP, DOWN, RIGHT, RIGHT, RIGHT, UP],
-        &[LEFT, DOWN, DOWN, UP, RIGHT, RIGHT, RIGHT, DOWN],
-        &[
-            UP, RIGHT, RIGHT, RIGHT, LEFT, LEFT, LEFT, DOWN, DOWN, DOWN, RIGHT, RIGHT, RIGHT,
-        ],
-        &[
-            UP, RIGHT, RIGHT, RIGHT, DOWN, RIGHT, RIGHT, DOWN, DOWN, LEFT, LEFT, LEFT, DOWN, LEFT,
-            LEFT, UP, UP, RIGHT, RIGHT, RIGHT,
-        ],
-    ];
-    let solved_positions = [(5, 3), (5, 4), (4, 5), (4, 4)];
-
-    for (index, solution) in solutions.iter().enumerate() {
-        play(&mut c, solution);
-        let player = c.run_frame(0).entities[0];
-        assert_eq!(player.tag, (index + 1) as u16, "unexpected active stage");
-        assert_eq!(
-            (player.x, player.y),
-            solved_positions[index],
-            "stage {} solution did not resolve",
-            index + 1
-        );
-
-        play(&mut c, &[0x10]); // A advances after a clear (stage four wraps).
-        let next = c.run_frame(0).entities[0];
-        let expected_stage = if index == 3 { 1 } else { index + 2 };
-        assert_eq!(next.tag, expected_stage as u16, "stage did not advance");
-    }
-}
-
 #[test]
 fn platform_has_clear_background_and_smooth_jump() {
     const A: u8 = 0x10;

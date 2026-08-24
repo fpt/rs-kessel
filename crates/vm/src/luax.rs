@@ -637,13 +637,19 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
                 tok: Tok::Sym(sym),
                 line,
             });
-            // Raw-capture a `sprite NAME { <rows> }` body: pixel rows like
-            // `..2222..` aren't lexable as normal tokens, so once we see the
-            // opening `{` of a sprite block, scan whitespace-separated rows
-            // verbatim (each becomes an Ident) up to the matching `}`.
+            // Raw-capture a `sprite NAME { <rows> }` or `data NAME { <rows> }`
+            // body: grid rows like `..2222..` aren't lexable as normal tokens,
+            // so once we see the opening `{` of such a block, scan
+            // whitespace-separated rows verbatim (each becomes an Ident) up to
+            // the matching `}`.
+            //
+            // Both keys are exactly three tokens back, which is why `data` takes
+            // its size from its body rather than a `(w, h)` header: a header
+            // would put a variable number of tokens between the keyword and the
+            // brace, and this trigger would have to start parsing to find it.
             if *sym == "{"
                 && out.len() >= 3
-                && matches!(&out[out.len() - 3].tok, Tok::Ident(k) if k == "sprite")
+                && matches!(&out[out.len() - 3].tok, Tok::Ident(k) if k == "sprite" || k == "data")
             {
                 while i < b.len() {
                     let cc = b[i];
@@ -836,6 +842,15 @@ enum Decl {
         h: Expr,
         line: usize,
     },
+    /// `data NAME { rows }` — a rectangular grid of bytes in ROM, written in the
+    /// same one-character-per-cell alphabet a `sprite` uses. `NAME` is the
+    /// address of the first byte; the game reads a cell with
+    /// `peek(NAME + y * w + x)`.
+    Data {
+        name: String,
+        rows: Vec<String>,
+        line: usize,
+    },
     /// Control-layout metadata for the host UI. Emits no code.
     Controls {
         controls: Controls,
@@ -965,6 +980,8 @@ impl Parser {
                 decls.push(self.parse_global(d));
             } else if self.is_kw("sprite") {
                 decls.push(self.parse_sprite(d));
+            } else if self.is_kw("data") {
+                decls.push(self.parse_data(d));
             } else if self.is_kw("tilemap") {
                 decls.push(self.parse_tilemap(d));
             } else if self.is_kw("controls") {
@@ -991,7 +1008,7 @@ impl Parser {
             } else {
                 d.push(err(
                     self.line(),
-                    "expected 'record', 'function', 'local', 'sprite', 'tilemap', 'controls', \
+                    "expected 'record', 'function', 'local', 'sprite', 'data', 'tilemap', 'controls', \
                      'instrument', 'sfx', 'track', 'signal', 'fx', or '#include'",
                 ));
                 self.advance();
@@ -1072,6 +1089,27 @@ impl Parser {
         }
         self.expect_sym("}", d);
         Decl::Sprite { name, rows, line }
+    }
+
+    /// `data NAME { rows }` — same shape as a sprite body, and deliberately so:
+    /// one grid literal alphabet in this language rather than two.
+    fn parse_data(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("data");
+        let name = self.ident(d);
+        self.expect_sym("{", d);
+        let mut rows = Vec::new();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            match self.advance() {
+                Tok::Ident(r) => rows.push(r),
+                _ => {
+                    d.push(err(self.line(), "expected a data row"));
+                    break;
+                }
+            }
+        }
+        self.expect_sym("}", d);
+        Decl::Data { name, rows, line }
     }
 
     fn parse_tilemap(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
@@ -1779,6 +1817,11 @@ struct Compiler {
     tiles: Vec<Vec<String>>,
     /// Base tile id per sprite name; each `NAME` is a constant equal to it.
     sprite_ids: HashMap<String, u16>,
+    /// Asm label per `data` block name. `NAME` in an expression is that label,
+    /// which assembles to the address of the block's first byte — the same
+    /// mechanism a sprite name uses to become its tile id, one level of
+    /// indirection further out.
+    data_labels: HashMap<String, String>,
     /// Declared size in tiles per sprite name. This is what lets `spr`/`sprn`
     /// check a call against the picture the author actually drew.
     sprite_dims: HashMap<String, (u16, u16)>,
@@ -1953,6 +1996,7 @@ impl Compiler {
             locals: HashMap::new(),
             tiles: Vec::new(),
             sprite_ids: HashMap::new(),
+            data_labels: HashMap::new(),
             sprite_dims: HashMap::new(),
             bank: SoundBank::default(),
             instrument_ids: HashMap::new(),
@@ -2021,6 +2065,9 @@ impl Compiler {
         if self.sprite_ids.contains_key(name) {
             return Some("sprite");
         }
+        if self.data_labels.contains_key(name) {
+            return Some("data");
+        }
         // The sound kinds are `kessel-audio`'s to answer for, so that a patch
         // file and a game source reject the same collisions.
         self.bank.name_kind(name)
@@ -2088,6 +2135,38 @@ impl Compiler {
                 }
                 self.sprite_dims.insert(name.clone(), (w, h));
                 self.tiles.extend(slice_tiles(rows, w, h));
+            }
+        }
+        // Pass 1.52: `data` blocks — one byte per cell, row-major, into ROM.
+        //
+        // After sprites so a `data` block cannot shadow a sprite's name, and
+        // before everything else for the same reason a sprite id is: the name
+        // has to be resolvable by the time any function body is generated.
+        for decl in decls {
+            if let Decl::Data { name, rows, line } = decl {
+                if let Some(kind) = self.name_taken(name) {
+                    d.push(err(
+                        *line,
+                        format!(
+                            "'{name}' is already declared as a {kind} — one name means one thing"
+                        ),
+                    ));
+                    continue;
+                }
+                match data_bytes(rows) {
+                    Ok(grid) => {
+                        let label = format!("lx_data_{name}");
+                        self.data.push(format!("@{label}"));
+                        // One `.byte` per row, so the generated assembly is laid
+                        // out the way the block was written.
+                        for row in &grid {
+                            let cells: Vec<String> = row.iter().map(|b| b.to_string()).collect();
+                            self.data.push(format!(".byte {}", cells.join(" ")));
+                        }
+                        self.data_labels.insert(name.clone(), label);
+                    }
+                    Err(msg) => d.push(err(*line, format!("data '{name}': {msg}"))),
+                }
             }
         }
         // Pass 1.55: instruments, then sound effects — ids in declaration
@@ -2682,6 +2761,10 @@ impl Compiler {
                 }
                 if let Some(id) = self.sprite_ids.get(name) {
                     out.push(id.to_string()); // sprite name -> its tile id
+                    return true;
+                }
+                if let Some(label) = self.data_labels.get(name) {
+                    out.push(label.clone()); // data name -> its ROM address
                     return true;
                 }
                 if let Some(id) = self.sound_id(name) {
@@ -3752,6 +3835,46 @@ fn sprite_dims(rows: &[String]) -> Result<(u16, u16), String> {
         ));
     }
     Ok(((max_w / 8) as u16, (rows.len() / 8) as u16))
+}
+
+/// A `data` block's rows as bytes, one per character, in the same alphabet a
+/// `sprite` body uses: `.` is 0 and `0-9a-f` are 0..15.
+///
+/// One alphabet for grid literals rather than two. A block that wanted `#` and
+/// `$` would read better for exactly one kind of game and would need a
+/// per-block legend to mean anything, which is a second feature.
+///
+/// **Every row must be the same length**, with no padding forgiveness — unlike a
+/// single 8×8 sprite, which pads. A short row here does not shrink one row, it
+/// shifts every cell after it and silently changes the whole grid, which is the
+/// same reason a multi-tile sprite is strict.
+fn data_bytes(rows: &[String]) -> Result<Vec<Vec<u8>>, String> {
+    if rows.is_empty() {
+        return Err("a data block needs at least one row".into());
+    }
+    let w = rows[0].chars().count();
+    let mut grid = Vec::with_capacity(rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        let n = row.chars().count();
+        if n != w {
+            return Err(format!(
+                "every row must be the same length, but row 1 is {w} and row {} is {n}",
+                i + 1
+            ));
+        }
+        let mut cells = Vec::with_capacity(w);
+        for ch in row.chars() {
+            let v = match ch {
+                '.' => 0,
+                '0'..='9' => ch as u8 - b'0',
+                'a'..='f' => ch as u8 - b'a' + 10,
+                _ => return Err(format!("bad cell char '{ch}' (use . or 0-9a-f)")),
+            };
+            cells.push(v);
+        }
+        grid.push(cells);
+    }
+    Ok(grid)
 }
 
 /// Slice a declaration's pixel rows into 8×8 tiles, **row-major**.
@@ -5548,6 +5671,98 @@ mod video_tests {
             .diagnostics
             .iter()
             .any(|d| d.message.contains("duplicate")));
+    }
+
+    /// A `data` block is bytes in ROM and its name is their address, so a game
+    /// reads a cell with plain `peek` arithmetic and needs no new builtin.
+    #[test]
+    fn a_data_block_reads_back_cell_by_cell() {
+        let mut c = load(
+            "data grid {
+               .123
+               4567
+               89ab
+             }
+             function draw()
+               cls(0)
+               for y = 0, 2 do
+                 for x = 0, 3 do
+                   pset(x, y, peek(grid + y * 4 + x))
+                 end
+               end
+             end",
+        );
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        for (i, want) in (0u8..12).enumerate() {
+            let (x, y) = (i % 4, i / 4);
+            assert_eq!(fb[y * 128 + x], want, "cell ({x},{y})");
+        }
+    }
+
+    /// The size comes from the body, exactly as a sprite's does.
+    #[test]
+    fn a_data_row_must_match_the_first_rows_length() {
+        let c = compile(
+            "data grid {
+               1111
+               111
+             }
+             function draw() end",
+        );
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("same length")),
+            "{:?}",
+            c.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_data_block_rejects_a_char_outside_the_alphabet() {
+        let c = compile("data grid {\n  ..#.\n}\nfunction draw() end");
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("bad cell")),
+            "{:?}",
+            c.diagnostics
+        );
+    }
+
+    /// One name means one thing — the same rule sprites and sound share.
+    #[test]
+    fn a_data_block_may_not_reuse_a_sprite_name() {
+        let c = compile("sprite coin {\n  1.......\n}\ndata coin {\n  11\n}\nfunction draw() end");
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("already declared as a sprite")),
+            "{:?}",
+            c.diagnostics
+        );
+    }
+
+    /// Two blocks are two distinct addresses, and the second is not the first.
+    #[test]
+    fn two_data_blocks_do_not_overlap() {
+        let mut c = load(
+            "data a {
+               12
+             }
+             data b {
+               34
+             }
+             function draw()
+               cls(0)
+               pset(0, 0, peek(a))
+               pset(1, 0, peek(a + 1))
+               pset(2, 0, peek(b))
+               pset(3, 0, peek(b + 1))
+             end",
+        );
+        c.run_frame(0);
+        let fb = &c.vm.devices.framebuffer;
+        assert_eq!((fb[0], fb[1], fb[2], fb[3]), (1, 2, 3, 4));
     }
 
     #[test]

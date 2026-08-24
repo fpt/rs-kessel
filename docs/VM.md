@@ -290,11 +290,31 @@ end
   Comparing two operands is signed iff either is `int` (a unary `-x` counts as
   `int`).
 - **Declarations:** `record`; top-level `local name[: T] [= const]` (a global);
-  `function name(a[: T], …) … end`; `sprite NAME { <pixel rows> }` (see below).
-  Records pass by address (functions mutate them); scalars pass by value.
+  `function name(a[: T], …) … end`; `sprite NAME { <pixel rows> }` (see below);
+  `data NAME { <rows> }` (see below). Records pass by address (functions mutate
+  them); scalars pass by value.
 - **Sprites, tilemaps, colour:** declared with `sprite NAME { <pixel rows> }` and
   `tilemap NAME(w, h)`; a sprite's size comes from its body, and its name is a
   constant equal to its first tile id. See [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
+- **Static grids (`data`):** `data NAME { <rows> }` is a rectangular block of
+  bytes in ROM, written one character per cell in the **same alphabet a
+  `sprite` uses** — `.` is 0 and `0-9a-f` are 0..15. `NAME` is the address of
+  the first byte, so a game reads a cell with plain arithmetic:
+  `peek(NAME + y * w + x)`. There is no new builtin, and no runtime cost beyond
+  the `peek`.
+
+  This is how a game ships a **level, a table, or any fixed grid** as something a
+  person can read and review, instead of a hundred lines of `mset` calls that
+  nobody can check against the thing they were transcribed from.
+  `games/sokoban.lua` is the worked example — twelve puzzles, each a block you
+  can see the shape of.
+
+  Like a sprite, **the size comes from the body**: rows are the height,
+  characters the width. Unlike a single 8×8 sprite, rows are *not* padded — every
+  row must be the same length, because a short row here does not shrink one row,
+  it shifts every cell after it and silently changes the whole grid. A name may
+  only mean one thing, so a `data` block cannot reuse a sprite's or an
+  instrument's name.
 - **Statements:** `local`, assignment, `if/elseif/else … end`, `while … do … end`,
   `for i = a, b[, step] do … end` (ascending, positive literal step), `break`,
   `return`, calls.
