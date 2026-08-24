@@ -920,6 +920,33 @@ fn every_game_and_include_is_registered() {
     );
 }
 
+/// …and every registered game must have a `games_ok!` entry here.
+///
+/// `common::GAMES` is what the *audio* and *player* guards walk; `GUARDED` is
+/// what the compile-and-300-frames guard walks. They are two lists describing
+/// one set, so they drift — `spectrum` sat in the first and not the second, and
+/// the corpus's only 240×240 game went un-run for however long that was. The
+/// registration check above cannot see this: the file is registered, it just
+/// isn't compiled anywhere.
+#[test]
+fn every_registered_game_is_compiled_here() {
+    let missing: Vec<&str> = GAMES
+        .iter()
+        .map(|(name, _)| name.trim_end_matches(".lua"))
+        .filter(|stem| !GUARDED.contains(stem))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} game(s) registered but never compiled. Add to the games_ok! list:\n{}",
+        missing.len(),
+        missing
+            .iter()
+            .map(|s| format!("    {s}_ok => \"{s}\","))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 /// Every embedded game must use LF endings.
 ///
 /// The fixtures below splice deterministic starting state into a game with
@@ -1049,6 +1076,11 @@ macro_rules! games_ok {
                 assert_game_ok($file, include_str!(concat!("../../../games/", $file, ".lua")));
             }
         )+
+
+        /// The games this file actually guards, from the same invocation that
+        /// generates the tests — so the list cannot be read as covering a game
+        /// it does not name. Cross-checked against `common::GAMES` below.
+        const GUARDED: &[&str] = &[$($file),+];
     };
 }
 
@@ -1069,6 +1101,8 @@ games_ok! {
     popn_ok => "popn",
     paint_ok => "paint",
     swarm_ok => "swarm",
+    spectrum_ok => "spectrum",
+    lantern_ok => "lantern",
 }
 
 /// `popn.lua` is the reference for a pad with **no directions**: the four

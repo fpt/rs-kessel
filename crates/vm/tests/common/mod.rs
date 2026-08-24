@@ -17,6 +17,7 @@ pub const GAMES: &[(&str, &str)] = &[
     ("2048.lua", include_str!("../../../../games/2048.lua")),
     ("bounce.lua", include_str!("../../../../games/bounce.lua")),
     ("brick.lua", include_str!("../../../../games/brick.lua")),
+    ("lantern.lua", include_str!("../../../../games/lantern.lua")),
     ("mover.lua", include_str!("../../../../games/mover.lua")),
     ("outrun.lua", include_str!("../../../../games/outrun.lua")),
     ("paint.lua", include_str!("../../../../games/paint.lua")),
