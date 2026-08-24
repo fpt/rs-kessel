@@ -50,6 +50,14 @@ pub struct VmConsole {
     pub frame: u64,
     /// Framebuffer at the end of the previous frame, for change detection.
     prev_fb: Vec<u8>,
+    /// Light layer at the end of the previous frame, held beside `prev_fb` for
+    /// the same reason. Empty for a ROM that never lights anything.
+    ///
+    /// A lighting game moves its lights far more often than its pixels — a
+    /// torch drifting over a static dungeon redraws nothing — so an observation
+    /// blind to this reports "framebuffer unchanged" while the screen visibly
+    /// moves, which is the one thing the record exists not to do.
+    prev_light: Vec<u8>,
     /// Working directory, when disk-backed. With one set, **the filesystem is
     /// the source of truth**: sources are read from (and written to) disk, so
     /// whatever the backend's own file-editing tools or a human editor put in
@@ -109,6 +117,7 @@ struct Snapshot {
     vm: Vm,
     frame: u64,
     prev_fb: Vec<u8>,
+    prev_light: Vec<u8>,
     rom_loaded: bool,
 }
 
@@ -125,6 +134,7 @@ impl VmConsole {
             rom_loaded: false,
             frame: 0,
             prev_fb: vec![0u8; VideoMode::default().pixels()],
+            prev_light: Vec::new(),
             root: None,
             adoptable: Vec::new(),
             sources: HashMap::new(),
@@ -374,6 +384,7 @@ impl VmConsole {
         self.rom_loaded = true;
         self.frame = 0;
         self.prev_fb = self.vm.devices.framebuffer.clone();
+        self.prev_light = self.vm.devices.light.clone();
         self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
         self.active_bank = self.banks.get(path).cloned().unwrap_or_default();
         self.active_signals = self.signals.get(path).cloned().unwrap_or_default();
@@ -454,12 +465,20 @@ impl VmConsole {
         self.frame += 1;
         let obs = self.observe(input, outcome);
         self.prev_fb = self.vm.devices.framebuffer.clone();
+        self.prev_light = self.vm.devices.light.clone();
         obs
     }
 
     fn observe(&self, input: device::Input, outcome: RunOutcome) -> Observation {
         let fb = &self.vm.devices.framebuffer;
-        let bbox = changed_bbox(&self.prev_fb, fb, self.vm.devices.dim());
+        let light = &self.vm.devices.light;
+        let bbox = changed_bbox(
+            &self.prev_fb,
+            fb,
+            &self.prev_light,
+            light,
+            self.vm.devices.dim(),
+        );
         let fault = match outcome {
             RunOutcome::CapExceeded => Some(format!("frame cycle cap ({}) exceeded", vm::cap())),
             _ => self.vm.fault.clone(),
@@ -472,7 +491,10 @@ impl VmConsole {
             // reading a hundred frames of a d-pad game should not have to skim
             // past a hundred `"stick": [0,0]` lines to find what changed.
             analog: (!input.analog_is_at_rest()).then_some(input),
-            framebuffer_hash: fnv1a(fb),
+            // The light layer is part of what a viewer sees, so it is part of
+            // the identity of the frame. Unlit ROMs hash exactly as before —
+            // the layer is empty and folds in nothing.
+            framebuffer_hash: fnv1a(&[fb, light]),
             changed_pixels_bbox: bbox,
             console: String::from_utf8_lossy(&self.vm.devices.console).into_owned(),
             fault,
@@ -545,6 +567,7 @@ impl VmConsole {
                 vm: self.vm.clone(),
                 frame: self.frame,
                 prev_fb: self.prev_fb.clone(),
+                prev_light: self.prev_light.clone(),
                 rom_loaded: self.rom_loaded,
             },
         );
@@ -560,6 +583,7 @@ impl VmConsole {
         self.vm = snap.vm;
         self.frame = snap.frame;
         self.prev_fb = snap.prev_fb;
+        self.prev_light = snap.prev_light;
         self.rom_loaded = snap.rom_loaded;
         self.audio_epoch += 1;
         Ok(())
@@ -767,10 +791,12 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     canonical_prefix(a) == canonical_prefix(b)
 }
 
-/// FNV-1a (64-bit) of the framebuffer, as a hex string.
-fn fnv1a(data: &[u8]) -> String {
+/// FNV-1a (64-bit) over a run of byte slices, as a hex string. Takes several
+/// because a frame's identity is the framebuffer *and* its light layer, and
+/// concatenating them to hash them would allocate a copy of the screen.
+fn fnv1a(parts: &[&[u8]]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in data {
+    for &b in parts.iter().flat_map(|p| p.iter()) {
         h ^= b as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -779,11 +805,24 @@ fn fnv1a(data: &[u8]) -> String {
 
 /// Bounding box (x0,y0,x1,y1 inclusive) of pixels that differ between two
 /// framebuffers, or `None` if identical.
-fn changed_bbox(prev: &[u8], cur: &[u8], dim: usize) -> Option<[u16; 4]> {
+/// A pixel counts as changed when its palette index moved **or** its light did,
+/// so a torch sweeping across a wall that is never redrawn still reports a box.
+fn changed_bbox(
+    prev: &[u8],
+    cur: &[u8],
+    prev_light: &[u8],
+    light: &[u8],
+    dim: usize,
+) -> Option<[u16; 4]> {
     let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
     let mut any = false;
+    // Only when both sides have a light layer of the same size: a mode switch
+    // or the frame lighting was first enabled leaves them mismatched, and the
+    // index framebuffer is the honest answer for that one frame.
+    let lit = !light.is_empty() && light.len() == prev_light.len();
     for (i, (&a, &b)) in prev.iter().zip(cur.iter()).enumerate() {
-        if a != b {
+        let l = lit && prev_light[i * 3..i * 3 + 3] != light[i * 3..i * 3 + 3];
+        if a != b || l {
             any = true;
             let x = (i % dim) as u16;
             let y = (i / dim) as u16;

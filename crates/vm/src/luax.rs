@@ -1875,6 +1875,10 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "camera" => (2, false),
         "pal" => (4, false),
         "sprbank" => (1, false),
+        "ambient" => (3, false),
+        "light" => (6, false),
+        "light_rect" => (7, false),
+        "shadow_rect" => (4, false),
         "poke" => (2, false),
         "poke16" => (2, false),
         "btn" => (1, true),
@@ -3184,6 +3188,20 @@ impl Compiler {
             "pal" => "#04 DEO #03 DEO #02 DEO #01 DEO",
             // ( bank ) — subsequent sprite blits draw nibble n as bank*16 + n.
             "sprbank" => "#1e DEO",
+            // ( r g b ) — flood the light layer, the lighting half of `cls`.
+            // Blue pops first and red commits, the same latch-then-strobe the
+            // palette uses and for the same stack-order reason.
+            "ambient" => "#22 DEO #21 DEO #26 DEO",
+            // ( x y radius r g b ) — add a radial light. Everything latches on
+            // the way down and x commits the draw.
+            "light" => "#22 DEO #21 DEO #20 DEO #23 DEO #24 DEO #25 DEO",
+            // ( x y w h r g b ) — set a box of the layer. Shares the colour
+            // registers with the other two and the screen page's own origin
+            // convention: size latches, x commits.
+            "light_rect" => "#22 DEO #21 DEO #20 DEO #27 DEO #28 DEO #24 DEO #29 DEO",
+            // ( x y w h ) — mark a box solid to light. No colour: it is not a
+            // thing that glows, it is a thing light stops at.
+            "shadow_rect" => "#2a DEO #2b DEO #24 DEO #2c DEO",
             "poke" => "SWAP STORE8",
             "poke16" => "SWAP STORE16",
             "btn" => "#20 DEI AND #00 NE",
@@ -5565,6 +5583,61 @@ mod video_tests {
         c.run_frame(0);
         c.run_frame(0);
         assert_eq!(&c.framebuffer_rgba()[0..3], &[0, 0, 0], "faded to black");
+    }
+
+    /// The argument order a game actually writes has to reach the ports in the
+    /// order they latch — the one thing a hand-written DEO sequence gets wrong
+    /// silently, since a light with r and b swapped still looks like a light.
+    #[test]
+    fn ambient_and_light_land_in_the_right_channels() {
+        let mut c = load(
+            "function draw()
+               cls(7)
+               ambient(8, 16, 32)
+               light(64, 64, 20, 100, 0, 0)
+             end",
+        );
+        c.run_frame(0);
+        let dim = c.screen_dim() as usize;
+        let rgba = c.framebuffer_rgba();
+        let at = |x: usize, y: usize| {
+            let i = (y * dim + x) * 4;
+            [rgba[i], rgba[i + 1], rgba[i + 2]]
+        };
+        // The unlit corner is pure ambient: white (0xFF,0xF1,0xE8) at 8/16/32
+        // sixty-fourths.
+        assert_eq!(at(0, 0), [0xFF / 8, 0xF1 / 4, 0xE8 / 2]);
+        // The light is red, so only the red channel rises under it.
+        let corner = at(0, 0);
+        let core = at(64, 64);
+        assert!(core[0] > corner[0], "red rose: {core:?} vs {corner:?}");
+        assert_eq!(core[1], corner[1], "green untouched by a red light");
+        assert_eq!(core[2], corner[2], "blue untouched by a red light");
+    }
+
+    /// A moving light with a still screen is the shape a dungeon actually has:
+    /// the walls are drawn once and only the torch moves. The observation record
+    /// has to notice, or an agent reads "nothing happened" over a visibly
+    /// animating game.
+    #[test]
+    fn a_moving_light_changes_the_frame_hash_with_no_redraw() {
+        let mut c = load(
+            "local x = 20
+             function update() x = x + 4 end
+             function draw()
+               cls(7)
+               ambient(6, 6, 6)
+               light(x, 64, 24, 64, 64, 64)
+             end",
+        );
+        let a = c.run_frame(0);
+        let b = c.run_frame(0);
+        assert_ne!(a.framebuffer_hash, b.framebuffer_hash, "the light moved");
+        assert!(b.changed_pixels_bbox.is_some(), "and it has a bounding box");
+        assert!(
+            c.vm.devices.framebuffer.iter().all(|&p| p == 7),
+            "while not one palette index changed"
+        );
     }
 
     #[test]

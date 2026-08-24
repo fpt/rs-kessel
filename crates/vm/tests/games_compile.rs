@@ -30,6 +30,18 @@ fn libs(path: &str) -> Option<String> {
         .map(|(_, src)| (*src).to_string())
 }
 
+/// The palette **index** at a screen pixel.
+///
+/// Prefer this over `framebuffer_rgba()` for "was this thing drawn": the RGBA is
+/// what the *presented* frame looks like, and a game that lights itself (or
+/// rewrites a palette entry) changes that without drawing anything differently.
+/// `rogue` picked up a light layer and every point-assert against its RGBA broke
+/// at once, all of them about sprites that were still exactly where they were.
+fn index_at(c: &VmConsole, x: usize, y: usize) -> u8 {
+    let dim = c.screen_dim() as usize;
+    c.vm.devices.framebuffer[y * dim + x]
+}
+
 fn assert_game_ok(name: &str, src: &str) {
     // --- compile (luax) ---
     let compiled = luax::compile_with(src, &mut libs);
@@ -766,13 +778,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
             .any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
         "sword did not defeat the adjacent orc"
     );
-    let rgba = c.framebuffer_rgba();
-    let sword_tip = (19 * 128 + 31) * 4;
-    assert_eq!(
-        &rgba[sword_tip..sword_tip + 4],
-        &[0xff, 0xec, 0x27, 0xff],
-        "sword attack was not rendered"
-    );
+    assert_eq!(index_at(&c, 31, 19), 10, "sword attack was not rendered");
 
     // Keep one adjacent orc alive to exercise repeated contact attempts.
     let contact = adjacent
@@ -784,12 +790,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
     c.load_rom("r.lua").unwrap();
 
     c.run_frame(0);
-    let rgba = c.framebuffer_rgba();
-    let fifth_heart = (3 * 128 + 38) * 4;
-    assert_eq!(
-        &rgba[fifth_heart..fifth_heart + 4],
-        &[0xff, 0x00, 0x4d, 0xff]
-    );
+    assert_eq!(index_at(&c, 38, 3), 8, "fifth heart should start full");
 
     let mut obs = c.run_frame(0);
     let mut player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
@@ -798,24 +799,18 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
     }
     assert_eq!(player.tag, 4, "contact did not remove exactly one heart");
-    let rgba = c.framebuffer_rgba();
-    assert_eq!(
-        &rgba[fifth_heart..fifth_heart + 4],
-        &[0xc2, 0xc3, 0xc7, 0xff]
-    );
+    assert_eq!(index_at(&c, 38, 3), 6, "fifth heart should have emptied");
 
-    let hero_pixel = (16 * 128 + 18) * 4;
     assert_eq!(
-        &rgba[hero_pixel..hero_pixel + 4],
-        &[0x5f, 0x57, 0x4f, 0xff],
+        index_at(&c, 18, 16),
+        5,
         "hero should begin the blink hidden"
     );
     obs = c.run_frame(0);
     player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
-    let rgba = c.framebuffer_rgba();
     assert_eq!(
-        &rgba[hero_pixel..hero_pixel + 4],
-        &[0xff, 0xf1, 0xe8, 0xff],
+        index_at(&c, 18, 16),
+        7,
         "hero should alternate visible during invulnerability"
     );
 
@@ -917,6 +912,33 @@ fn every_game_and_include_is_registered() {
         "{} file(s) in games/ are in no guard. Add to crates/vm/tests/common/mod.rs:\n{}",
         gap.len(),
         gap.join("\n")
+    );
+}
+
+/// …and every registered game must have a `games_ok!` entry here.
+///
+/// `common::GAMES` is what the *audio* and *player* guards walk; `GUARDED` is
+/// what the compile-and-300-frames guard walks. They are two lists describing
+/// one set, so they drift — `spectrum` sat in the first and not the second, and
+/// the corpus's only 240×240 game went un-run for however long that was. The
+/// registration check above cannot see this: the file is registered, it just
+/// isn't compiled anywhere.
+#[test]
+fn every_registered_game_is_compiled_here() {
+    let missing: Vec<&str> = GAMES
+        .iter()
+        .map(|(name, _)| name.trim_end_matches(".lua"))
+        .filter(|stem| !GUARDED.contains(stem))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} game(s) registered but never compiled. Add to the games_ok! list:\n{}",
+        missing.len(),
+        missing
+            .iter()
+            .map(|s| format!("    {s}_ok => \"{s}\","))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
@@ -1049,6 +1071,11 @@ macro_rules! games_ok {
                 assert_game_ok($file, include_str!(concat!("../../../games/", $file, ".lua")));
             }
         )+
+
+        /// The games this file actually guards, from the same invocation that
+        /// generates the tests — so the list cannot be read as covering a game
+        /// it does not name. Cross-checked against `common::GAMES` below.
+        const GUARDED: &[&str] = &[$($file),+];
     };
 }
 
@@ -1069,6 +1096,8 @@ games_ok! {
     popn_ok => "popn",
     paint_ok => "paint",
     swarm_ok => "swarm",
+    spectrum_ok => "spectrum",
+    lantern_ok => "lantern",
 }
 
 /// `popn.lua` is the reference for a pad with **no directions**: the four

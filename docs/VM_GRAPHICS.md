@@ -29,6 +29,15 @@ what an index means.
 | `0x1d` | out | horizontal span: fill from screen x to x2(=val) at row y in colour (endpoints are signed, so a span past the left edge clips) |
 | `0x1e` | out | sprite palette bank (0–15): a sprite nibble `n` draws as `bank*16 + n` |
 | `0x1f` | out | vertical span: fill from screen y to y2(=val) down column x, in colour (endpoints signed, same as the horizontal one) |
+| `0x20` `0x21` `0x22` | out | light: stage r, g, b |
+| `0x23` | out | light radius |
+| `0x24` | out | light y (shared by the radial light and the box) |
+| `0x25` | out | **draw** a radial light at x(=val) — adds |
+| `0x26` | out | **flood** the light layer with r(=val) and the staged g/b — sets |
+| `0x27` `0x28` | out | light box: h, w |
+| `0x29` | out | **fill** the light box at x(=val) — sets |
+| `0x2a` `0x2b` | out | shadow box: h, w |
+| `0x2c` | out | **mark** the shadow box solid to light at x(=val) |
 | `0xe0` `0xe1` `0xe2` | out | filled rect: h, w, then **draw** taking x (y and colour come from the screen page). Both axes signed, so a box off the top-left clips |
 | `0xa0`–`0xa3` | out | `sprn`: base id, w, h, then draw a `w×h` block at screen x/y |
 | `0xb0` `0xb1` | out | scaled sprite: scale (8.8 fixed, 256 = 1.0) / blit-id |
@@ -78,6 +87,107 @@ the order a stack machine produces for free — `pal(i,r,g,b)` pushes `i` first,
 - `screen { mode = Extended240 }` — a 240×240 screen instead of 128×128. Declared
   like `controls`, read by the host when the ROM loads, fixed for the run.
   `games/spectrum.lua` demonstrates all three.
+
+## Light
+
+A game can hand the console a **light layer**: one r/g/b light level per pixel,
+applied on the way to the screen. `64` is neutral — a pixel at `(64,64,64)`
+presents exactly its palette colour — `0` is black, and `255` is 4×.
+
+The framebuffer is untouched by any of it. A game still draws flat palette
+indices through the same blitter, the same tilemap and the same sprite banks;
+only the expansion to RGBA reads the layer. So nothing upstream forks, a game's
+own `peek` at what it drew still reads what it drew, and the window, Android and
+the PNG an agent looks at all show one picture without a line of host code.
+
+A ROM that never calls one of these three has no layer at all — nothing is
+allocated and the pixels come out byte-for-byte as they always did.
+
+- `ambient(r,g,b)` — flood the whole layer. This is the light layer's `cls`, and
+  like `cls` it is the game's job to call: the layer persists across frames
+  because the framebuffer does.
+- `light(x,y,radius,r,g,b)` — a radial light at a **world** coordinate (the
+  camera applies, exactly as it does to a sprite). Falloff is `1 - d²/r²`: a
+  bright core easing to nothing at the rim.
+- `light_rect(x,y,w,h,r,g,b)` — set a box of the layer. Origin and size, signed
+  and clipped, the same four numbers `rect` takes.
+- `shadow_rect(x,y,w,h)` — mark a box **solid to light**. No colour: it is not a
+  thing that glows, it is a thing light stops at.
+
+**Sources add, fills set.** A `light` is a lamp: it adds to whatever is already
+there and saturates, so two torches overlap brighter and a red lamp beside a
+blue one reads as magenta between them. `ambient` and `light_rect` are fills and
+overwrite, exactly as `cls` and `rect` overwrite pixels. That is also the answer
+to the HUD: a score at ambient 6 is white multiplied by `6/64`, and no
+arrangement of round lights makes a strip of text readable without bleeding into
+the room behind it — so set the strip back to neutral and draw on it.
+
+Over neutral a light *brightens*. That headroom is the reason a coloured light
+can tint what it touches instead of merely failing to darken it.
+
+### Shadows
+
+`shadow_rect` declares an obstacle, and every `light` after it is stopped by
+that obstacle. A frame therefore reads **flood → walls → lamps**:
+
+```lua
+ambient(5, 5, 9)                    -- clears the layer AND its obstacles
+for ty = 0, 15 do                   -- the walls, before any lamp
+  for tx = 0, 15 do
+    if fget(mget(tx, ty), SOLID) then shadow_rect(tx * 8, ty * 8, 8, 8) end
+  end
+end
+light(hx + 4, hy + 4, 30, 56, 40, 20)
+```
+
+`ambient` clears the obstacles as well as the light, because they belong to one
+frame: a wall left over from the previous frame is in the wrong place the moment
+the world scrolls. A blocker only affects the lamps declared *after* it.
+
+**A solid pixel is lit; what is behind it is not.** A wall facing a torch is the
+one thing in the room the torch most needs to show you.
+
+A box rather than a per-pixel mask taken from the art, because opacity from art
+would mean deciding which palette indices are solid — a rule no palette can
+answer for every game. What stops light in games like these is a wall, a crate
+or a pillar, and a game already knows those bounds.
+
+A ROM that declares nothing solid pays nothing: the lamp takes the plain radial
+path with no ray walk at all.
+
+```lua
+function draw()
+  cls(0)
+  map(0, 0, 0, 0, 16, 16)
+  spr(hero, hx, hy, 0)
+
+  ambient(5, 5, 9)                      -- cave dark, and cold
+  light(hx + 4, hy + 4, fuel, 58, 42, 22)  -- the torch, warm; radius = fuel
+  light(wx + 4, wy + 4, 16, 46, 6, 10)     -- a wisp, its own red
+
+  light_rect(0, 0, 128, 9, 64, 64, 64)  -- a readable HUD strip
+  rect(0, 0, 128, 9, 0)
+  text("DEPTH", 2, 2, 6)
+end
+```
+
+`games/lantern.lua` is the worked example: a cave lit only by what the player
+carries, where the torch's *radius is its fuel*, so the number being managed is
+the number you can see.
+
+### Why a layer and not alpha
+
+This is not per-sprite alpha blending, and adding that would mean blending in
+*index* space, where there is no answer: the blend of index 3 and index 12 is
+whatever the palette happens to make it, and every game would need its own
+mixing table. A light layer sidesteps that entirely — it resolves in RGB, after
+the indices are gone, so it works with any palette a game invents and costs the
+blitter nothing.
+
+What it buys is what games actually reach for alpha to get: point lights, spot
+lights, coloured glows on bullets and enemies, day/night, and a room going dark.
+What it does not buy is a translucent *sprite*. For that the console already
+has `pal` — recolouring an index is one loop and no redraw — and sprite banks.
 
 ## Sprites
 
@@ -159,6 +269,7 @@ luax; see `games/platform.lua`.
 ## Drawing builtins
 
 `cls(c)`, `pset(x,y,c)`, `rect(x,y,w,h,c)`, `hline(x,x2,y,c)`, `vline(y,y2,x,c)`,
+`ambient(r,g,b)`, `light(x,y,radius,r,g,b)`, `light_rect(x,y,w,h,r,g,b)` (above),
 `spr(id,x,y,flags)`, `sprn(…)` (above),
 `sspr(addr,x,y,flags)` (blit a raw 32-byte tile at `addr`), `camera(x,y)`, and the
 tilemap builtins above. `rect_overlap(ax,ay,aw,ah,bx,by,bw,bh)→bool` is here too,
@@ -229,4 +340,9 @@ with no usable GPU.
 collision, gravity, wall-jumps), `rogue` and `sokoban` (`tilemap` +
 `fset`/`solid`, a board mutated with `mset`), `shooter` (sprite pools, three
 sprite banks plus a `pal` ramp of its own for the terrain, and a `text`/`number`
-HUD), `2048` (a 16×16 `sprn` panel frame).
+HUD), `2048` (a 16×16 `sprn` panel frame), `lantern` (the light layer: a dark cave, a
+torch whose radius is its fuel, coloured glows on the things hunting you, walls
+that cast, and a `light_rect` HUD). `rogue` and `sokoban` light the same three
+ways at two very different depths — a dungeon you can only half see, and a
+puzzle that stays fully readable while its crates cast into the corners they are
+stuck in.

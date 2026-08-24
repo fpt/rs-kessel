@@ -62,6 +62,61 @@ Three things follow, and none of them should be re-litigated:
   order a stack machine yields for free: `pal(i,r,g,b)` pushes `i` first, so `b`
   pops first and `i` last.
 
+### Light is a layer, not a blend
+
+Lighting is **one r/g/b light level per pixel, resolved on the way to RGBA** —
+`framebuffer_rgba_into` and nowhere else. `64` is neutral, `0` black, `255` 4×.
+Four ops: `ambient` floods the layer, `light` adds a radial source, `light_rect`
+sets a box, `shadow_rect` marks a box solid to light. See `docs/VM_GRAPHICS.md`;
+`games/lantern.lua`, `games/rogue.lua` and `games/sokoban.lua` are the corpus's
+worked examples, at three different depths of darkness.
+
+It is deliberately **not** per-sprite alpha, and that is the whole reason it is
+cheap. Blending would have to happen in *index* space, where there is no answer:
+the mix of index 3 and index 12 is whatever the palette says, so every game would
+carry its own mixing table and the blitter, the tilemap and the scaler would each
+fork to consult it. Resolving in RGB after the indices are gone works with any
+palette a game invents, costs the blitter nothing, and reaches all three hosts
+through the one function they already share.
+
+Five things follow, and none should be re-litigated:
+
+- **The framebuffer stays 8-bit indices.** A game's `peek` at what it drew reads
+  what it drew, snapshots stay byte-identical, and `pal` still recolours the
+  screen without a redraw. Lighting is presentation.
+- **Sources add, fills set.** A `light` is a lamp: additive and saturating, which
+  is what makes two torches overlap brighter and a red lamp beside a blue one
+  read as magenta. `ambient` and `light_rect` overwrite, exactly as `cls` and
+  `rect` overwrite pixels. `light_rect` exists for the HUD — a score at ambient 6
+  is white times `6/64`, and no arrangement of round lights makes a strip of text
+  readable without bleeding into the room behind it.
+- **Neutral is 64, not 255.** Above it a light *brightens*, up to 4×, which is
+  the only reason a coloured light can tint what it touches rather than merely
+  fail to darken it. A dungeon spends its whole life in `0..64` and 64 steps of
+  darkness is more than the 16-shade ramps this era shipped.
+- **Nothing is allocated until a ROM lights something.** `Devices::is_lit` is
+  false by default and `framebuffer_rgba_into` takes exactly the path it always
+  did. `set_mode` drops the layer, because it is sized off `dim` and a stale one
+  reads at the new stride.
+- **Obstacles are boxes, cleared by the flood.** A frame reads flood → walls →
+  lamps, and `ambient` clears the occluders with the light because they belong to
+  one frame: a wall left over is in the wrong place the moment the world scrolls.
+  A solid pixel is *lit*; what is behind it is not — otherwise the wall facing a
+  torch is the one thing the torch cannot show you. Opacity taken from the art
+  instead would mean deciding which palette indices are solid, which no palette
+  can answer for every game.
+- **Shadows propagate, they do not ray-cast.** A pixel is lit when the one pixel
+  nearer the lamp is lit and not solid — one Bresenham step back, reusing the
+  answer a neighbour already computed. Walking a whole ray per pixel is the
+  obvious version and is `O(r³)`: a radius-64 lamp would be eight hundred
+  thousand steps per lamp per frame. This is `O(r²)`, the same order as drawing
+  the light at all. A ROM that declares nothing solid skips the walk entirely.
+- **The layer is part of the frame's identity.** `framebuffer_hash` folds it in
+  and `changed_bbox` counts a pixel changed when its *light* moved. A torch
+  drifting over a static dungeon redraws nothing, and an observation blind to
+  that reports "framebuffer unchanged" over a visibly animating game — the one
+  thing the record exists not to do.
+
 `dim` is runtime state on `Devices`, not a constant. Anything that sizes a
 buffer must read it **after** the ROM loads — `kessel_player_screen_dim(p)`,
 `KesselVm.screenDim()`. Reading it earlier silently yields 128 and tears a
@@ -645,6 +700,7 @@ kessel/
 ├── crates/audio/       kessel-audio: the synth (host-free, VM-free)
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
+│                     (`lantern.lua` is the lighting example)
 ├── tools/              build-time asset pipeline (see tools/README.md) —
 │                     generate art, quantise it, print `sprite` blocks, and
 │                     check a frame set actually animates. Defaults to the

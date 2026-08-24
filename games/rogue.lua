@@ -151,6 +151,8 @@ local attack_timer = 0
 local invuln = 0
 local stage = 1
 local loot = 0
+local flicker = 0   -- the torch's wobble, sampled once a frame so `draw` stays
+                    -- a pure function of state
 local chest_x = 7
 local chest_y = 2
 local chest_opened = 0
@@ -278,6 +280,7 @@ function move_enemy(i)
 end
 
 function update()
+  flicker = rnd(5)
   if hp == 0 then
     if btnp(A) then init() end
     return
@@ -349,6 +352,49 @@ function draw()
     text("GAME OVER", 46, 54, 8)
     text("PRESS A", 50, 64, 7)
   end
+
+  -- ---- light ---------------------------------------------------------------
+  -- Everything above drew flat palette indices and knows nothing about any of
+  -- this; see docs/VM_GRAPHICS.md ("Light"). The dungeon is dim rather than
+  -- black — a crawl you cannot plan a route through is a different game — and
+  -- the things that matter each carry their own colour, so an orc two rooms
+  -- away is a red smudge before it is a sprite.
+
+  ambient(18, 17, 24)                                        -- cold stone
+
+  -- Walls stop light, so a torch lights the room it is in and not the one
+  -- through the wall. Declared after the flood (which clears them) and before
+  -- any lamp: a blocker only affects the lamps that come after it.
+  for ty = 0, 15 do
+    for tx = 0, 15 do
+      if fget(mget(tx, ty), SOLID) then shadow_rect(tx * 8, ty * 8, 8, 8) end
+    end
+  end
+
+  if chest_opened == 0 then
+    light(chest_x * 8 + 4, chest_y * 8 + 4, 15, 30, 21, 4)   -- gold
+  end
+  light(stair_x * 8 + 4, stair_y * 8 + 4, 17, 5, 26, 31)     -- the way down
+
+  i = 0
+  while i < 5 do
+    if enemies[i].alive == 1 then
+      light(enemies[i].x * 8 + 4, enemies[i].y * 8 + 4, 14, 34, 4, 7)
+    end
+    i = i + 1
+  end
+
+  if hp > 0 then
+    -- The torch, and a swing that throws it further. That flare is the only
+    -- tell that the sword reaches a tile past where the hero is standing.
+    local reach = 26 + flicker
+    if attack_timer > 0 then reach = 46 end
+    light(hx * 8 + 4, hy * 8 + 4, reach, 36, 28, 17)
+  end
+
+  light_rect(0, 0, 128, 17, 64, 64, 64)                       -- the HUD band
+  if hp == 0 then light_rect(30, 50, 68, 22, 64, 64, 64) end
+
   entity(hx * 8, hy * 8, hp)
   entity(stage, loot, 30)
 end

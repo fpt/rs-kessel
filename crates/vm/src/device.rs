@@ -414,6 +414,21 @@ pub fn rgb6(r: u8, g: u8, b: u8) -> u8 {
     (16 + 36 * c(r) + 6 * c(g) + c(b)) as u8
 }
 
+/// The light level that means "unchanged": a pixel whose light is
+/// `(64,64,64)` presents exactly its palette colour.
+///
+/// 64 rather than 255 so a light can go **over** neutral — up to 4× — which is
+/// what makes a coloured light *tint* what it touches instead of merely failing
+/// to darken it. The range below neutral is the half that gets used most (a
+/// dungeon spends its whole life in `0..64`) and 64 steps of darkness is more
+/// than the 16-shade ramps this era actually shipped.
+pub const LIGHT_UNIT: u8 = 64;
+
+/// The largest radius a light is allowed, as a multiple of the screen edge.
+/// A radius is a `u16` off the stack, and `r * r` on an unclamped one overflows
+/// the fixed-point falloff. Four screens is past any useful light.
+const MAX_LIGHT_RADIUS_SCREENS: i32 = 4;
+
 /// All device-side state. Cloned wholesale for snapshots.
 #[derive(Clone)]
 pub struct Devices {
@@ -423,6 +438,27 @@ pub struct Devices {
     /// [`set_mode`](Devices::set_mode).
     dim: usize,
     pub palette: [(u8, u8, u8); 256],
+    /// Per-pixel light, three bytes (r,g,b) each, `LIGHT_UNIT` = unchanged.
+    ///
+    /// Empty until a ROM asks for lighting; see [`lit`](Devices::is_lit). The
+    /// layer is *presentation*, not a second framebuffer — the game still draws
+    /// palette indices and only the expansion to RGBA reads this.
+    pub light: Vec<u8>,
+    /// Whether this ROM has ever touched the light device. Off means
+    /// `framebuffer_rgba_into` takes exactly the path it always did.
+    lit: bool,
+    /// One byte per pixel: non-zero blocks light. Filled by `shadow_rect` and
+    /// cleared by `ambient`, so a frame declares its walls between the flood and
+    /// the lamps.
+    ///
+    /// A plane rather than a list of boxes because a light asks the same
+    /// question a few thousand times — "is the pixel one step nearer the lamp
+    /// solid?" — and a list would make each of those a scan.
+    shadow: Vec<u8>,
+    /// Whether anything has been declared solid since the last flood. Nothing
+    /// solid means `draw_light` takes the plain radial path with no scratch and
+    /// no ray walk.
+    occluded: bool,
     /// Current gamepad button bitfield.
     pub gamepad: u8,
     /// Gamepad bitfield from the *previous* frame, for edge detection
@@ -511,6 +547,19 @@ pub struct Devices {
     trig_angle: u16,
     // touch device (page 0xd): which slot the next x/y/state read describes
     touch_slot: u16,
+    // light device (page 0x2): the pending light's colour, radius and y. The
+    // colour registers are shared by `ambient` and `light` the same way the
+    // screen page's (sx, sy, scolor) are shared by pset, hline and rect — one
+    // light is one colour, whichever op consumes it.
+    lr: u8,
+    lg: u8,
+    lb: u8,
+    lradius: u16,
+    ly: u16,
+    lw: u16,
+    lh: u16,
+    sw: u16,
+    sh: u16,
     // rect device (page 0xe): the pending box's size. The origin is the screen
     // page's own (sx, sy) and the colour its `scolor`, the same way `hline` and
     // `vline` borrow them — a rectangle is not a different kind of drawing.
@@ -538,6 +587,13 @@ impl Devices {
             framebuffer: vec![0u8; mode.pixels()],
             dim: mode.dim(),
             palette: DEFAULT_PALETTE,
+            // Not allocated until a ROM lights something: an unlit game must
+            // not pay 169 KiB and a per-pixel multiply for a feature it never
+            // mentions.
+            light: Vec::new(),
+            lit: false,
+            shadow: Vec::new(),
+            occluded: false,
             gamepad: 0,
             prev_gamepad: 0,
             stick_x: 0,
@@ -563,6 +619,15 @@ impl Devices {
             pr: 0,
             pg: 0,
             pb: 0,
+            lr: 0,
+            lg: 0,
+            lb: 0,
+            lradius: 0,
+            ly: 0,
+            lw: 0,
+            lh: 0,
+            sw: 0,
+            sh: 0,
             ex: 0,
             sval: 0,
             ey: 0,
@@ -791,6 +856,29 @@ impl Devices {
                 // **x**. A tilted horizon is exactly that, and so is a column of
                 // anything — a bar chart, a wipe, a lift shaft.
                 0xf => self.draw_vline(self.sy, val, self.sx, self.scolor),
+                _ => {}
+            },
+            // Light device. Stage a colour, then a radius and y, and commit
+            // with x — the same latch-then-strobe shape as the palette, and for
+            // the same reason: `light(x,y,r,…)` pushes x first, so x is what
+            // comes off the stack last.
+            0x2 => match reg {
+                0x0 => self.lr = val as u8,
+                0x1 => self.lg = val as u8,
+                0x2 => self.lb = val as u8,
+                0x3 => self.lradius = val,
+                0x4 => self.ly = val,
+                0x5 => self.draw_light(val, self.ly, self.lradius),
+                0x6 => {
+                    self.lr = val as u8;
+                    self.fill_light();
+                }
+                0x7 => self.lh = val,
+                0x8 => self.lw = val,
+                0x9 => self.light_rect(val, self.ly, self.lw, self.lh),
+                0xa => self.sh = val,
+                0xb => self.sw = val,
+                0xc => self.shadow_rect(val, self.ly, self.sw, self.sh),
                 _ => {}
             },
             0x3 => {
@@ -1057,6 +1145,277 @@ impl Devices {
     pub fn set_mode(&mut self, mode: VideoMode) {
         self.dim = mode.dim();
         self.framebuffer = vec![0u8; mode.pixels()];
+        // The light layer is sized off `dim` too, so it has to be dropped here
+        // or the next ROM reads the previous one's light at the new stride —
+        // the plausible-but-wrong picture this clear exists to prevent, only
+        // smeared diagonally.
+        self.light = Vec::new();
+        self.lit = false;
+        self.shadow = Vec::new();
+        self.occluded = false;
+    }
+
+    /// Whether this ROM has lit anything. False means the framebuffer presents
+    /// straight through the palette, exactly as it did before lighting existed.
+    pub fn is_lit(&self) -> bool {
+        self.lit
+    }
+
+    /// Bring the light layer into existence at neutral, so a `light()` with no
+    /// `ambient()` adds a glow to an otherwise normal-looking scene rather than
+    /// punching a hole in a black screen.
+    fn enable_light(&mut self) {
+        if !self.lit {
+            self.light = vec![LIGHT_UNIT; self.pixels() * 3];
+            self.shadow = vec![0u8; self.pixels()];
+            self.lit = true;
+        }
+    }
+
+    /// `ambient` — flood the whole light layer with the staged colour. This is
+    /// the light layer's `cls`, and like `cls` it is the game's job to call it:
+    /// the layer persists across frames because the framebuffer does, and a
+    /// light that was cleared for you but a pixel that wasn't would be two
+    /// rules for one screen.
+    fn fill_light(&mut self) {
+        self.enable_light();
+        let (r, g, b) = (self.lr, self.lg, self.lb);
+        for px in self.light.chunks_exact_mut(3) {
+            px.copy_from_slice(&[r, g, b]);
+        }
+        // The flood clears the occluders too. Blockers have to be declared
+        // *before* the lamps they stop, so the frame reads flood → walls →
+        // lights, and giving that one clear two names would only invite a game
+        // to call one of them.
+        if self.occluded {
+            for c in self.shadow.iter_mut() {
+                *c = 0;
+            }
+            self.occluded = false;
+        }
+    }
+
+    /// `shadow_rect` — mark a box solid to light until the next flood.
+    ///
+    /// A box rather than a per-sprite mask: what stops light in a game like this
+    /// is a wall, a crate or a pillar, and all three are already rectangles the
+    /// game knows the bounds of. Per-pixel opacity would have to come from the
+    /// art, which would mean deciding which palette indices are solid — a rule
+    /// no palette can answer for every game.
+    ///
+    /// World coordinates, signed, clipped: the same rules as `rect`.
+    fn shadow_rect(&mut self, x: u16, y: u16, w: u16, h: u16) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.enable_light();
+        let dim = self.dim as i32;
+        let (x, y) = (x as i16 as i32, y as i16 as i32);
+        let (x, y) = (x - self.cam_x as i32, y - self.cam_y as i32);
+        let (x0, y0) = (x.max(0), y.max(0));
+        let x1 = (x + w as i32 - 1).min(dim - 1);
+        let y1 = (y + h as i32 - 1).min(dim - 1);
+        for py in y0..=y1 {
+            let row = py as usize * self.dim;
+            for px in x0..=x1 {
+                self.shadow[row + px as usize] = 1;
+            }
+        }
+        if x1 >= x0 && y1 >= y0 {
+            self.occluded = true;
+        }
+    }
+
+    /// `light_rect` — set a box of the light layer to the staged colour.
+    ///
+    /// **Sources add, fills set.** A radial `light` is a lamp and adds to
+    /// whatever is already there; `ambient` and this one are fills and overwrite
+    /// it, exactly as `cls` and `rect` overwrite pixels. Without a fill smaller
+    /// than the whole screen a lit game has no way to draw a readable HUD: a
+    /// score at ambient 6 is white multiplied by 6/64, and no arrangement of
+    /// round lights makes a rectangle of text legible without bleeding into the
+    /// room behind it.
+    ///
+    /// Same shape as `rect` in every other way: an origin and a size (not two
+    /// corners), signed on both axes so a box off the top-left clips, and a zero
+    /// dimension does nothing.
+    fn light_rect(&mut self, x: u16, y: u16, w: u16, h: u16) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.enable_light();
+        let dim = self.dim as i32;
+        // Signed on both axes, like `rect` — the box it mirrors.
+        let (x, y) = (x as i16 as i32, y as i16 as i32);
+        let (x, y) = (x - self.cam_x as i32, y - self.cam_y as i32);
+        let (x0, y0) = (x.max(0), y.max(0));
+        let x1 = (x + w as i32 - 1).min(dim - 1);
+        let y1 = (y + h as i32 - 1).min(dim - 1);
+        let fill = [self.lr, self.lg, self.lb];
+        for py in y0..=y1 {
+            let row = py as usize * self.dim;
+            for px in x0..=x1 {
+                let i = (row + px as usize) * 3;
+                self.light[i..i + 3].copy_from_slice(&fill);
+            }
+        }
+    }
+
+    /// Add a radial light of the staged colour at world `(x, y)`.
+    ///
+    /// The camera applies, exactly as it does to `put_pixel` — a torch sits at a
+    /// place in the dungeon, not at a place on the glass — and the light clips
+    /// at the screen edge for the same reason a sprite does.
+    ///
+    /// Falloff is `1 - d²/r²`: a bright core easing off to nothing at the rim,
+    /// computed with no square root, so a full-screen light is a few hundred
+    /// thousand integer multiplies rather than that many `sqrt`s. Contributions
+    /// **add** and saturate, which is what makes two torches overlap brighter
+    /// and a red light beside a blue one read as magenta between them.
+    fn draw_light(&mut self, x: u16, y: u16, radius: u16) {
+        let rad = (radius as i32).min(self.dim as i32 * MAX_LIGHT_RADIUS_SCREENS);
+        if rad <= 0 {
+            return;
+        }
+        self.enable_light();
+        let dim = self.dim as i32;
+        // Signed, so a lamp just off the left edge still spills onto the
+        // screen — the same rule as the spans and the box.
+        let cx = x as i16 as i32 - self.cam_x as i32;
+        let cy = y as i16 as i32 - self.cam_y as i32;
+        let r2 = rad * rad;
+        let (y0, y1) = ((cy - rad).max(0), (cy + rad).min(dim - 1));
+        let (x0, x1) = ((cx - rad).max(0), (cx + rad).min(dim - 1));
+        let tint = [self.lr as i32, self.lg as i32, self.lb as i32];
+        let vis = self
+            .occluded
+            .then(|| self.cast_shadows(cx, cy, rad, x0, y0, x1, y1));
+        let bw = x1 - x0 + 1;
+        for py in y0..=y1 {
+            let dy = py - cy;
+            let dy2 = dy * dy;
+            let row = py as usize * self.dim;
+            for px in x0..=x1 {
+                let dx = px - cx;
+                let d2 = dx * dx + dy2;
+                if d2 >= r2 {
+                    continue;
+                }
+                if let Some(v) = &vis {
+                    if v[((py - y0) * bw + px - x0) as usize] == 0 {
+                        continue;
+                    }
+                }
+                let atten = ((r2 - d2) << 8) / r2; // 0..256, 256 = the centre
+                let i = (row + px as usize) * 3;
+                for (ch, &v) in tint.iter().enumerate() {
+                    let add = (v * atten) >> 8;
+                    let cell = &mut self.light[i + ch];
+                    *cell = (*cell as i32 + add).min(255) as u8;
+                }
+            }
+        }
+    }
+
+    /// Which pixels of a light's **clipped** box can see its centre: `1` lit,
+    /// `0` in shadow. Indexed `(py - y0) * (x1 - x0 + 1) + px - x0`, in screen
+    /// coordinates.
+    ///
+    /// **The domain is the screen, never the radius.** A `u16` radius is
+    /// clamped to a few screens wide, so sizing this by the radius would ask for
+    /// megabytes per lamp per frame for a light that is mostly off-screen —
+    /// bounded, but absurd. Clipped, the scratch can never exceed one screen
+    /// (56 KiB at 240×240) whatever radius a game writes, and the walk costs the
+    /// pixels it actually lights.
+    ///
+    /// Clipping is safe because **every occluder is on-screen**: `shadow_rect`
+    /// clips, so any part of a ray outside the screen is unobstructed. The
+    /// screen is a rectangle, so a segment from an off-screen centre to an
+    /// on-screen pixel leaves it exactly once — everything before that crossing
+    /// is outside and therefore clear. A back-step that lands off the domain is
+    /// consequently *lit*, not unknown.
+    ///
+    /// **Propagation, not ray casting.** A pixel is lit when the one pixel
+    /// nearer the lamp — a single Bresenham step back along the dominant axis —
+    /// is itself lit and not solid. Walking a whole ray per pixel is the obvious
+    /// version and is `O(r³)`: a radius-64 lamp would be eight hundred thousand
+    /// steps, sixty times a second, per lamp. This is `O(r²)`, the same order as
+    /// drawing the light at all, because each pixel reuses the answer its
+    /// neighbour already computed.
+    ///
+    /// The four quadrants run separately so that "one step nearer" is always a
+    /// pixel this loop has already visited: with `ax` and `ay` both ascending
+    /// from the centre, the back-step lands in an earlier column or an earlier
+    /// row of the same column, never ahead. Each quadrant walks only the part of
+    /// the clipped box on its side of the centre, so together they cover it once.
+    ///
+    /// **A solid pixel is lit; what is behind it is not.** Otherwise every wall
+    /// facing a torch would be the one thing in the room the torch could not
+    /// show you.
+    #[allow(clippy::too_many_arguments)]
+    fn cast_shadows(
+        &self,
+        cx: i32,
+        cy: i32,
+        rad: i32,
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+    ) -> Vec<u8> {
+        let bw = x1 - x0 + 1;
+        let bh = y1 - y0 + 1;
+        if bw <= 0 || bh <= 0 {
+            return Vec::new();
+        }
+        let mut vis = vec![0u8; (bw * bh) as usize];
+        // `None` = off the clipped domain, which by the argument above means
+        // off-screen: unobstructed, and lit.
+        let at = |px: i32, py: i32| {
+            ((x0..=x1).contains(&px) && (y0..=y1).contains(&py))
+                .then(|| ((py - y0) * bw + px - x0) as usize)
+        };
+        let solid = |px: i32, py: i32| {
+            (x0..=x1).contains(&px)
+                && (y0..=y1).contains(&py)
+                && self.shadow[py as usize * self.dim + px as usize] != 0
+        };
+        for &sx in &[1i32, -1] {
+            for &sy in &[1i32, -1] {
+                // Only the part of the clipped box on this quadrant's side.
+                let ax_hi = if sx > 0 { x1 - cx } else { cx - x0 }.min(rad);
+                let ax_lo = if sx > 0 { x0 - cx } else { cx - x1 }.max(0);
+                let ay_hi = if sy > 0 { y1 - cy } else { cy - y0 }.min(rad);
+                let ay_lo = if sy > 0 { y0 - cy } else { cy - y1 }.max(0);
+                for ax in ax_lo..=ax_hi {
+                    for ay in ay_lo..=ay_hi {
+                        let (dx, dy) = (sx * ax, sy * ay);
+                        let Some(here) = at(cx + dx, cy + dy) else {
+                            continue;
+                        };
+                        if ax == 0 && ay == 0 {
+                            vis[here] = 1;
+                            continue;
+                        }
+                        // One step back toward the centre, along whichever axis
+                        // the ray is travelling faster.
+                        let (bx, by) = if ax >= ay {
+                            let n = ax - 1;
+                            (n, (ay * n + ax / 2) / ax)
+                        } else {
+                            let n = ay - 1;
+                            ((ax * n + ay / 2) / ay, n)
+                        };
+                        let (px, py) = (cx + sx * bx, cy + sy * by);
+                        vis[here] = match at(px, py) {
+                            Some(back) => (vis[back] != 0 && !solid(px, py)) as u8,
+                            None => 1, // the ray reaches here through open space
+                        };
+                    }
+                }
+            }
+        }
+        vis
     }
 
     /// Map a sprite's 4-bit pixel `nibble` onto a palette index through the
@@ -1261,12 +1620,35 @@ impl Devices {
         if dst.len() < self.pixels() * 4 {
             return false;
         }
-        for (px, &idx) in dst.chunks_exact_mut(4).zip(self.framebuffer.iter()) {
+        if !self.lit {
+            for (px, &idx) in dst.chunks_exact_mut(4).zip(self.framebuffer.iter()) {
+                let (r, g, b) = self.palette[idx as usize];
+                px.copy_from_slice(&[r, g, b, 0xff]);
+            }
+            return true;
+        }
+        // Lighting resolves **here**, on the way out, and nowhere else. The
+        // framebuffer stays 8-bit indices, so nothing upstream of this line
+        // forks: not the blitter, not the tilemap, not the sprite banks, not a
+        // game's own `peek` at what it drew. Every host — the window, Android,
+        // and the PNG an agent reads — comes through this one function, so all
+        // three see one picture without a line of host code.
+        for ((px, &idx), l) in dst
+            .chunks_exact_mut(4)
+            .zip(self.framebuffer.iter())
+            .zip(self.light.chunks_exact(3))
+        {
             let (r, g, b) = self.palette[idx as usize];
-            px.copy_from_slice(&[r, g, b, 0xff]);
+            px.copy_from_slice(&[shade(r, l[0]), shade(g, l[1]), shade(b, l[2]), 0xff]);
         }
         true
     }
+}
+
+/// One channel through one light level. `LIGHT_UNIT` is the identity; above it
+/// the channel brightens and clamps at white rather than wrapping to black.
+fn shade(c: u8, l: u8) -> u8 {
+    ((c as u32 * l as u32) / LIGHT_UNIT as u32).min(255) as u8
 }
 
 #[cfg(test)]
@@ -2145,5 +2527,355 @@ mod tests {
         assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 0], 9, "left edge drawn");
         assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 30], 9, "right end drawn");
         assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 31], 0);
+    }
+
+    // ---- lighting ----
+
+    /// Set the whole screen to palette index 7 (white in the base 16) so the
+    /// light layer is the only thing the RGBA output can be reporting.
+    fn white_screen() -> Devices {
+        let mut d = Devices::new();
+        d.write(0x16, 7, &[]); // cls(7)
+        d
+    }
+
+    fn px(d: &Devices, x: usize, y: usize) -> [u8; 3] {
+        let rgba = d.framebuffer_rgba();
+        let i = (y * d.dim() + x) * 4;
+        [rgba[i], rgba[i + 1], rgba[i + 2]]
+    }
+
+    /// A ROM that never mentions light must present byte-for-byte what it always
+    /// did, out of an *unallocated* layer — the feature costs an unlit game
+    /// nothing, and this is the assertion that keeps it that way.
+    #[test]
+    fn an_unlit_rom_presents_through_the_palette_untouched() {
+        let d = white_screen();
+        assert!(!d.is_lit());
+        assert!(d.light.is_empty(), "no layer allocated");
+        assert_eq!(px(&d, 0, 0), [0xFF, 0xF1, 0xE8], "PICO-8 white");
+    }
+
+    /// `ambient` at LIGHT_UNIT is the identity, which is what makes the layer
+    /// safe to switch on mid-game: turning lighting *on* must not be visible
+    /// until a game actually dims or brightens something.
+    #[test]
+    fn ambient_at_one_unit_changes_nothing() {
+        let mut d = white_screen();
+        let neutral = px(&d, 0, 0);
+        d.write(0x22, LIGHT_UNIT as u16, &[]);
+        d.write(0x21, LIGHT_UNIT as u16, &[]);
+        d.write(0x26, LIGHT_UNIT as u16, &[]); // commit
+        assert!(d.is_lit());
+        assert_eq!(px(&d, 0, 0), neutral);
+    }
+
+    #[test]
+    fn ambient_dims_the_whole_screen() {
+        let mut d = white_screen();
+        ambient(&mut d, 8, 8, 16);
+        let [r, g, b] = px(&d, 5, 90);
+        assert_eq!(r, 0xFF / 8, "quarter-eighth of white");
+        assert_eq!(g, 0xF1 / 8);
+        assert_eq!(b, 0xE8 / 4, "the blue channel is lit twice as hard");
+        assert_eq!(px(&d, 5, 90), px(&d, 120, 3), "a flood is uniform");
+        // The indices themselves are untouched: lighting is presentation, and a
+        // game's own `peek` at what it drew must still read what it drew.
+        assert!(d.framebuffer.iter().all(|&p| p == 7));
+    }
+
+    fn ambient(d: &mut Devices, r: u16, g: u16, b: u16) {
+        d.write(0x22, b, &[]);
+        d.write(0x21, g, &[]);
+        d.write(0x26, r, &[]);
+    }
+
+    fn light(d: &mut Devices, x: u16, y: u16, radius: u16, r: u16, g: u16, b: u16) {
+        d.write(0x22, b, &[]);
+        d.write(0x21, g, &[]);
+        d.write(0x20, r, &[]);
+        d.write(0x23, radius, &[]);
+        d.write(0x24, y, &[]);
+        d.write(0x25, x, &[]); // commits
+    }
+
+    /// The torch-in-a-dungeon shape: a dark flood, one light, and brightness
+    /// that falls off with distance and is gone past the radius.
+    #[test]
+    fn a_light_falls_off_to_nothing_at_its_radius() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        light(&mut d, 64, 64, 30, 60, 60, 60);
+
+        let centre = px(&d, 64, 64)[0];
+        let mid = px(&d, 64 + 20, 64)[0];
+        let rim = px(&d, 64 + 29, 64)[0];
+        let outside = px(&d, 64 + 31, 64)[0];
+        assert!(centre > mid && mid > rim, "{centre} > {mid} > {rim}");
+        assert_eq!(outside, 0xFF / 16, "past the radius, only the ambient");
+        assert!(rim > outside, "the rim is still inside the light");
+        // Radially symmetric, not a box.
+        assert_eq!(px(&d, 64, 64 + 20)[0], mid);
+        assert_eq!(px(&d, 64 - 20, 64)[0], mid);
+    }
+
+    /// A light sits at a place in the *world*, like every other drawing op, or a
+    /// torch on a dungeon wall slides off it the moment the player walks.
+    #[test]
+    fn a_light_moves_with_the_camera() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        d.write(0x17, 40, &[]); // camera x = 40
+        d.write(0x18, 10, &[]); // camera y = 10
+        light(&mut d, 60, 30, 12, 60, 60, 60);
+        assert!(
+            px(&d, 20, 20)[0] > px(&d, 60, 30)[0],
+            "lit at screen (20,20)"
+        );
+    }
+
+    /// Off-screen and giant lights are do-nothing / clip, the same rule as an
+    /// off-screen `pset`. A `u16` radius squared is also the one place this
+    /// device can overflow, so it is clamped rather than trusted.
+    #[test]
+    fn lights_clip_instead_of_panicking() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        light(&mut d, 5, 5, 20, 60, 60, 60); // straddles the top-left corner
+        light(&mut d, 40000, 40000, 40, 60, 60, 60); // far off-screen
+        light(&mut d, 64, 64, 0, 60, 60, 60); // zero radius draws nothing
+        light(&mut d, 64, 64, u16::MAX, 60, 60, 60); // would overflow r*r
+        assert!(px(&d, 0, 0)[0] > 0xFF / 16, "the corner light landed");
+    }
+
+    /// Additive, saturating, and per channel — which is what makes two torches
+    /// overlap brighter and a red light beside a blue one read as magenta.
+    #[test]
+    fn lights_add_and_tint() {
+        let mut d = white_screen();
+        ambient(&mut d, 0, 0, 0);
+        light(&mut d, 40, 64, 30, 64, 0, 0); // red
+        light(&mut d, 80, 64, 30, 0, 0, 64); // blue
+        let [r, g, b] = px(&d, 40, 64);
+        assert!(r > 0 && g == 0 && b == 0, "pure red core: {r},{g},{b}");
+        let [r, g, b] = px(&d, 60, 64); // where the two overlap
+        assert!(
+            r > 0 && b > 0 && g == 0,
+            "magenta between them: {r},{g},{b}"
+        );
+
+        // Saturation: piling light on cannot wrap a channel back to black.
+        for _ in 0..12 {
+            light(&mut d, 40, 64, 30, 255, 255, 255);
+        }
+        assert_eq!(px(&d, 40, 64), [0xFF, 0xFF, 0xFF], "clamps at white");
+    }
+
+    /// Over neutral a light *brightens*, up to 4×. Without that headroom a
+    /// coloured light could only ever fail to darken something.
+    #[test]
+    fn a_light_can_go_over_neutral() {
+        let mut d = Devices::new();
+        d.write(0x16, 1, &[]); // cls to the dark navy of the base 16
+        let dark = px(&d, 0, 0);
+        ambient(
+            &mut d,
+            LIGHT_UNIT as u16,
+            LIGHT_UNIT as u16,
+            LIGHT_UNIT as u16,
+        );
+        assert_eq!(px(&d, 0, 0), dark, "neutral is the identity");
+        light(&mut d, 64, 64, 40, 192, 192, 192);
+        assert!(
+            px(&d, 64, 64)[2] > dark[2],
+            "the core is brighter than unlit"
+        );
+    }
+
+    /// Sources add, fills set: the HUD case. A box set to neutral is readable
+    /// over any darkness, and a light dropped on it afterwards still adds.
+    #[test]
+    fn light_rect_sets_rather_than_adds() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 4, 40);
+        d.write(0x22, LIGHT_UNIT as u16, &[]);
+        d.write(0x21, LIGHT_UNIT as u16, &[]);
+        d.write(0x20, LIGHT_UNIT as u16, &[]);
+        d.write(0x27, 10, &[]); // h
+        d.write(0x28, 40, &[]); // w
+        d.write(0x24, 0, &[]); // y
+        d.write(0x29, 0, &[]); // x, commits
+        assert_eq!(px(&d, 0, 0), [0xFF, 0xF1, 0xE8], "the strip reads normally");
+        assert_eq!(px(&d, 39, 9), [0xFF, 0xF1, 0xE8], "to its far corner");
+        assert_eq!(px(&d, 40, 0), dark, "and stops there");
+        assert_eq!(px(&d, 0, 10), dark);
+        assert_eq!(px(&d, 4, 40), dark, "the rest of the screen is untouched");
+    }
+
+    /// Same clipping rules as `rect`, which it deliberately mirrors.
+    #[test]
+    fn light_rect_clips_and_ignores_a_zero_size() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 64, 64);
+        fn fill(d: &mut Devices, x: u16, y: u16, w: u16, h: u16) {
+            d.write(0x22, 255, &[]);
+            d.write(0x21, 255, &[]);
+            d.write(0x20, 255, &[]);
+            d.write(0x27, h, &[]);
+            d.write(0x28, w, &[]);
+            d.write(0x24, y, &[]);
+            d.write(0x29, x, &[]);
+        }
+        fill(&mut d, 64, 64, 0, 20); // zero width
+        fill(&mut d, 64, 64, 20, 0); // zero height
+        fill(&mut d, 0xFFF0, 0xFFF0, 8, 8); // wholly off the top-left
+        assert_eq!(px(&d, 64, 64), dark, "nothing drew");
+        fill(&mut d, 0xFFFC, 0, 8, 8); // straddling the left edge: x = -4
+                                       // A fill of 255 is four units of light, so every channel clamps white.
+        assert_eq!(px(&d, 3, 3), [0xFF, 0xFF, 0xFF], "the visible half landed");
+        assert_eq!(px(&d, 4, 3), dark, "and no further");
+    }
+
+    fn shadow(d: &mut Devices, x: u16, y: u16, w: u16, h: u16) {
+        d.write(0x2a, h, &[]);
+        d.write(0x2b, w, &[]);
+        d.write(0x24, y, &[]);
+        d.write(0x2c, x, &[]); // commits
+    }
+
+    /// The point of the whole thing: a wall between the lamp and a pixel means
+    /// that pixel does not get the light.
+    #[test]
+    fn a_wall_stops_the_light_behind_it() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 0, 0)[0];
+        // A vertical wall down x = 64, and a lamp to its left.
+        shadow(&mut d, 64, 0, 2, 128);
+        light(&mut d, 40, 64, 60, 60, 60, 60);
+
+        assert!(px(&d, 50, 64)[0] > dark, "in front of the wall is lit");
+        assert!(px(&d, 64, 64)[0] > dark, "the wall's own face is lit");
+        assert_eq!(px(&d, 70, 64)[0], dark, "just behind it is not");
+        assert_eq!(px(&d, 90, 64)[0], dark, "and neither is further behind");
+        // The shadow is a shadow, not a hemisphere: light still reaches around
+        // the ends of a wall that does not span the screen.
+        assert!(px(&d, 20, 64)[0] > dark, "the lamp's own side is untouched");
+    }
+
+    /// A pillar throws a wedge that widens with distance, and leaves the pixels
+    /// beside it lit. A `continue`-on-solid implementation passes the test above
+    /// and fails this one.
+    #[test]
+    fn a_pillar_throws_a_widening_wedge() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 0, 0)[0];
+        shadow(&mut d, 62, 62, 4, 4); // a small block, dead centre
+        light(&mut d, 20, 64, 100, 60, 60, 60); // lamp to its left
+
+        assert_eq!(px(&d, 80, 64)[0], dark, "directly behind is shadowed");
+        assert_eq!(px(&d, 110, 64)[0], dark, "still shadowed further out");
+        assert!(px(&d, 80, 50)[0] > dark, "above the wedge is lit");
+        assert!(px(&d, 80, 78)[0] > dark, "below the wedge is lit");
+        assert!(px(&d, 50, 64)[0] > dark, "in front of the pillar is lit");
+    }
+
+    /// Occluders are cleared by the flood, not carried into the next frame — a
+    /// game declares its walls between `ambient` and its lamps, and a wall that
+    /// survived would double as the previous frame's wall in a scrolled world.
+    #[test]
+    fn the_flood_clears_the_occluders() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        shadow(&mut d, 64, 0, 2, 128);
+        light(&mut d, 40, 64, 60, 60, 60, 60);
+        let shadowed = px(&d, 90, 64)[0];
+
+        ambient(&mut d, 4, 4, 4); // next frame, no wall declared
+        light(&mut d, 40, 64, 60, 60, 60, 60);
+        assert!(px(&d, 90, 64)[0] > shadowed, "the wall did not survive");
+    }
+
+    /// A ROM that declares nothing solid must not pay for the ray walk, and must
+    /// light exactly as it did before shadows existed.
+    #[test]
+    fn no_occluders_means_the_plain_radial_path() {
+        let mut a = white_screen();
+        ambient(&mut a, 4, 4, 4);
+        light(&mut a, 64, 64, 40, 60, 60, 60);
+
+        let mut b = white_screen();
+        ambient(&mut b, 4, 4, 4);
+        shadow(&mut b, 200, 200, 0, 0); // zero size: declares nothing
+        light(&mut b, 64, 64, 40, 60, 60, 60);
+        assert_eq!(a.light, b.light);
+    }
+
+    /// A lamp whose centre is off-screen still casts correctly: the visibility
+    /// walk is in light-relative offsets, so the clipped part of the box is not
+    /// where the rays start.
+    #[test]
+    fn a_lamp_off_screen_still_casts() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 100, 100)[0];
+        shadow(&mut d, 20, 0, 2, 128); // wall down x = 20
+        light(&mut d, 0xFFF6, 64, 90, 60, 60, 60); // lamp at x = -10
+
+        assert!(px(&d, 10, 64)[0] > dark, "between the lamp and the wall");
+        assert_eq!(px(&d, 40, 64)[0], dark, "behind the wall");
+    }
+
+    /// A `u16` radius is a valid radius, and with an occluder in play the
+    /// visibility walk must still size itself by the **screen**. Sizing it by
+    /// the radius asks for megabytes per lamp per frame for a light that is
+    /// almost entirely off-screen — bounded by the radius clamp, and still
+    /// absurd. Caught in review.
+    #[test]
+    fn a_giant_shadowed_light_is_bounded_by_the_screen() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 0, 0)[0];
+        shadow(&mut d, 64, 0, 2, 128); // a wall down the middle
+        light(&mut d, 20, 64, u16::MAX, 60, 60, 60);
+
+        // Still a light, and still a shadow — clipping the *domain* must not
+        // clip the answer.
+        assert!(px(&d, 40, 64)[0] > dark, "in front of the wall is lit");
+        assert_eq!(px(&d, 90, 64)[0], dark, "behind it is not");
+    }
+
+    /// A lamp far off-screen with a shadow in play walks only the pixels it can
+    /// actually reach — and gets the same answer as the equivalent on-screen
+    /// geometry would.
+    #[test]
+    fn an_off_screen_lamp_walks_only_the_visible_box() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 0, 0)[0];
+        shadow(&mut d, 60, 60, 8, 8);
+        light(&mut d, 0xFF00, 64, 400, 60, 60, 60); // centre 256 px off the left
+
+        assert!(px(&d, 30, 64)[0] > dark, "in front of the block is lit");
+        assert_eq!(px(&d, 100, 64)[0], dark, "its shadow still reaches");
+        assert!(px(&d, 100, 30)[0] > dark, "and only where the block is");
+    }
+
+    /// The layer is sized off `dim`, so a mode switch has to drop it — the same
+    /// reason the framebuffer is cleared there.
+    #[test]
+    fn a_mode_switch_drops_the_light_layer() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        assert!(d.is_lit());
+        d.set_mode(VideoMode::Extended240);
+        assert!(!d.is_lit());
+        assert!(d.light.is_empty());
+        // And it comes back at the new size, not the old one.
+        ambient(&mut d, 4, 4, 4);
+        assert_eq!(d.light.len(), EXTENDED_DIM * EXTENDED_DIM * 3);
     }
 }
