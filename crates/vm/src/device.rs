@@ -1287,7 +1287,10 @@ impl Devices {
         let (y0, y1) = ((cy - rad).max(0), (cy + rad).min(dim - 1));
         let (x0, x1) = ((cx - rad).max(0), (cx + rad).min(dim - 1));
         let tint = [self.lr as i32, self.lg as i32, self.lb as i32];
-        let vis = self.occluded.then(|| self.cast_shadows(cx, cy, rad));
+        let vis = self
+            .occluded
+            .then(|| self.cast_shadows(cx, cy, rad, x0, y0, x1, y1));
+        let bw = x1 - x0 + 1;
         for py in y0..=y1 {
             let dy = py - cy;
             let dy2 = dy * dy;
@@ -1299,7 +1302,7 @@ impl Devices {
                     continue;
                 }
                 if let Some(v) = &vis {
-                    if v[((dy + rad) * (2 * rad + 1) + dx + rad) as usize] == 0 {
+                    if v[((py - y0) * bw + px - x0) as usize] == 0 {
                         continue;
                     }
                 }
@@ -1314,9 +1317,23 @@ impl Devices {
         }
     }
 
-    /// Which pixels of a light's box can see its centre: `1` lit, `0` in shadow.
-    /// Indexed `(dy + rad) * (2*rad + 1) + dx + rad`, in light-relative offsets,
-    /// so a lamp whose centre is off-screen still casts correctly.
+    /// Which pixels of a light's **clipped** box can see its centre: `1` lit,
+    /// `0` in shadow. Indexed `(py - y0) * (x1 - x0 + 1) + px - x0`, in screen
+    /// coordinates.
+    ///
+    /// **The domain is the screen, never the radius.** A `u16` radius is
+    /// clamped to a few screens wide, so sizing this by the radius would ask for
+    /// megabytes per lamp per frame for a light that is mostly off-screen —
+    /// bounded, but absurd. Clipped, the scratch can never exceed one screen
+    /// (56 KiB at 240×240) whatever radius a game writes, and the walk costs the
+    /// pixels it actually lights.
+    ///
+    /// Clipping is safe because **every occluder is on-screen**: `shadow_rect`
+    /// clips, so any part of a ray outside the screen is unobstructed. The
+    /// screen is a rectangle, so a segment from an off-screen centre to an
+    /// on-screen pixel leaves it exactly once — everything before that crossing
+    /// is outside and therefore clear. A back-step that lands off the domain is
+    /// consequently *lit*, not unknown.
     ///
     /// **Propagation, not ray casting.** A pixel is lit when the one pixel
     /// nearer the lamp — a single Bresenham step back along the dominant axis —
@@ -1329,31 +1346,57 @@ impl Devices {
     /// The four quadrants run separately so that "one step nearer" is always a
     /// pixel this loop has already visited: with `ax` and `ay` both ascending
     /// from the centre, the back-step lands in an earlier column or an earlier
-    /// row of the same column, never ahead.
+    /// row of the same column, never ahead. Each quadrant walks only the part of
+    /// the clipped box on its side of the centre, so together they cover it once.
     ///
     /// **A solid pixel is lit; what is behind it is not.** Otherwise every wall
     /// facing a torch would be the one thing in the room the torch could not
     /// show you.
-    fn cast_shadows(&self, cx: i32, cy: i32, rad: i32) -> Vec<u8> {
-        let side = 2 * rad + 1;
-        let mut vis = vec![0u8; (side * side) as usize];
-        let at = |dx: i32, dy: i32| ((dy + rad) * side + dx + rad) as usize;
-        vis[at(0, 0)] = 1;
-        let solid = |dx: i32, dy: i32| {
-            let (x, y) = (cx + dx, cy + dy);
-            if x < 0 || y < 0 || x >= self.dim as i32 || y >= self.dim as i32 {
-                return false; // off-screen: nothing is known to be there
-            }
-            self.shadow[y as usize * self.dim + x as usize] != 0
+    #[allow(clippy::too_many_arguments)]
+    fn cast_shadows(
+        &self,
+        cx: i32,
+        cy: i32,
+        rad: i32,
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+    ) -> Vec<u8> {
+        let bw = x1 - x0 + 1;
+        let bh = y1 - y0 + 1;
+        if bw <= 0 || bh <= 0 {
+            return Vec::new();
+        }
+        let mut vis = vec![0u8; (bw * bh) as usize];
+        // `None` = off the clipped domain, which by the argument above means
+        // off-screen: unobstructed, and lit.
+        let at = |px: i32, py: i32| {
+            ((x0..=x1).contains(&px) && (y0..=y1).contains(&py))
+                .then(|| ((py - y0) * bw + px - x0) as usize)
+        };
+        let solid = |px: i32, py: i32| {
+            (x0..=x1).contains(&px)
+                && (y0..=y1).contains(&py)
+                && self.shadow[py as usize * self.dim + px as usize] != 0
         };
         for &sx in &[1i32, -1] {
             for &sy in &[1i32, -1] {
-                for ax in 0..=rad {
-                    for ay in 0..=rad {
+                // Only the part of the clipped box on this quadrant's side.
+                let ax_hi = if sx > 0 { x1 - cx } else { cx - x0 }.min(rad);
+                let ax_lo = if sx > 0 { x0 - cx } else { cx - x1 }.max(0);
+                let ay_hi = if sy > 0 { y1 - cy } else { cy - y0 }.min(rad);
+                let ay_lo = if sy > 0 { y0 - cy } else { cy - y1 }.max(0);
+                for ax in ax_lo..=ax_hi {
+                    for ay in ay_lo..=ay_hi {
+                        let (dx, dy) = (sx * ax, sy * ay);
+                        let Some(here) = at(cx + dx, cy + dy) else {
+                            continue;
+                        };
                         if ax == 0 && ay == 0 {
+                            vis[here] = 1;
                             continue;
                         }
-                        let (dx, dy) = (sx * ax, sy * ay);
                         // One step back toward the centre, along whichever axis
                         // the ray is travelling faster.
                         let (bx, by) = if ax >= ay {
@@ -1363,8 +1406,11 @@ impl Devices {
                             let n = ay - 1;
                             ((ax * n + ay / 2) / ay, n)
                         };
-                        let (px, py) = (sx * bx, sy * by);
-                        vis[at(dx, dy)] = (vis[at(px, py)] != 0 && !solid(px, py)) as u8;
+                        let (px, py) = (cx + sx * bx, cy + sy * by);
+                        vis[here] = match at(px, py) {
+                            Some(back) => (vis[back] != 0 && !solid(px, py)) as u8,
+                            None => 1, // the ray reaches here through open space
+                        };
                     }
                 }
             }
@@ -2781,6 +2827,41 @@ mod tests {
 
         assert!(px(&d, 10, 64)[0] > dark, "between the lamp and the wall");
         assert_eq!(px(&d, 40, 64)[0], dark, "behind the wall");
+    }
+
+    /// A `u16` radius is a valid radius, and with an occluder in play the
+    /// visibility walk must still size itself by the **screen**. Sizing it by
+    /// the radius asks for megabytes per lamp per frame for a light that is
+    /// almost entirely off-screen — bounded by the radius clamp, and still
+    /// absurd. Caught in review.
+    #[test]
+    fn a_giant_shadowed_light_is_bounded_by_the_screen() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 0, 0)[0];
+        shadow(&mut d, 64, 0, 2, 128); // a wall down the middle
+        light(&mut d, 20, 64, u16::MAX, 60, 60, 60);
+
+        // Still a light, and still a shadow — clipping the *domain* must not
+        // clip the answer.
+        assert!(px(&d, 40, 64)[0] > dark, "in front of the wall is lit");
+        assert_eq!(px(&d, 90, 64)[0], dark, "behind it is not");
+    }
+
+    /// A lamp far off-screen with a shadow in play walks only the pixels it can
+    /// actually reach — and gets the same answer as the equivalent on-screen
+    /// geometry would.
+    #[test]
+    fn an_off_screen_lamp_walks_only_the_visible_box() {
+        let mut d = white_screen();
+        ambient(&mut d, 4, 4, 4);
+        let dark = px(&d, 0, 0)[0];
+        shadow(&mut d, 60, 60, 8, 8);
+        light(&mut d, 0xFF00, 64, 400, 60, 60, 60); // centre 256 px off the left
+
+        assert!(px(&d, 30, 64)[0] > dark, "in front of the block is lit");
+        assert_eq!(px(&d, 100, 64)[0], dark, "its shadow still reaches");
+        assert!(px(&d, 100, 30)[0] > dark, "and only where the block is");
     }
 
     /// The layer is sized off `dim`, so a mode switch has to drop it — the same
