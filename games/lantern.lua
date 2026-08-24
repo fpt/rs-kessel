@@ -370,9 +370,9 @@ function draw()
     light(hx + 4, hy + 4, fuel + flicker, 58, 42, 22)
   end
 
-  light_rect(0, 0, 128, 9, 64, 64, 64)   -- the HUD strip, at neutral
+  light_rect(0, 0, 128, 8, 64, 64, 64)   -- the HUD bar, at neutral
 
-  rect(0, 0, 128, 9, 0)
+  rect(0, 0, 128, 8, 0)
   text("DEPTH", 2, 2, 6)
   number(depth, 26, 2, 7)
   text("TORCH", 46, 2, 6)
