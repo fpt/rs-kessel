@@ -339,16 +339,24 @@ function draw()
     if facing == 3 then spr(sword_v, hx * 8, hy * 8 + 8, 0) end
   end
 
+  -- The HUD sits on its own black bar across the top **wall** row, and nothing
+  -- taller. It used to be two lines drawn straight onto the dungeon, which was
+  -- fine while the dungeon was evenly lit — but the strip of neutral light that
+  -- makes it readable also erases the darkness and the shadows under it, and at
+  -- two lines that strip covered a row the hero can walk on. One row of wall is
+  -- the only part of the board where a flat-lit band costs nothing.
+  rect(0, 0, 128, 8, 0)
   i = 0
   while i < 5 do
-    if i < hp then spr(heart, 2 + i * 9, 2, 0) else spr(heart_empty, 2 + i * 9, 2, 0) end
+    if i < hp then spr(heart, 2 + i * 9, 0, 0) else spr(heart_empty, 2 + i * 9, 0, 0) end
     i = i + 1
   end
-  text("STAGE", 74, 2, 7)
-  number(stage, 116, 2, 10)
-  text("LOOT", 82, 10, 7)
-  number(loot, 116, 10, 10)
+  text("STAGE", 50, 2, 7)
+  number(stage, 72, 2, 10)
+  text("LOOT", 88, 2, 7)
+  number(loot, 106, 2, 10)
   if hp == 0 then
+    rect(40, 50, 48, 22, 0)
     text("GAME OVER", 46, 54, 8)
     text("PRESS A", 50, 64, 7)
   end
@@ -392,8 +400,8 @@ function draw()
     light(hx * 8 + 4, hy * 8 + 4, reach, 36, 28, 17)
   end
 
-  light_rect(0, 0, 128, 17, 64, 64, 64)                       -- the HUD band
-  if hp == 0 then light_rect(30, 50, 68, 22, 64, 64, 64) end
+  light_rect(0, 0, 128, 8, 64, 64, 64)                        -- the HUD bar
+  if hp == 0 then light_rect(40, 50, 48, 22, 64, 64, 64) end
 
   entity(hx * 8, hy * 8, hp)
   entity(stage, loot, 30)

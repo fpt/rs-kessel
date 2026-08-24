@@ -790,7 +790,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
     c.load_rom("r.lua").unwrap();
 
     c.run_frame(0);
-    assert_eq!(index_at(&c, 38, 3), 8, "fifth heart should start full");
+    assert_eq!(index_at(&c, 38, 1), 8, "fifth heart should start full");
 
     let mut obs = c.run_frame(0);
     let mut player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
@@ -799,7 +799,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
     }
     assert_eq!(player.tag, 4, "contact did not remove exactly one heart");
-    assert_eq!(index_at(&c, 38, 3), 6, "fifth heart should have emptied");
+    assert_eq!(index_at(&c, 38, 1), 6, "fifth heart should have emptied");
 
     assert_eq!(
         index_at(&c, 18, 16),
