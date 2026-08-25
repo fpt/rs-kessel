@@ -35,9 +35,18 @@ build-headless:
 	@cd crates && cargo build --release --no-default-features
 	@echo "Built crates/target/release/kessel (MCP only, no player)"
 
+# Copy to a temporary name and rename over the old binary rather than writing
+# into it. On macOS the kernel caches a code-signing blob per vnode, and a plain
+# `cp` reuses the inode: the pages change underneath the cached signature, and
+# the next run dies with a bare `zsh: killed` and no output at all
+# (`CODE SIGNING: ... tainted:1 ... sending SIGKILL` in `log show`). `mv` is a
+# rename, so the new binary gets a new inode and is validated fresh. It also
+# means a `kessel mcp` an agent is talking to right now keeps its own file
+# instead of being overwritten mid-session.
 install: build
 	@mkdir -p "$(BINDIR)"
-	@cp crates/target/release/kessel "$(BINDIR)/kessel"
+	@cp crates/target/release/kessel "$(BINDIR)/.kessel.new"
+	@mv -f "$(BINDIR)/.kessel.new" "$(BINDIR)/kessel"
 	@echo "✅ Installed $(BINDIR)/kessel"
 	@echo "   kessel mcp   — serve the console to an agent over MCP"
 	@echo "   kessel run    — open a game window"
