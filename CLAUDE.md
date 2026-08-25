@@ -243,6 +243,33 @@ snapshotable — which is the entire point of the agent loop, since
 Corollary: if you are tempted to put wgpu, cpal, or any device backend into
 `crates/vm`, don't. Put it in the player.
 
+### Static grids: `data`, one alphabet
+
+`data NAME { rows }` is a rectangular block of bytes in ROM, written one
+character per cell in the **same alphabet a `sprite` uses** (`.` = 0, `0-9a-f` =
+0..15). `NAME` is the address of the first byte and a game reads a cell with
+`peek(NAME + y*w + x)` — no new builtin, no runtime cost.
+
+It exists because a game had no way to ship a **fixed grid** a person could read.
+`sokoban`'s levels were `mset` calls, which cannot be checked against the thing
+they were transcribed from, and that is the only check that matters for level
+data.
+
+Four things follow, and none should be re-litigated:
+
+- **One grid-literal alphabet, not two.** A block that spelled walls `#` would
+  read better for exactly one kind of game and would need a per-block legend to
+  mean anything, which is a second feature. The game names its own digits.
+- **The size comes from the body**, like a sprite's — which is also why there is
+  no `(w, h)` header. The lexer raw-captures a body by looking exactly three
+  tokens back for the keyword; a header would put a variable number of tokens
+  in between and that trigger would have to start parsing to find the brace.
+- **Rows are not padded.** A single 8×8 sprite forgives a short row; this does
+  not, because a short row here does not shrink one row, it shifts every cell
+  after it and silently changes the whole grid.
+- **A name still means one thing.** `data` joins sprites and the sound kinds in
+  the one namespace and reports the same conflict.
+
 ### Several files: `#include`, not `require`
 
 A game spans files through `#include "lib/motion.lua"` — PICO-8's spelling,
