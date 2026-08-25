@@ -1034,6 +1034,7 @@ games_ok! {
     platform_ok => "platform",
     snake_ok => "snake",
     brick_ok => "brick",
+    dnb_ok => "dnb",
     shooter_ok => "shooter",
     rogue_ok => "rogue",
     tetris_ok => "tetris",

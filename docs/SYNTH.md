@@ -156,7 +156,6 @@ instrument lead {
   attack = 0  decay = 8  sustain = 100  release = 4   -- ms, ms, 0..255, ms
   pitch_env = 24  pitch_decay = 40      -- semitones, ms  (kick/laser/coin)
   filter = "lpf"  cutoff = 160  resonance = 40         -- 0..255
-  lfo = "tri"  lfo_rate = 30  lfo_depth = 20  lfo_target = "cutoff"
   volume = 200  pan = 0                                -- 0..255, -128..127
   chorus = 15  reverb = 40  distortion = 0             -- sends, 0..255
 }
@@ -385,6 +384,16 @@ FM, wavetables, arbitrary routing, per-voice reverb, delay, EQ, compressor, and
 automation curves — all still out, for the reasons above. **Bitcrusher** is the
 first thing worth adding: two parameters, and the one retro effect this design
 cannot fake.
+
+**An LFO** is out too, and was from the start: `pitch_env` was chosen over one
+because the sweeps a console actually wants are one-shot (kick, laser, coin),
+and a patch is fixed at load time anyway, so a running modulator would be the
+only thing in the machine that changes a voice after it starts. A sweep the
+player drives is a choice between patches declared up front, retriggered on a
+channel — `games/piano.lua`'s cutoff row and `games/dnb.lua`'s Reese lane. Both
+earlier drafts of this file and of `VM_AUDIO.md` showed `lfo_target` in the
+`instrument` block; it never existed, and `set_instrument_field` rejected it.
+`tests/docs.rs` now keeps both files from promising a key the parser refuses.
 
 Two things the plan promised that nobody has built yet, because nothing needs
 them: `kessel synth` as a standalone instrument (the crate links alone and its

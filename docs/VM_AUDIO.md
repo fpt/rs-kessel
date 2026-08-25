@@ -33,7 +33,6 @@ instrument lead {
   attack = 0  decay = 8  sustain = 100  release = 4   -- ms, ms, 0..255, ms
   pitch_env = 24  pitch_decay = 40      -- semitones, ms  (kick/laser/coin)
   filter = "lpf"  cutoff = 160  resonance = 40         -- 0..255
-  lfo = "tri"  lfo_rate = 30  lfo_depth = 20  lfo_target = "cutoff"
   volume = 200  pan = 0                                -- 0..255, -128..127
   chorus = 15  reverb = 40  distortion = 0             -- sends, 0..255
 }
@@ -50,6 +49,19 @@ Every parameter is a `u8`/`u16` — the byte world the VM already lives in, and 
 range a model writes correctly without a units table. `cutoff` maps exponentially
 (`0 → 80 Hz`, `128 → ~1.2 kHz`, `255 → 18 kHz`); conversion to Hz, Q and seconds
 happens once at load time, never while rendering.
+
+**There is no LFO, and nothing modulates a note while it sounds.** A patch is
+compiled when the ROM loads and no port edits one afterwards, so a voice's
+cutoff, pitch and volume are fixed the moment it starts. `pitch_env` covers the
+one-shot sweep an LFO would mostly have been reached for — a kick, a laser, a
+coin — and earns its place ahead of one for that reason.
+
+Anything that has to move under the player's hand is a **choice between patches
+declared up front**, retriggered on a channel. `games/piano.lua`'s SYNTH panel
+picks one of sixteen cutoffs; `games/dnb.lua` declares eight and draws its Reese
+wobble as a sequencer lane over them. The bank is metadata beside the ROM, so
+sixteen variants of one synth cost the game nothing — and a drawn sweep locks to
+the grid, which a free-running LFO does not.
 
 Drums come from noise, or from a sine with a `pitch_env` — there is no drum
 machine.
@@ -194,3 +206,12 @@ the stage tune and the one that replaces it when the boss arrives), `popn`
 instruments and their effects, no music), `piano` (`note_on`/`note_off` per
 touch slot, one instrument, nothing declared in advance), and `outrun` (one held
 note *retuned* as the car accelerates — the other way to use a channel).
+
+`dnb` is the worked example for a **sequencer the player edits while it runs**,
+which is the one thing a compile-time `track` cannot be. Three things there are
+worth copying: its step clock is a 1/64-frame accumulator (`57600 / bpm`),
+because no integer frame count reaches 174 BPM; every hit goes through a queue
+of frame countdowns, so rolls, nudges and plain hits take one path; and its
+melodic tracks sound through `note_on` on a channel they own rather than `play`,
+because a fire-and-forget note re-entered before it ends *stacks*, and a player
+tapping play/stop stacks one every time.
