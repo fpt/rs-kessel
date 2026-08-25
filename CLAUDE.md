@@ -342,8 +342,12 @@ note-level API (`play` / `note_on` / `note_off`), the offline render
 `kessel run` through cpal and Android through `AudioTrack`.
 
 **No audio when attached**: `kessel attach` drives the agent's console, and
-those events belong to that process. No bitcrusher, FM, wavetables, delay, EQ or
-compressor — see the end of `docs/SYNTH.md` for what was left out and why.
+those events belong to that process. No bitcrusher, FM, wavetables, delay, EQ,
+compressor **or LFO** — see the end of `docs/SYNTH.md` for what was left out and
+why. Nothing modulates a voice after it starts: `pitch_env` covers the one-shot
+sweep, and a sweep the player drives is a choice between patches declared up
+front and retriggered on a channel. Both docs showed an `lfo_target` the parser
+had always rejected; `crates/audio/tests/docs.rs` is why they cannot again.
 
 | File | Purpose |
 |------|---------|
@@ -720,6 +724,14 @@ kessel/
 
 ## Testing notes
 
+- `crates/audio/tests/docs.rs` guards the other direction from the corpus: every
+  field name shown in an `instrument`/`sfx`/`fx` block in `docs/VM_AUDIO.md` or
+  `docs/SYNTH.md` must be one `set_instrument_field` and friends accept. The
+  corpus proves the keys games *use* work; nothing proved the keys the docs
+  *promise* do, and four of them (`lfo`, `lfo_rate`, `lfo_depth`, `lfo_target`)
+  never existed. A `track` block is deliberately exempt — every key there that
+  is not `tempo`/`vel`/`loop` is an instrument name by design, so a typo and a
+  channel are indistinguishable to the parser.
 - `crates/vm/tests/games_audio.rs` guards what every game in `games/` *sounds*
   like: no trigger naming a declaration that does not exist, no note on a
   missing instrument, nothing non-finite, nothing past full scale, and no mix
