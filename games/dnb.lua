@@ -42,7 +42,7 @@ controls {
   dpad  = false
   touch = "edit"
   a     = "play / stop"
-  b     = "bar 1 / 2"
+  b     = "next bar"
   pause = START
 }
 
@@ -64,14 +64,14 @@ instrument kick {
   pitch_env = 42  pitch_decay = 55
   filter = lpf  cutoff = 125  resonance = 30
   distortion = 45
-  volume = 165
+  volume = 232
 }
 instrument kick_gh {
   wave = sine
   attack = 0  decay = 70  sustain = 0  release = 24
   pitch_env = 30  pitch_decay = 40
   filter = lpf  cutoff = 100  resonance = 20
-  volume = 82
+  volume = 116
 }
 
 -- The ghost is the point of this game: dark, clipped, and gone before the ear
@@ -81,46 +81,46 @@ instrument sn_ghost {
   wave = noise
   attack = 0  decay = 34  sustain = 0  release = 18
   filter = lpf  cutoff = 95  resonance = 70
-  volume = 62  reverb = 18
+  volume = 88  reverb = 18
 }
 instrument sn_norm {
   wave = noise
   attack = 0  decay = 105  sustain = 0  release = 60
   filter = lpf  cutoff = 168  resonance = 50
   distortion = 30
-  volume = 132  reverb = 55
+  volume = 186  reverb = 55
 }
 instrument sn_accent {
   wave = noise
   attack = 0  decay = 150  sustain = 0  release = 95
   filter = lpf  cutoff = 218  resonance = 40
   distortion = 50
-  volume = 158  reverb = 72
+  volume = 222  reverb = 72
 }
 
 instrument hh_ghost {
   wave = noise
   attack = 0  decay = 15  sustain = 0  release = 8
   filter = hpf  cutoff = 200
-  volume = 40
+  volume = 57
 }
 instrument hh_norm {
   wave = noise
   attack = 0  decay = 26  sustain = 0  release = 12
   filter = hpf  cutoff = 212
-  volume = 86
+  volume = 121
 }
 instrument hh_accent {
   wave = noise
   attack = 0  decay = 40  sustain = 0  release = 20
   filter = hpf  cutoff = 226
-  volume = 120
+  volume = 169
 }
 instrument ohh {
   wave = noise
   attack = 0  decay = 200  sustain = 30  release = 150
   filter = hpf  cutoff = 196
-  volume = 92  reverb = 45
+  volume = 130  reverb = 45
 }
 
 instrument rim {
@@ -128,82 +128,13 @@ instrument rim {
   attack = 0  decay = 28  sustain = 0  release = 14
   pitch_env = 20  pitch_decay = 12
   filter = hpf  cutoff = 155
-  volume = 98
+  volume = 138
 }
 instrument clap {
   wave = noise
   attack = 2  decay = 88  sustain = 0  release = 70
   filter = lpf  cutoff = 190  resonance = 95
-  volume = 110  reverb = 95
-}
-
--- Sub: a sine so far under the filter that it is felt rather than heard, held
--- for as long as the gate the sequencer computes.
-instrument sub {
-  wave = sine
-  attack = 6  decay = 220  sustain = 235  release = 90
-  filter = lpf  cutoff = 48
-  volume = 82
-}
-
--- The Reese, in eight cutoffs.
---
--- There is no LFO in this synth — see the end of `docs/SYNTH.md` for why — and
--- a patch cannot be edited once the ROM loads. So the wobble is not modulation,
--- it is a **lane**: each step names which of these eight it sounds, and the
--- sequencer draws the sweep.
--- That is better than an LFO here anyway, because a drawn wobble locks to the
--- grid instead of drifting against it.
---
--- Detune comes from the chorus send, which is the only thing in the machine
--- that puts a voice slightly beside itself.
-instrument rs_0 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 26  resonance = 108
-  chorus = 150  distortion = 35  volume = 58
-}
-instrument rs_1 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 48  resonance = 108
-  chorus = 150  distortion = 35  volume = 58
-}
-instrument rs_2 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 72  resonance = 108
-  chorus = 150  distortion = 35  volume = 58
-}
-instrument rs_3 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 98  resonance = 108
-  chorus = 150  distortion = 35  volume = 58
-}
-instrument rs_4 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 126  resonance = 108
-  chorus = 150  distortion = 35  volume = 58
-}
-instrument rs_5 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 156  resonance = 105
-  chorus = 150  distortion = 35  volume = 58
-}
-instrument rs_6 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 190  resonance = 102
-  chorus = 150  distortion = 35  volume = 56
-}
-instrument rs_7 {
-  wave = saw
-  attack = 4  decay = 240  sustain = 220  release = 80
-  filter = lpf  cutoff = 226  resonance = 100
-  chorus = 150  distortion = 35  volume = 54
+  volume = 155  reverb = 95
 }
 
 -- ---------------------------------------------------------------------------
@@ -216,7 +147,7 @@ local HDR_H = 22
 
 local LBL_W = 32
 local CELL_W = 13
-local ROW_H = 17
+local ROW_H = 22
 local GRID_X = 32
 local GRID_Y = 66
 local VIS = 16                 -- steps on screen; the other bar is a toggle
@@ -229,14 +160,88 @@ local PEN_Y = 24
 local PEN_H = 20
 local BTN_Y = 46
 local BTN_H = 18
-local DET_Y = 206
-local DET_H = 34
+-- Row three, left to right: four bar buttons, the loop toggle, clear. The bar
+-- buttons are first because they are the ones hit most often, and narrow
+-- because a digit needs no room.
+local BAR_BTN_W = 30
+local LOOP_X = 124
+local LOOP_W = 62
+local CLR_X = 190
+local CLR_W = 48
 
-local NTRK = 8
-local NSTEP = 32               -- two bars of 16ths — the breakbeat's own unit
-local HALF = 16
+-- The mixer is six vertical channel strips, not six horizontal rows. 240
+-- divides by six exactly, so each is 40 px with no remainder on the last one —
+-- and a strip is the shape a mixer *is*: the fader travels the way a hand
+-- pushes it, and six of them side by side can be read as a balance in one look,
+-- which six bars stacked in rows cannot.
+--
+-- It also buys the travel. A row gave a fader 128 px lying down inside a 22 px
+-- row; a strip gives it 108 px standing up, and the eight stops are 13 px apart
+-- instead of 16 px apart but *aligned across all six channels*, so the shape of
+-- the mix is a skyline.
+local STRIP_W = 40
+local NAME_Y = 68
+local FDR_Y = 82
+local FDR_H = 108
+local FDR_IN_X = 3
+local FDR_IN_W = 18
+local MTR_IN_X = 24
+local MTR_IN_W = 13
+local MUTE_Y = 194
+local SOLO_Y = 216
+local MS_H = 18
+local DET_Y = 202
+local DET_H = 38
+
+-- Six drum tracks and nothing else. The sub and the bleep lane are gone: a
+-- kick sounds note 33 and the sub sounded 29 — four semitones apart in the same
+-- octave — so every downbeat was two instruments fighting for the same air, and
+-- the one that lost was always the kick. Nothing overlaps it now because
+-- nothing else down there exists.
+--
+-- Losing two rows bought the remaining six a taller cell: 22 px instead of 17,
+-- which is the whole grid becoming easier to hit.
+local NTRK = 6
+-- Four bars of sixteen. Two was the breakbeat's own unit and is still what a
+-- groove is written in, but a pattern that *is* two bars can only ever repeat;
+-- four is the shortest length with room for the bar that answers and the bar
+-- that fills. The BAR row picks which one is on screen, and LOOP decides
+-- whether playback stays in it.
+local BAR_LEN = 16
+local NBARS = 4
+local NSTEP = 64               -- BAR_LEN * NBARS
 
 local NONE = 255
+
+-- Groove hints. A track carrying fewer than this many hits in the bar on screen
+-- is treated as not written yet, and gets suggestions.
+--
+-- Three rather than zero, so a track with one exploratory hit still gets help —
+-- and so the demo pattern's thinnest lanes show hints at boot instead of the
+-- feature being invisible until something is cleared. It is also self-limiting:
+-- keep writing and the hints go away on their own, which is why there is no
+-- switch for them.
+local HINT_MAX_HITS = 3
+-- The score a suggestion has to reach to show.
+--
+-- Four was too low and the reason is worth keeping: a snare's role likes the
+-- backbeat *and* both ghost positions, so ten of sixteen steps cleared the bar
+-- and the row came out more green than not — a suggestion sheet with everything
+-- on it is a blank one. Five drops the weakest tier and leaves each row reading
+-- as an idea: for the snare, the two backbeats and the four 'a's.
+--
+-- A per-track relative band was tried alongside this and taken out again: with
+-- role scores topping out at 9 and this floor at 5, `best - band` never rose
+-- above the floor, so the mechanism could not fire. Narrowing the rim's and the
+-- clap's roles did the rest of the work the band was supposed to do.
+local HINT_MIN = 5
+
+-- Rebuilt once a frame, not once per cell. The crowding term needs to know how
+-- many tracks hit each step, and asking that inside the drawing loop is six
+-- tracks times sixteen steps times six tracks — the same answer computed
+-- thirty-six times.
+local crowd: array(16, byte)
+local hinting: array(6, byte)
 
 local T_KICK = 0
 local T_SNR = 1
@@ -244,8 +249,6 @@ local T_HAT = 2
 local T_OHH = 3
 local T_RIM = 4
 local T_CLP = 5
-local T_SUB = 6
-local T_RSE = 7
 
 -- A step is one byte: level in 0-1, extra hits in 2-3, micro-timing in 4-5.
 -- One byte because the three are one decision — a hit that is weak, late and
@@ -262,9 +265,7 @@ local LVL_ACC = 3
 -- the finest thing this clock has.
 local MIC_ON = 1
 
-local pat: array(256, byte)    -- NTRK * NSTEP
-local bnote: array(64, byte)   -- SUB and RSE: MIDI note per step, 0 = rest
-local wob: array(32, byte)     -- the Reese's cutoff lane, 0-7
+local pat: array(384, byte)    -- NTRK * NSTEP
 
 -- The pending queue. Every hit lands here first, including the ones due this
 -- frame, so that a roll and a nudge and a plain hit all take the same path.
@@ -275,18 +276,6 @@ local q_trk: array(16, byte)
 local q_note: array(16, byte)
 local q_vel: array(16, byte)
 local q_lvl: array(16, byte)
-local q_var: array(16, byte)   -- the Reese's patch index; unused elsewhere
-local q_gate: array(16, byte)  -- how long a held note sounds; drums ignore it
-
--- Frames left on each melodic track's held note, and 0 for silent. The two
--- melodic tracks sound through `note_on` on a channel they own (their own
--- track index), never through `play`.
---
--- That is not a stylistic choice. `play` is fire-and-forget, so re-entering a
--- long sub before the last one ends *stacks* them, and a player tapping
--- play/stop stacks one every time. `note_on` on a channel replaces what is on
--- it, so the same tapping costs one voice however fast it is done.
-local hold: array(2, byte)
 
 local bpm = 174
 local step_len = 331           -- 57600 / bpm, in 64ths of a frame
@@ -296,21 +285,19 @@ local playing = 0
 
 -- The light layer's state. `flash` is per track and decays; `pump` is the
 -- whole plate ducking on a kick, which is sidechain compression made visible.
-local flash: array(8, byte)
+local flash: array(6, byte)
 local pump = 0
-
-local reeses: array(8, byte)
 
 -- Per-track light colour, so a stack of hits on one step mixes additively the
 -- way two coloured lamps do.
-local lr: array(8, byte)
-local lg: array(8, byte)
-local lb: array(8, byte)
+local lr: array(6, byte)
+local lg: array(6, byte)
+local lb: array(6, byte)
 
 -- Per-track paint colour in the framebuffer. Everything is drawn bright and
 -- then sunk by the ambient, so a lit cell reads as *emitting* rather than as
 -- a lighter shade of the same paint.
-local col: array(8, byte)
+local col: array(6, byte)
 
 -- What a finger grabbed when it landed, held for the rest of its life. Same
 -- rule as piano.lua: a drag that starts on a step keeps painting steps even
@@ -319,7 +306,29 @@ local col: array(8, byte)
 local ROLE_NONE = 0
 local ROLE_GRID = 1
 local ROLE_BTN = 2
+local ROLE_FADER = 3
 local role: array(4, byte)
+local fader_of: array(4, byte)
+
+-- Per-track level, 0-8 — the range a mixer's stops are labelled with, and the
+-- same nine as piano.lua's drawbars. It scales the velocity a hit is queued
+-- with, so a fader move lands on the next hit rather than on the one already
+-- decaying, and 8 is unity: a fresh boot mixes exactly as the kit was voiced.
+local vol: array(6, byte)
+
+-- Muted and soloed tracks are decided in `sched_track`, before anything is
+-- queued. That is what makes a silenced track silent *and* dark: no queue entry
+-- means no hit, which means no flash, which means the meter reads nothing. A
+-- mute applied later — at `fire`, or by zeroing the velocity — would leave a lit
+-- meter beside a silent track.
+local mute: array(6, byte)
+
+-- Solo *replaces* the mute picture while any of them is on, rather than
+-- intersecting with it: with something soloed, a track sounds if and only if it
+-- is soloed. The other rule — mute still wins over solo — means soloing a muted
+-- track does nothing at all, and "listen to just this" has to always do exactly
+-- that or it is not worth having.
+local solo: array(6, byte)
 
 -- The pen is the level a tap paints. Laying ghosts across a bar is then eight
 -- taps at one setting rather than eight trips through a menu — which is the
@@ -327,11 +336,31 @@ local role: array(4, byte)
 local pen = 2                  -- LVL_NORM
 
 -- Which bar is on screen. **It does not follow the playhead.** Auto-follow is
--- the obvious behaviour and it is wrong here: the page turns under an editing
--- finger every 2.8 seconds, so half of a two-bar pattern can only be edited in
--- the gaps. The BAR button shows a bright edge when the beat is on the other
--- page, which is the part following was for.
+-- the wrong default: the page would turn under an editing finger every 1.4
+-- seconds, so three quarters of the pattern could only be edited in the gaps.
+--
+-- It never follows, and the grid is only ever drawn in LOOP ONE. That pairing
+-- is the whole design: **LOOP ONE writes a bar, LOOP ALL plays the four and
+-- shows the mixer instead of the grid.** A version in between let the page
+-- follow the playhead in LOOP ALL, and it was wrong in both directions at once
+-- — the grid flipped bars every 1.4 seconds *and* it was a grid, which is the
+-- one thing there is no point editing while four bars run past. Whereas a
+-- mixer is exactly what the ear wants while a phrase plays, and its meters give
+-- the light layer more to do than the grid ever did.
+--
+-- Held as the first step of the bar rather than as a bar number, because every
+-- use of it is `page + i` and a number would mean multiplying at each one.
 local page = 0
+
+-- Does playback stay inside the bar on screen, or run all four?
+--
+-- Looping one bar is how a bar gets written — the groove comes round every 1.4
+-- seconds instead of every 5.5, so a ghost that lands wrong is heard again
+-- immediately. Looping all four is how the four are heard as a phrase, which is
+-- the only way to tell whether the fill arrives in the right place. Both are
+-- needed and neither is a mode: it is one bit, on a button beside the bars it
+-- applies to.
+local loop_all = 0
 
 -- The step the editor panel acts on. Touching a step selects it, so the panel
 -- works with one finger (tap the step, tap VEL) and with two (hold the step,
@@ -343,6 +372,8 @@ signal step
 signal hits
 signal pen
 signal track
+signal bar
+signal loop
 
 function set_step(t, s, lvl, extra, mic)
   pat[t * NSTEP + s] = lvl | (extra << 2) | (mic << 4)
@@ -350,11 +381,15 @@ end
 
 function init()
   clear(pat)
-  clear(bnote)
-  clear(wob)
   clear(q_on)
-  clear(hold)
   clear(flash)
+  clear(mute)
+  clear(solo)
+  clear(fader_of)
+  loop_all = 0
+  for t = 0, NTRK - 1 do
+    vol[t] = 8
+  end
   acc = 0
   cur = 0
   playing = 1
@@ -362,17 +397,12 @@ function init()
   bpm = 174
   step_len = 331
 
-  reeses[0] = rs_0  reeses[1] = rs_1  reeses[2] = rs_2  reeses[3] = rs_3
-  reeses[4] = rs_4  reeses[5] = rs_5  reeses[6] = rs_6  reeses[7] = rs_7
-
   lr[T_KICK] = 96  lg[T_KICK] = 34  lb[T_KICK] = 8
   lr[T_SNR]  = 74  lg[T_SNR]  = 86  lb[T_SNR]  = 96
   lr[T_HAT]  = 40  lg[T_HAT]  = 62  lb[T_HAT]  = 84
   lr[T_OHH]  = 26  lg[T_OHH]  = 74  lb[T_OHH]  = 92
   lr[T_RIM]  = 88  lg[T_RIM]  = 66  lb[T_RIM]  = 20
   lr[T_CLP]  = 88  lg[T_CLP]  = 48  lb[T_CLP]  = 82
-  lr[T_SUB]  = 18  lg[T_SUB]  = 30  lb[T_SUB]  = 96
-  lr[T_RSE]  = 84  lg[T_RSE]  = 20  lb[T_RSE]  = 96
 
   col[T_KICK] = 208
   col[T_SNR]  = 195
@@ -380,8 +410,6 @@ function init()
   col[T_OHH]  = 81
   col[T_RIM]  = 221
   col[T_CLP]  = 218
-  col[T_SUB]  = 63
-  col[T_RSE]  = 165
 
   demo_pattern()
 
@@ -394,83 +422,54 @@ end
 -- A two-step, the shape most drum'n'bass starts from: kick on the one, snare
 -- on the two and the four, and the bar's whole character in what sits between
 -- them. Bar two answers bar one rather than repeating it.
+-- A kick, and nothing else.
+--
+-- The four bars start with one instrument in them on purpose. Every other track
+-- is empty, so every other track is showing hints from the first frame: the
+-- machine opens as a suggestion sheet with the pulse already laid down, which is
+-- how a breakbeat gets written anyway. A demo pattern with all six tracks
+-- filled in looks more impressive and teaches nothing — there is nothing left to
+-- do to it, and the one feature that helps a person start is invisible.
+--
+-- The two-step, in other words: kick on the one and on the "and of three", and
+-- the bars getting busier as they go so there is a shape to answer.
 function demo_pattern()
-  -- Kick.
   set_step(T_KICK, 0, LVL_ACC, 0, MIC_ON)
   set_step(T_KICK, 10, LVL_NORM, 0, MIC_ON)
+
   set_step(T_KICK, 16, LVL_ACC, 0, MIC_ON)
   set_step(T_KICK, 22, LVL_NORM, 0, MIC_ON)
   set_step(T_KICK, 27, LVL_GHOST, 0, MIC_ON)
 
-  -- Snare: two accents a bar, and the ghosts that make it swing. Every ghost
-  -- here sits a frame late, which is the whole trick — on the grid they read
-  -- as a machine, behind it they read as a hand.
-  set_step(T_SNR, 4, LVL_ACC, 0, MIC_ON)
-  set_step(T_SNR, 12, LVL_ACC, 0, MIC_ON)
-  set_step(T_SNR, 20, LVL_ACC, 0, MIC_ON)
-  set_step(T_SNR, 28, LVL_ACC, 0, MIC_ON)
-  set_step(T_SNR, 3, LVL_GHOST, 0, 2)
-  set_step(T_SNR, 7, LVL_GHOST, 0, 2)
-  set_step(T_SNR, 11, LVL_GHOST, 1, 2)
-  set_step(T_SNR, 14, LVL_GHOST, 0, 2)
-  set_step(T_SNR, 19, LVL_GHOST, 0, 2)
-  set_step(T_SNR, 23, LVL_GHOST, 0, 2)
-  set_step(T_SNR, 26, LVL_NORM, 0, MIC_ON)
-  set_step(T_SNR, 31, LVL_GHOST, 2, 2)
+  set_step(T_KICK, 32, LVL_ACC, 0, MIC_ON)
+  set_step(T_KICK, 42, LVL_NORM, 0, MIC_ON)
 
-  -- Hats: the pulse, accented on the beat, doubled here and there.
-  for s = 0, NSTEP - 1 do
-    if s % 4 == 0 then
-      set_step(T_HAT, s, LVL_NORM, 0, MIC_ON)
-    elseif s % 2 == 0 then
-      set_step(T_HAT, s, LVL_GHOST, 0, MIC_ON)
-    end
-  end
-  set_step(T_HAT, 15, LVL_GHOST, 1, 2)
-  set_step(T_HAT, 30, LVL_ACC, 1, MIC_ON)
-
-  set_step(T_OHH, 6, LVL_NORM, 0, MIC_ON)
-  set_step(T_OHH, 24, LVL_NORM, 0, MIC_ON)
-
-  set_step(T_RIM, 9, LVL_GHOST, 0, 2)
-  set_step(T_RIM, 18, LVL_NORM, 0, MIC_ON)
-  set_step(T_CLP, 12, LVL_NORM, 0, 2)
-
-  -- Sub: two long notes a bar, the second answering a tone down.
-  set_step(T_SUB, 0, LVL_NORM, 0, MIC_ON)
-  bnote[0] = 29
-  set_step(T_SUB, 10, LVL_NORM, 0, MIC_ON)
-  bnote[10] = 29
-  set_step(T_SUB, 16, LVL_NORM, 0, MIC_ON)
-  bnote[16] = 32
-  set_step(T_SUB, 24, LVL_NORM, 0, MIC_ON)
-  bnote[24] = 27
-
-  -- Reese: one note a bar, **restruck on every 16th**, its cutoff drawn across
-  -- the lane. This is the wobble, and it is a drawing rather than an
-  -- oscillator.
-  --
-  -- The restriking is the whole mechanism, not an ornament. A patch is fixed
-  -- when its voice starts, so a note held across the bar sounds whichever
-  -- cutoff its own step named and the other thirty-one are a drawing nobody
-  -- hears. Retriggering is what a sweep costs when nothing modulates a running
-  -- voice — and it is why the lane is worth drawing at all.
-  for s = 0, NSTEP - 1 do
-    local w = s % 8
-    if w > 4 then w = 8 - w end
-    wob[s] = w + 1
-
-    set_step(T_RSE, s, LVL_NORM, 0, MIC_ON)
-    if s < HALF then
-      bnote[NSTEP + s] = 41
-    else
-      bnote[NSTEP + s] = 44
-    end
-  end
+  set_step(T_KICK, 48, LVL_ACC, 0, MIC_ON)
+  set_step(T_KICK, 54, LVL_NORM, 0, MIC_ON)
+  set_step(T_KICK, 58, LVL_NORM, 0, MIC_ON)
+  set_step(T_KICK, 62, LVL_GHOST, 0, 2)
 end
 
 -- ---------------------------------------------------------------------------
 -- The clock and the queue.
+
+function any_solo()
+  for t = 0, NTRK - 1 do
+    if solo[t] == 1 then return 1 end
+  end
+  return 0
+end
+
+-- Does track `t` sound? One function, called from the scheduler and from the
+-- mixer's drawing, so a strip that looks silenced always is.
+--
+-- Recomputed per track per step rather than cached: six comparisons every 5.2
+-- frames is nothing, and a cached copy is a second place for the truth to live.
+function audible(t)
+  if any_solo() == 1 then return solo[t] end
+  if mute[t] == 1 then return 0 end
+  return 1
+end
 
 -- The three levels, as velocities. These are the master fader: every patch is
 -- mixed against them, so a kit that pins the limiter is turned down here once
@@ -481,24 +480,7 @@ function vel_for(lvl)
   return 205
 end
 
--- How many frames a melodic step should sound for: up to the next note on the
--- same track, so a lane of held notes needs no explicit lengths. Capped at
--- 250 because `play`'s frame count is a byte.
-function gate_frames(t, s)
-  for k = 1, NSTEP - 1 do
-    local n = s + k
-    if n >= NSTEP then n = n - NSTEP end
-    if (pat[t * NSTEP + n] & 3) ~= 0 then
-      local f = k * step_len / 64
-      if f > 250 then return 250 end
-      if f < 1 then return 1 end
-      return f
-    end
-  end
-  return 250
-end
-
-function queue_push(del, t, n, v, lvl, var, gate)
+function queue_push(del, t, n, v, lvl)
   for i = 0, PQ - 1 do
     if q_on[i] == 0 then
       q_on[i] = 1
@@ -507,8 +489,6 @@ function queue_push(del, t, n, v, lvl, var, gate)
       q_note[i] = n
       q_vel[i] = v
       q_lvl[i] = lvl
-      q_var[i] = var
-      q_gate[i] = gate
       return
     end
   end
@@ -521,46 +501,30 @@ end
 -- hits across the step's own length, so a roll stays a roll when the tempo
 -- moves.
 function sched_track(t, s)
+  if audible(t) == 0 then return end
+
   local b = pat[t * NSTEP + s]
   local lvl = b & 3
   if lvl == LVL_OFF then return end
 
   local extra = (b >> 2) & 3
   local mic = (b >> 4) & 3
-  local v = vel_for(lvl)
+  local v = vel_for(lvl) * vol[t] / 8
+  if v == 0 then return end
 
   local n = 38
-  local var = 0
   if t == T_KICK then n = 33 end
   if t == T_SNR then n = 50 end
   if t == T_HAT then n = 72 end
   if t == T_OHH then n = 72 end
   if t == T_RIM then n = 64 end
   if t == T_CLP then n = 60 end
-  if t == T_SUB then n = bnote[s] end
-  if t == T_RSE then
-    n = bnote[NSTEP + s]
-    var = wob[s]
-    if var > 7 then var = 7 end
-  end
-  if n == 0 then return end
-
-  -- A held track is never rolled: a sub retriggered three times inside one
-  -- 16th is a fart, not a fill.
-  if t == T_SUB or t == T_RSE then
-    -- The gate is measured here, from the step being scheduled, not in `fire`
-    -- from `cur` — by the time a nudged hit sounds the playhead has moved on,
-    -- and a note whose length depends on when it happened to fire is a note
-    -- that changes length when you nudge it.
-    queue_push(mic, t, n, v, lvl, var, gate_frames(t, s))
-    return
-  end
 
   for k = 0, extra do
     local d = mic + k * step_len / ((extra + 1) * 64)
     local hv = v
     if k > 0 then hv = v * 3 / 4 end
-    queue_push(d, t, n, hv, lvl, var, 0)
+    queue_push(d, t, n, hv, lvl)
   end
 end
 
@@ -572,7 +536,7 @@ end
 
 -- Sound one hit. The level picks the patch, not just the velocity — that is
 -- the whole reason this game declares three snares instead of one.
-function fire(t, n, v, lvl, var, gate)
+function fire(t, n, v, lvl)
   if t == T_KICK then
     if lvl == LVL_GHOST then play(kick_gh, n, v, 14) else play(kick, n, v, 18) end
   elseif t == T_SNR then
@@ -587,14 +551,8 @@ function fire(t, n, v, lvl, var, gate)
     play(ohh, n, v, 22)
   elseif t == T_RIM then
     play(rim, n, v, 6)
-  elseif t == T_CLP then
-    play(clap, n, v, 12)
-  elseif t == T_SUB then
-    note_on(T_SUB, sub, n, v)
-    hold[0] = gate
   else
-    note_on(T_RSE, reeses[var], n, v)
-    hold[1] = gate
+    play(clap, n, v, 12)
   end
 
   local f = v / 4 + 20
@@ -608,7 +566,7 @@ function drain_queue()
   for i = 0, PQ - 1 do
     if q_on[i] == 1 then
       if q_del[i] == 0 then
-        fire(q_trk[i], q_note[i], q_vel[i], q_lvl[i], q_var[i], q_gate[i])
+        fire(q_trk[i], q_note[i], q_vel[i], q_lvl[i])
         q_on[i] = 0
         fired = fired + 1
       else
@@ -617,19 +575,6 @@ function drain_queue()
     end
   end
   return fired
-end
-
--- Count the held notes down and release them. The `note_off` goes on the
--- frame the counter *reaches* zero, never while it sits there, so an idle
--- channel is not released once a frame — the sound log this game exists to be
--- read from would otherwise be all releases.
-function tick_holds()
-  for k = 0, 1 do
-    if hold[k] > 0 then
-      hold[k] = hold[k] - 1
-      if hold[k] == 0 then note_off(T_SUB + k) end
-    end
-  end
 end
 
 function decay_lights()
@@ -663,28 +608,15 @@ function hit_step(x)
   return page + i
 end
 
--- A melodic step painted from the grid has no pitch of its own, and a step with
--- note 0 is a step the scheduler silently skips. So it inherits the last pitch
--- that track played — which is also the musically useful answer: tapping more
--- sub steps repeats the note you are already on rather than dropping a root
--- nobody asked for.
-function default_note(t, s)
-  for k = 1, NSTEP - 1 do
-    local n = s + NSTEP - k
-    if n >= NSTEP then n = n - NSTEP end
-    local v = bnote[(t - T_SUB) * NSTEP + n]
-    if v ~= 0 then return v end
-  end
-  if t == T_SUB then return 29 end
-  return 41
-end
-
--- Paint one step at the pen's level.
+-- Apply the pen to one step.
 --
--- `toggle` is 1 for the press that starts a gesture and 0 for every step the
--- finger then drags across. A drag that could also clear would flicker a hat
--- run on and off as the finger crossed its own work, so a drag only ever sets —
--- the rule every paint program already uses, for the same reason.
+-- `toggle` is 1 when the pen is being applied deliberately and 0 for every step
+-- a finger drags across. A drag that could also clear would flicker a hat run on
+-- and off as the finger crossed its own work, so a drag only ever sets — the
+-- rule every paint program already uses, for the same reason.
+--
+-- Which press *counts* as deliberate is decided in `press_at`, not here: an
+-- occupied step has to be selected before it can be altered.
 --
 -- A step that already exists keeps its roll and its nudge: repainting a hit to
 -- accent it must not throw away the two attributes that took the longest to set.
@@ -701,34 +633,6 @@ function paint(t, s, toggle)
   local keep = b & 252
   if lvl == LVL_OFF then keep = MIC_ON << 4 end
   pat[i] = pen | keep
-
-  if t >= T_SUB then
-    local bi = (t - T_SUB) * NSTEP + s
-    if bnote[bi] == 0 then bnote[bi] = default_note(t, s) end
-  end
-end
-
--- Scatter ghosts across a track's empty off-16ths.
---
--- Drums only: a ghost is a hit played weakly, and a sub played weakly is just a
--- quiet sub. The rule is the one a hand follows — fill the "e" and the "a", skip
--- anything touching an accent so the accent keeps its space, and lay them all a
--- frame behind the grid, which is what makes the result read as a player rather
--- than a machine.
-function ghost_fill(t)
-  if t >= T_SUB then return end
-  for s = 1, NSTEP - 1, 2 do
-    if (pat[t * NSTEP + s] & 3) == LVL_OFF then
-      local nx = s + 1
-      if nx >= NSTEP then nx = 0 end
-      local near = 0
-      if (pat[t * NSTEP + s - 1] & 3) == LVL_ACC then near = 1 end
-      if (pat[t * NSTEP + nx] & 3) == LVL_ACC then near = 1 end
-      if near == 0 then
-        pat[t * NSTEP + s] = LVL_GHOST | (2 << 4)
-      end
-    end
-  end
 end
 
 -- Clear the bar on screen, not the whole track. Rewriting one bar to answer the
@@ -736,7 +640,6 @@ end
 function clear_bar(t)
   for i = 0, VIS - 1 do
     pat[t * NSTEP + page + i] = 0
-    if t >= T_SUB then bnote[(t - T_SUB) * NSTEP + page + i] = 0 end
   end
 end
 
@@ -755,10 +658,6 @@ function cycle_vel()
     lvl = lvl + 1
   end
   pat[i] = (pat[i] & 252) | lvl
-  if sel_trk >= T_SUB then
-    local bi = (sel_trk - T_SUB) * NSTEP + sel_step
-    if bnote[bi] == 0 then bnote[bi] = default_note(sel_trk, sel_step) end
-  end
 end
 
 function cycle_roll()
@@ -775,23 +674,161 @@ function cycle_mic()
   pat[i] = (pat[i] & 207) | (mic << 4)
 end
 
+-- The step a fresh start plays first, and the step the loop returns to. One
+-- function, because "where does it begin" and "where does it come back to" are
+-- the same question and answering it twice is how they drift apart.
+function loop_start()
+  return page
+end
+
 function toggle_play()
   if playing == 1 then
     playing = 0
     clear(q_on)
-    note_off(T_SUB)
-    note_off(T_RSE)
-    clear(hold)
   else
     playing = 1
     acc = 0
-    cur = 0
-    sched_step(0)
+    cur = loop_start()
+    sched_step(cur)
   end
 end
 
+-- Show bar `b` (0-3), and make it the bar that is happening.
+--
+-- One meaning for the button in both loop modes. In LOOP ONE the bar on screen
+-- *is* the loop, so choosing it is choosing what repeats. In LOOP ALL it is a
+-- seek: the playhead jumps to that bar's downbeat and carries on through the
+-- rest. A button that only changed the view while all four ran would be dead
+-- half the time, and "go to this bar" covers both.
+function show_bar(b)
+  page = b * BAR_LEN
+  if loop_all == 1 and playing == 1 then
+    cur = page
+    acc = 0
+    sched_step(cur)
+  end
+end
+
+-- Pull a fader to wherever the finger is. Continuous rather than press-only, so
+-- a level is dragged the way a real one is — and clamped at both ends, because
+-- the hit test that started the drag never runs again once the finger leaves
+-- the row.
+--
+-- Nine bands over the travel, then clamped. Dividing the height into eight
+-- makes level 8 reachable on one row of pixels while 0 gets thirteen: there are
+-- *nine* stops from 0 to 8, and sizing the bands to the gaps between them is
+-- what puts the top one out of reach. The same trap piano.lua's drawbars have,
+-- and this is the same fix.
+function set_fader(t, y)
+  if y <= FDR_Y then
+    vol[t] = 8
+  elseif y >= FDR_Y + FDR_H then
+    vol[t] = 0
+  else
+    local lv = (FDR_Y + FDR_H - y) * 9 / FDR_H
+    if lv > 8 then lv = 8 end
+    vol[t] = lv
+  end
+end
+
+-- What each track's role wants, before anything else is taken into account.
+--
+-- The numbers are a groove, written down: a snare's job is the backbeat, a
+-- hat's is the pulse, an open hat's is the '&' of two, a rim's is the gaps a
+-- kick and a snare leave, a clap's is the pickup into the next bar. `p` is the
+-- position inside a beat — 0 the beat, 1 the 'e', 2 the '&', 3 the 'a' — and
+-- `b` is which beat of the bar.
+--
+-- This is deliberately opinionated and deliberately small. A hint that tried to
+-- be a general theory of rhythm would suggest everything, and a suggestion
+-- sheet with every step on it is a blank one.
+function role_score(t, s)
+  local p = s % 4
+  local b = (s % BAR_LEN) / 4
+
+  if t == T_KICK then
+    if p == 0 and b == 0 then return 9 end
+    if s % BAR_LEN == 10 then return 8 end
+    if p == 2 and b == 1 then return 5 end
+    return 0
+  end
+  if t == T_SNR then
+    if p == 0 and b == 1 then return 9 end
+    if p == 0 and b == 3 then return 9 end
+    if p == 3 then return 5 end
+    if p == 1 then return 4 end
+    return 0
+  end
+  if t == T_HAT then
+    if p == 0 then return 8 end
+    if p == 2 then return 6 end
+    return 0
+  end
+  if t == T_OHH then
+    if p == 2 and b == 1 then return 9 end
+    if p == 2 and b == 3 then return 6 end
+    return 0
+  end
+  if t == T_RIM then
+    -- The syncopation against the backbeat, not every 'e' in the bar. The wider
+    -- version scored eight of sixteen steps and read as static.
+    if p == 1 and b == 1 then return 7 end
+    if p == 1 and b == 3 then return 7 end
+    if p == 3 and b == 0 then return 5 end
+    return 0
+  end
+  if s % BAR_LEN == 15 then return 9 end
+  if p == 0 and b == 2 then return 6 end
+  return 0
+end
+
+-- What a track should play at step `i` of the bar on screen, 0 for "nothing to
+-- suggest".
+--
+-- The crowding term is what makes this a suggestion rather than a template. A
+-- step three instruments already hit is a step this one should leave alone
+-- whatever its role says — which is the same rule that got the sub and the
+-- bleep deleted, applied to the thing being written rather than to the kit.
+function hint_score(t, i)
+  local sc = role_score(t, page + i)
+  if sc == 0 then return 0 end
+  local n = crowd[i] * 3
+  if n >= sc then return 0 end
+  return sc - n
+end
+
+function build_hints()
+  for i = 0, VIS - 1 do
+    local n = 0
+    for k = 0, NTRK - 1 do
+      if (pat[k * NSTEP + page + i] & 3) ~= LVL_OFF then n = n + 1 end
+    end
+    crowd[i] = n
+  end
+
+  for t = 0, NTRK - 1 do
+    local hits = 0
+    for i = 0, VIS - 1 do
+      if (pat[t * NSTEP + page + i] & 3) ~= LVL_OFF then hits = hits + 1 end
+    end
+    if hits < HINT_MAX_HITS then
+      hinting[t] = 1
+    else
+      hinting[t] = 0
+    end
+  end
+end
+
+-- Which strip an x falls in. 240 / 6 divides exactly, so every strip is the
+-- same width with nothing left over on the last one.
+function hit_strip(x)
+  local t = x / STRIP_W
+  if t >= NTRK then return NONE end
+  return t
+end
+
 -- Where a finger landed, and what role it takes for the rest of its life.
-function press_at(x, y)
+function press_at(i, x, y)
   if y < HDR_H then
     if x >= 160 then toggle_play() end
     return ROLE_BTN
@@ -805,12 +842,40 @@ function press_at(x, y)
   end
 
   if y < BTN_Y + BTN_H then
-    if x < 72 then
-      if page == 0 then page = HALF else page = 0 end
-    elseif x < 156 then
-      ghost_fill(sel_trk)
+    if x < BAR_BTN_W * NBARS then
+      show_bar(x / BAR_BTN_W)
+    elseif x < CLR_X then
+      if loop_all == 1 then loop_all = 0 else loop_all = 1 end
     else
       clear_bar(sel_trk)
+    end
+    return ROLE_BTN
+  end
+
+  -- Below the button row the two screens share no geometry, so the view is
+  -- decided here and once. Testing the step panel's strip first is what an
+  -- earlier version did, and it ate the whole SOLO row in mixer view: 202 is
+  -- inside both the panel and the buttons.
+  --
+  -- The mixer's body: one strip per track, tested bottom-up because the two
+  -- buttons sit under the fader and the fader is the fallback. The meter is not
+  -- touchable — it reports, it does not take.
+  if loop_all == 1 then
+    local st = hit_strip(x)
+    if st == NONE then return ROLE_NONE end
+    sel_trk = st
+    if y >= SOLO_Y then
+      if solo[st] == 1 then solo[st] = 0 else solo[st] = 1 end
+      return ROLE_BTN
+    end
+    if y >= MUTE_Y then
+      if mute[st] == 1 then mute[st] = 0 else mute[st] = 1 end
+      return ROLE_BTN
+    end
+    if y >= FDR_Y then
+      fader_of[i] = st
+      set_fader(st, y)
+      return ROLE_FADER
     end
     return ROLE_BTN
   end
@@ -838,18 +903,37 @@ function press_at(x, y)
 
   local st = hit_step(x)
   if st == NONE then return ROLE_NONE end
+
+  -- An empty step takes the pen straight away — placing notes is the main verb
+  -- and it must not cost two taps. An occupied one is *selected* by the first
+  -- press and only altered by the second.
+  --
+  -- Reaching for a note to change its roll was the gesture that deleted it: the
+  -- press applied the pen, and applying the pen to a step that already has it
+  -- means clearing it. Nothing about that is wrong except that it happened on
+  -- the way to somewhere else. Requiring the press to land on the *already
+  -- selected* step keeps the whole rule and makes it deliberate — and the second
+  -- press still applies the pen, so repainting a ghost as an accent is two taps
+  -- rather than a special case.
+  local occupied = 0
+  if (pat[t * NSTEP + st] & 3) ~= LVL_OFF then occupied = 1 end
+  local again = 0
+  if t == sel_trk and st == sel_step then again = 1 end
+
   sel_trk = t
   sel_step = st
-  paint(t, st, 1)
+  if occupied == 0 or again == 1 then paint(t, st, 1) end
   return ROLE_GRID
 end
 
 function edit_touches()
   for i = 0, 3 do
     if touch_pressed(i) then
-      role[i] = press_at(touch_x(i), touch_y(i))
+      role[i] = press_at(i, touch_x(i), touch_y(i))
     elseif touch_down(i) then
-      if role[i] == ROLE_GRID then
+      if role[i] == ROLE_FADER then
+        set_fader(fader_of[i], touch_y(i))
+      elseif role[i] == ROLE_GRID then
         local t = hit_track(touch_y(i))
         local st = hit_step(touch_x(i))
         if t ~= NONE and st ~= NONE then
@@ -868,20 +952,33 @@ end
 
 function update()
   if btnp(A) then toggle_play() end
-  -- B pages, it does not clear. A bare button that destroys a bar of work is a
-  -- bare button somebody leans on: clearing stays on the labelled box, where
-  -- hitting it means having aimed at it.
+  -- B steps through the bars, and does not clear. A bare button that destroys a
+  -- bar of work is a bare button somebody leans on: clearing stays on the
+  -- labelled box, where hitting it means having aimed at it.
   if btnp(B) then
-    if page == 0 then page = HALF else page = 0 end
+    local b = page / BAR_LEN + 1
+    if b >= NBARS then b = 0 end
+    show_bar(b)
   end
   edit_touches()
+  -- Rebuilt after the edits and before the drawing, so a hit painted this frame
+  -- is already counted: the green under a finger goes out as the pad appears
+  -- rather than a frame later.
+  if loop_all == 0 then build_hints() end
 
   if playing == 1 then
     acc = acc + 64
     while acc >= step_len do
       acc = acc - step_len
       cur = cur + 1
-      if cur >= NSTEP then cur = 0 end
+      -- One bar or all four. The `cur < page` half matters: switching to LOOP
+      -- ONE while the playhead is in some other bar has to pull it back in, and
+      -- the wrap test alone never would.
+      if loop_all == 1 then
+        if cur >= NSTEP then cur = 0 end
+      elseif cur >= page + BAR_LEN or cur < page then
+        cur = page
+      end
       sched_step(cur)
     end
   end
@@ -889,13 +986,14 @@ function update()
   -- Drained after scheduling, so a hit with no nudge sounds on the frame its
   -- step begins rather than the frame after it.
   local fired = drain_queue()
-  tick_holds()
   decay_lights()
 
   signal(step, cur)
   signal(hits, fired)
   signal(pen, pen)
   signal(track, sel_trk)
+  signal(bar, page / BAR_LEN)
+  signal(loop, loop_all)
 end
 
 -- ---------------------------------------------------------------------------
@@ -912,9 +1010,9 @@ end
 -- a button row bleed into the grid behind it.
 
 function pad_h(lvl)
-  if lvl == LVL_GHOST then return 4 end
-  if lvl == LVL_NORM then return 8 end
-  return 12
+  if lvl == LVL_GHOST then return 5 end
+  if lvl == LVL_NORM then return 10 end
+  return 16
 end
 
 -- One place that knows a track's name, because `text` takes a literal and the
@@ -925,9 +1023,7 @@ function track_name(t, x, y, c)
   elseif t == T_HAT then text("HAT", x, y, c)
   elseif t == T_OHH then text("OHH", x, y, c)
   elseif t == T_RIM then text("RIM", x, y, c)
-  elseif t == T_CLP then text("CLP", x, y, c)
-  elseif t == T_SUB then text("SUB", x, y, c)
-  else text("RSE", x, y, c) end
+  else text("CLP", x, y, c) end
 end
 
 function playhead_on_page()
@@ -967,22 +1063,39 @@ function draw_pen()
 end
 
 function draw_buttons()
-  rect(0, BTN_Y, 70, BTN_H, 234)
-  if page == 0 then
-    text("BAR 1", 25, BTN_Y + 7, 252)
-  else
-    text("BAR 2", 25, BTN_Y + 7, 252)
+  for b = 0, NBARS - 1 do
+    local x0 = b * BAR_BTN_W
+    local c = 234
+    if b * BAR_LEN == page then c = 245 end
+    rect(x0, BTN_Y, BAR_BTN_W - 2, BTN_H, c)
+
+    -- A bright cap on the bar the beat is *in*, whichever bar is on screen.
+    -- This is the one thing following the playhead was for, and four buttons
+    -- say it better than the single edge marker two bars needed: it names the
+    -- bar rather than only reporting that it is elsewhere.
+    if playing == 1 and cur >= b * BAR_LEN then
+      if cur < b * BAR_LEN + BAR_LEN then
+        rect(x0, BTN_Y, BAR_BTN_W - 2, 2, 255)
+      end
+    end
   end
-  -- The beat is on the bar you are not looking at: the one thing following the
-  -- playhead was for, kept without letting the page move under a finger.
-  if playhead_on_page() == 0 then
-    rect(64, BTN_Y + 2, 4, BTN_H - 4, 255)
+  text("B1", 10, BTN_Y + 7, 252)
+  text("B2", 40, BTN_Y + 7, 252)
+  text("B3", 70, BTN_Y + 7, 252)
+  text("B4", 100, BTN_Y + 7, 252)
+
+  -- The loop toggle carries its state in its colour as well as its word: a
+  -- two-state button whose only difference is the text is a button you read.
+  if loop_all == 1 then
+    rect(LOOP_X, BTN_Y, LOOP_W, BTN_H, 245)
+    text("LOOP ALL", LOOP_X + 15, BTN_Y + 7, 252)
+  else
+    rect(LOOP_X, BTN_Y, LOOP_W, BTN_H, 234)
+    text("LOOP 1", LOOP_X + 19, BTN_Y + 7, 252)
   end
 
-  rect(74, BTN_Y, 80, BTN_H, 234)
-  text("GHOST", 104, BTN_Y + 7, 250)
-  rect(158, BTN_Y, 80, BTN_H, 234)
-  text("CLR BAR", 184, BTN_Y + 7, 250)
+  rect(CLR_X, BTN_Y, CLR_W, BTN_H, 234)
+  text("CLR BAR", CLR_X + 10, BTN_Y + 7, 250)
 end
 
 function draw_labels()
@@ -992,7 +1105,7 @@ function draw_labels()
       -- The two buttons above act on this track and nothing else says so.
       rect(0, y0, LBL_W - 2, ROW_H - 2, 237)
     end
-    track_name(t, 6, y0 + 6, col[t])
+    track_name(t, 6, y0 + 8, col[t])
   end
 end
 
@@ -1011,6 +1124,26 @@ function draw_grid()
 
       local b = pat[t * NSTEP + st]
       local lvl = b & 3
+
+      -- A suggestion, drawn as the *outline* of the pad it is suggesting: an
+      -- empty box exactly where a NORM hit would sit. Green, and hollow, so it
+      -- cannot be mistaken for something already written — every real hit on
+      -- this screen is a filled block in its track's colour, and nothing else
+      -- is an outline.
+      if lvl == LVL_OFF and hinting[t] == 1 then
+        local sc = hint_score(t, i)
+        if sc >= HINT_MIN then
+          local hh = pad_h(LVL_NORM)
+          local hy = y0 + ROW_H - 3 - hh
+          local hc = 71
+          if sc >= 7 then hc = 83 end
+          rect(x0 + 1, hy, CELL_W - 4, 1, hc)
+          rect(x0 + 1, hy + hh - 1, CELL_W - 4, 1, hc)
+          rect(x0 + 1, hy, 1, hh, hc)
+          rect(x0 + CELL_W - 4, hy, 1, hh, hc)
+        end
+      end
+
       if lvl ~= LVL_OFF then
         local h = pad_h(lvl)
         local mic = (b >> 4) & 3
@@ -1051,7 +1184,8 @@ function draw_detail()
   rect(0, DET_Y, DIM, DET_H, 234)
 
   if sel_step == NONE then
-    text("TAP A STEP TO EDIT IT", 6, DET_Y + 12, 240)
+    text("TAP A STEP TO EDIT IT", 6, DET_Y + 6, 240)
+    text("GREEN IS A GROOVE HINT", 6, DET_Y + 22, 71)
     return
   end
 
@@ -1059,50 +1193,118 @@ function draw_detail()
   number(sel_step + 1, 30, DET_Y + 4, 255)
   track_name(sel_trk, 58, DET_Y + 4, col[sel_trk])
 
-  local by = DET_Y + 14
+  local by = DET_Y + 16
   local b = pat[sel_trk * NSTEP + sel_step]
   local lvl = b & 3
   local extra = (b >> 2) & 3
   local mic = (b >> 4) & 3
 
-  rect(2, by, 74, 18, 237)
+  rect(2, by, 74, 20, 237)
   if lvl == LVL_OFF then
-    text("VEL OFF", 25, by + 6, 241)
+    text("VEL OFF", 25, by + 7, 241)
   elseif lvl == LVL_GHOST then
-    text("VEL GHST", 23, by + 6, 250)
+    text("VEL GHST", 23, by + 7, 250)
   elseif lvl == LVL_NORM then
-    text("VEL NORM", 23, by + 6, 253)
+    text("VEL NORM", 23, by + 7, 253)
   else
-    text("VEL ACC", 25, by + 6, 255)
+    text("VEL ACC", 25, by + 7, 255)
   end
 
-  rect(80, by, 76, 18, 237)
+  rect(80, by, 76, 20, 237)
   if extra == 0 then
-    text("ROLL 1", 106, by + 6, 248)
+    text("ROLL 1", 106, by + 7, 248)
   elseif extra == 1 then
-    text("ROLL 2", 106, by + 6, 252)
+    text("ROLL 2", 106, by + 7, 252)
   else
-    text("ROLL 3", 106, by + 6, 255)
+    text("ROLL 3", 106, by + 7, 255)
   end
 
-  rect(160, by, 78, 18, 237)
+  rect(160, by, 78, 20, 237)
   if mic == 0 then
-    text("MIC EARLY", 181, by + 6, 250)
+    text("MIC EARLY", 181, by + 7, 250)
   elseif mic == 1 then
-    text("MIC ON", 187, by + 6, 248)
+    text("MIC ON", 187, by + 7, 248)
   else
-    text("MIC LATE", 183, by + 6, 253)
+    text("MIC LATE", 183, by + 7, 253)
+  end
+end
+
+-- Row two, in mixer view: what the two bars in every strip are. Said once at
+-- the top rather than six times down the side — there is no room in a 40 px
+-- strip for a column heading, and the answer is the same for all of them.
+function draw_mix_head()
+  rect(0, PEN_Y, DIM, PEN_H, 234)
+  text("MIXER", 6, PEN_Y + 8, 252)
+  rect(62, PEN_Y + 6, 8, 8, 208)
+  text("LEVEL", 74, PEN_Y + 8, 245)
+  rect(132, PEN_Y + 6, 8, 8, 252)
+  text("HIT", 144, PEN_Y + 8, 245)
+end
+
+function draw_mixer()
+  for t = 0, NTRK - 1 do
+    local x0 = t * STRIP_W
+    local on = audible(t)
+
+    -- The name, and the fader, go grey together when the track cannot be heard
+    -- — whether that is its own mute or somebody else's solo. One `audible`
+    -- answers both, so a strip never looks live while it is silent.
+    local nc = col[t]
+    if on == 0 then nc = 236 end
+    track_name(t, x0 + 5, NAME_Y, nc)
+
+    rect(x0 + FDR_IN_X, FDR_Y, FDR_IN_W, FDR_H, 233)
+    -- Nine notches, drawn under the fill: the ones still showing are the travel
+    -- left. Aligned across all six strips, so the mix reads as a skyline.
+    for k = 0, 8 do
+      rect(x0 + FDR_IN_X, FDR_Y + k * (FDR_H - 1) / 8, FDR_IN_W, 1, 236)
+    end
+    local fc = col[t]
+    if on == 0 then fc = 237 end
+    local fh = vol[t] * FDR_H / 8
+    if fh > 0 then
+      rect(x0 + FDR_IN_X, FDR_Y + FDR_H - fh, FDR_IN_W, fh, fc)
+    end
+
+    -- The meter is `flash`, the same decaying number the light layer uses. One
+    -- source, so what the meter says and what the strip glows can never
+    -- disagree. White rather than the track's colour, because a fader at 8 and
+    -- a meter at full are three pixels apart and two bars of one colour that
+    -- close read as one bar. The *light* keeps the track's colour.
+    rect(x0 + MTR_IN_X, FDR_Y, MTR_IN_W, FDR_H, 233)
+    local mh = flash[t] * FDR_H / 63
+    if mh > 0 then
+      rect(x0 + MTR_IN_X, FDR_Y + FDR_H - mh, MTR_IN_W, mh, 252)
+    end
+
+    -- Orange for mute, yellow for solo — the two colours every console in the
+    -- world uses for them, which is worth more here than anything this palette
+    -- could invent.
+    local mc = 234
+    if mute[t] == 1 then mc = 208 end
+    rect(x0 + 1, MUTE_Y, STRIP_W - 3, MS_H, mc)
+    text("MUTE", x0 + 11, MUTE_Y + 7, 252)
+
+    local sc = 234
+    if solo[t] == 1 then sc = 226 end
+    rect(x0 + 1, SOLO_Y, STRIP_W - 3, MS_H, sc)
+    text("SOLO", x0 + 11, SOLO_Y + 7, 252)
   end
 end
 
 function draw()
   cls(232)
   draw_header()
-  draw_pen()
   draw_buttons()
-  draw_labels()
-  draw_grid()
-  draw_detail()
+  if loop_all == 1 then
+    draw_mix_head()
+    draw_mixer()
+  else
+    draw_pen()
+    draw_labels()
+    draw_grid()
+    draw_detail()
+  end
 
   -- The plate, dark and cold, ducking on every kick. A fill rather than a lamp,
   -- so it also clears the previous frame's light and its obstacles.
@@ -1113,12 +1315,46 @@ function draw()
   -- without bleeding into the grid.
   light_rect(0, HDR_Y, DIM, HDR_H, 64, 64, 64)
   light_rect(0, PEN_Y, DIM, BTN_Y + BTN_H - PEN_Y, 58, 58, 62)
-  light_rect(0, GRID_Y, LBL_W, NTRK * ROW_H, 58, 58, 62)
-  light_rect(0, DET_Y, DIM, DET_H, 58, 58, 62)
+  if loop_all == 1 then
+    -- The names, and the two button rows. The fader band between them is lit
+    -- lower than neutral on purpose: a meter has to be able to rise *above* its
+    -- surroundings, and it cannot do that over a strip already at 64.
+    light_rect(0, GRID_Y, DIM, FDR_Y - GRID_Y, 58, 58, 62)
+    light_rect(0, FDR_Y, DIM, FDR_H, 40, 40, 46)
+    light_rect(0, MUTE_Y, DIM, DIM - MUTE_Y, 58, 58, 62)
+    -- An engaged mute or solo is lit past neutral, so the button that is doing
+    -- something is the brightest thing in its strip. Drawn after the band, and
+    -- `light_rect` sets rather than adds, so it replaces it cleanly.
+    for t = 0, NTRK - 1 do
+      local x0 = t * STRIP_W
+      if mute[t] == 1 then
+        light_rect(x0 + 1, MUTE_Y, STRIP_W - 3, MS_H, 100, 74, 56)
+      end
+      if solo[t] == 1 then
+        light_rect(x0 + 1, SOLO_Y, STRIP_W - 3, MS_H, 100, 96, 58)
+      end
+    end
+  else
+    light_rect(0, GRID_Y, LBL_W, NTRK * ROW_H, 58, 58, 62)
+    light_rect(0, DET_Y, DIM, DET_H, 58, 58, 62)
+  end
 
-  if playhead_on_page() == 1 then
+  if loop_all == 1 then
+    -- The lamp rides the *top* of each meter, so a hit reads as a flare thrown
+    -- up and falling back rather than as a bar that merely gets taller. Same
+    -- `flash` and same colours as the grid's playhead flashes — only the place
+    -- moves.
+    for t = 0, NTRK - 1 do
+      local f = flash[t]
+      if f > 0 then
+        local mh = f * FDR_H / 63
+        light(t * STRIP_W + MTR_IN_X + MTR_IN_W / 2, FDR_Y + FDR_H - mh,
+              12 + f / 3, lr[t] * f / 64, lg[t] * f / 64, lb[t] * f / 64)
+      end
+    end
+  elseif playhead_on_page() == 1 then
     -- Two lamps rather than one, a quarter and three quarters down. A single
-    -- lamp wide enough to reach both the kick row and the Reese row is also
+    -- lamp wide enough to reach both the kick row and the clap row is also
     -- wide enough to wash out the four steps either side of it; two narrow
     -- ones add in the middle and stay a column.
     local px = GRID_X + (cur - page) * CELL_W + CELL_W / 2
@@ -1137,11 +1373,13 @@ function draw()
     end
   end
 
-  -- The selected step glows a little, so the bracket is findable at a glance
-  -- on a screen this dark.
-  if sel_step ~= NONE and sel_step >= page and sel_step < page + VIS then
-    light(GRID_X + (sel_step - page) * CELL_W + CELL_W / 2,
-          GRID_Y + sel_trk * ROW_H + ROW_H / 2, 9, 30, 30, 38)
+  -- The selected step glows a little, so the bracket is findable at a glance on
+  -- a screen this dark. Grid view only: there is no step under a fader.
+  if loop_all == 0 and sel_step ~= NONE then
+    if sel_step >= page and sel_step < page + VIS then
+      light(GRID_X + (sel_step - page) * CELL_W + CELL_W / 2,
+            GRID_Y + sel_trk * ROW_H + ROW_H / 2, 9, 30, 30, 38)
+    end
   end
 
   -- No `shadow_rect` anywhere: a flat panel has no occluders, and declaring one

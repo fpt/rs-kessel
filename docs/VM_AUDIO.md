@@ -211,7 +211,15 @@ note *retuned* as the car accelerates — the other way to use a channel).
 which is the one thing a compile-time `track` cannot be. Three things there are
 worth copying: its step clock is a 1/64-frame accumulator (`57600 / bpm`),
 because no integer frame count reaches 174 BPM; every hit goes through a queue
-of frame countdowns, so rolls, nudges and plain hits take one path; and its
-melodic tracks sound through `note_on` on a channel they own rather than `play`,
-because a fire-and-forget note re-entered before it ends *stacks*, and a player
-tapping play/stop stacks one every time.
+of frame countdowns, so rolls, nudges and micro-timing all take one path; and
+each drum declares its *levels* as separate instruments, because velocity scales
+amplitude and nothing else — a snare at velocity 50 is a small snare, where a
+ghost note is darker and shorter as well as weaker.
+
+It is also the worked example for cutting sound *out*. It shipped with a sub and
+a detuned-saw bass, and the stems said what they cost: the two together carried
+three times the drums' energy, and the sub's crest factor was 1.9 — a continuous
+43 Hz tone has no dynamics to duck for anything, so it masked the kick it was
+meant to sit under. Both lanes are gone. `kessel render-audio` on one track at a
+time is how that gets found, and the number to look at is RMS per stem, not the
+peak.
