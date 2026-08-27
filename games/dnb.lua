@@ -149,25 +149,38 @@ local LBL_W = 32
 local CELL_W = 13
 local ROW_H = 22
 local GRID_X = 32
-local GRID_Y = 66
+local GRID_Y = 46
 local VIS = 16                 -- steps on screen; the other bar is a toggle
 
--- The pen row and the button row fill the band between the header and the grid;
--- the step editor takes the strip below it. Everything a finger can hit is a
--- flat box lit to neutral, and the grid between them is the only thing allowed
--- to be dark.
-local PEN_Y = 24
-local PEN_H = 20
-local BTN_Y = 46
-local BTN_H = 18
--- Row three, left to right: four bar buttons, the loop toggle, clear. The bar
--- buttons are first because they are the ones hit most often, and narrow
+-- The screen is split by *what a control is about*, not by how much room each
+-- needed. Above the grid is the loop: which bar, whether playback stays in it,
+-- and clearing one. Below the grid is the note: the level the next tap paints,
+-- and the three attributes of the step under the finger.
+--
+-- The level row used to sit at the top, between the header and the bar
+-- buttons, which put the two halves of one question — what level does the next
+-- tap paint, what level is this step — at opposite ends of the screen with a
+-- grid between them. They are one row now, and one control: see `set_pen`.
+--
+-- Everything a finger can hit is a flat box lit to neutral, and the grid
+-- between the two bands is the only thing allowed to be dark.
+--
+-- The loop row, left to right: four bar buttons, the loop toggle, clear. The
+-- bar buttons are first because they are the ones hit most often, and narrow
 -- because a digit needs no room.
+local BTN_Y = 24
+local BTN_H = 18
 local BAR_BTN_W = 30
 local LOOP_X = 124
 local LOOP_W = 62
 local CLR_X = 190
 local CLR_W = 48
+
+-- The mixer's legend takes the row the grid does not need, directly under the
+-- loop row. Grid view has nothing there: the grid starts at 46 and the band
+-- below the buttons is the grid's own top edge.
+local MIX_Y = 46
+local MIX_H = 18
 
 -- The mixer is six vertical channel strips, not six horizontal rows. 240
 -- divides by six exactly, so each is 40 px with no remainder on the last one —
@@ -190,8 +203,16 @@ local MTR_IN_W = 13
 local MUTE_Y = 194
 local SOLO_Y = 216
 local MS_H = 18
-local DET_Y = 202
-local DET_H = 38
+
+-- The note band: a line naming the selected step, the level row, and the two
+-- attribute boxes. Losing the level row from the top paid for all of it —
+-- 22 px moved down, and the grid moved up to meet the buttons.
+local DET_Y = 180
+local DET_H = 60
+local PEN_Y = 194              -- DET_Y + 14
+local PEN_H = 20
+local ATT_Y = 216              -- PEN_Y + PEN_H + 2
+local ATT_H = 20
 
 -- Six drum tracks and nothing else. The sub and the bleep lane are gone: a
 -- kick sounds note 33 and the sub sounded 29 — four semitones apart in the same
@@ -643,23 +664,39 @@ function clear_bar(t)
   end
 end
 
--- The editor panel's three knobs. Each cycles, because a cycling button is one
--- finger-sized target where three radio buttons are three small ones, and the
--- panel has room for three targets rather than nine.
+-- Choose a level: the one the next tap paints, and the one the selected step
+-- is. **One control, because it is one question asked about "next" and about
+-- "this".**
 --
--- The level cycles through the three *sounding* levels and never through off: a
--- step is turned off by tapping it in the grid, where the finger already is.
-function cycle_vel()
-  local i = sel_trk * NSTEP + sel_step
-  local lvl = pat[i] & 3
-  if lvl == LVL_ACC or lvl == LVL_OFF then
-    lvl = LVL_GHOST
-  else
-    lvl = lvl + 1
+-- These were two controls a screen apart — a GHOST/NORM/ACC row above the grid
+-- that set the pen, and a VEL box below it that cycled the selected step — and
+-- nothing on either said they were different questions. They read as the same
+-- setting shown twice and disagreeing, which is exactly what they were not.
+--
+-- Radio rather than a cycle, now that the row is three targets wide. A cycle is
+-- the right shape for ROLL and MIC, where the values are a short ordered walk
+-- and there is no room for six boxes; it is the wrong one here, because a level
+-- is a thing you aim at and a cycle costs up to three taps to arrive at the one
+-- you wanted.
+--
+-- Selecting a step does *not* move the pen back. The bright box is always what
+-- the next tap will paint, and a pen that followed the selection would repaint
+-- the next empty step at whatever level was last inspected.
+--
+-- An off step is revived rather than skipped — the same as the cycle it
+-- replaces. Clearing a step and wanting it back is one tap, and the panel can
+-- only ever act on the step the grid already selected.
+function set_pen(p)
+  pen = p
+  if sel_step ~= NONE then
+    local i = sel_trk * NSTEP + sel_step
+    pat[i] = (pat[i] & 252) | p
   end
-  pat[i] = (pat[i] & 252) | lvl
 end
 
+-- The editor panel's two knobs. Each cycles, because a cycling button is one
+-- finger-sized target where three radio buttons are three small ones, and a
+-- roll and a nudge are each a short ordered walk rather than a thing to aim at.
 function cycle_roll()
   local i = sel_trk * NSTEP + sel_step
   local extra = ((pat[i] >> 2) & 3) + 1
@@ -834,13 +871,6 @@ function press_at(i, x, y)
     return ROLE_BTN
   end
 
-  if y < PEN_Y + PEN_H then
-    local c = x / 80
-    if c > 2 then c = 2 end
-    pen = c + 1
-    return ROLE_BTN
-  end
-
   if y < BTN_Y + BTN_H then
     if x < BAR_BTN_W * NBARS then
       show_bar(x / BAR_BTN_W)
@@ -861,6 +891,9 @@ function press_at(i, x, y)
   -- buttons sit under the fader and the fader is the fallback. The meter is not
   -- touchable — it reports, it does not take.
   if loop_all == 1 then
+    -- The legend is a label, not a row of six things: a tap on the word MIXER
+    -- must not select the kick.
+    if y < MIX_Y + MIX_H then return ROLE_BTN end
     local st = hit_strip(x)
     if st == NONE then return ROLE_NONE end
     sel_trk = st
@@ -880,14 +913,17 @@ function press_at(i, x, y)
     return ROLE_BTN
   end
 
+  -- The note band. The level row is live whether or not a step is selected —
+  -- there is always a next tap — while the two attribute boxes need one. The
+  -- line naming the step is a label and takes nothing.
   if y >= DET_Y then
-    if sel_step == NONE then return ROLE_BTN end
-    if x < 78 then
-      cycle_vel()
-    elseif x < 158 then
-      cycle_roll()
-    else
-      cycle_mic()
+    if y >= ATT_Y then
+      if sel_step == NONE then return ROLE_BTN end
+      if x < 120 then cycle_roll() else cycle_mic() end
+    elseif y >= PEN_Y then
+      local c = x / 80
+      if c > 2 then c = 2 end
+      set_pen(c + 1)
     end
     return ROLE_BTN
   end
@@ -1050,16 +1086,32 @@ function draw_header()
   end
 end
 
--- The pen: the level a tap paints. Selected is the bright one.
+-- The level row, carrying both readings the two old controls carried between
+-- them: the **bright** box is the pen, the level the next tap paints; the
+-- **capped** box is the selected step, in its own track's colour.
+--
+-- Merging the controls without merging the readings is the whole point. They
+-- differ exactly while a step of one level sits selected under a pen set to
+-- another, which is a real and common state — inspecting an accent's roll with
+-- the pen on ghost — and a row that showed only the pen would have quietly lost
+-- what the panel used to say. Tap either and the two coincide, which is also
+-- what says the button did both things.
 function draw_pen()
+  local sl = NONE
+  if sel_step ~= NONE then sl = pat[sel_trk * NSTEP + sel_step] & 3 end
+
   for i = 0, 2 do
+    local x0 = i * 80 + 2
     local c = 234
     if pen == i + 1 then c = 245 end
-    rect(i * 80, PEN_Y, 78, PEN_H, c)
+    rect(x0, PEN_Y, 77, PEN_H, c)
+    if sl == i + 1 then
+      rect(x0, PEN_Y + PEN_H - 3, 77, 3, col[sel_trk])
+    end
   end
-  text("GHOST", 28, PEN_Y + 8, 250)
-  text("NORM", 111, PEN_Y + 8, 250)
-  text("ACC", 193, PEN_Y + 8, 250)
+  text("GHOST", 30, PEN_Y + 7, 250)
+  text("NORM", 112, PEN_Y + 7, 250)
+  text("ACC", 194, PEN_Y + 7, 250)
 end
 
 function draw_buttons()
@@ -1177,15 +1229,21 @@ function draw_grid()
   end
 end
 
--- The step editor. Three cycling buttons rather than nine radio buttons: the
--- strip has room for three finger-sized targets, and every one of these is a
--- short cycle a thumb can walk.
+-- The note band: everything that is about one hit, in the order a hand reaches
+-- for it. The level first, because it is the one control that is also live with
+-- nothing selected, then the two attributes of the step under the finger.
+--
+-- Two cycling boxes rather than six radio buttons, and each is half the width
+-- the three used to share: a roll and a nudge are short ordered walks, so a
+-- thumb walks them, and the targets doubled by dropping the box that the level
+-- row now is.
 function draw_detail()
   rect(0, DET_Y, DIM, DET_H, 234)
+  draw_pen()
 
   if sel_step == NONE then
-    text("TAP A STEP TO EDIT IT", 6, DET_Y + 6, 240)
-    text("GREEN IS A GROOVE HINT", 6, DET_Y + 22, 71)
+    text("TAP A STEP TO EDIT IT", 6, DET_Y + 4, 240)
+    text("GREEN IS A GROOVE HINT", 6, ATT_Y + 7, 71)
     return
   end
 
@@ -1193,52 +1251,42 @@ function draw_detail()
   number(sel_step + 1, 30, DET_Y + 4, 255)
   track_name(sel_trk, 58, DET_Y + 4, col[sel_trk])
 
-  local by = DET_Y + 16
   local b = pat[sel_trk * NSTEP + sel_step]
-  local lvl = b & 3
   local extra = (b >> 2) & 3
   local mic = (b >> 4) & 3
 
-  rect(2, by, 74, 20, 237)
-  if lvl == LVL_OFF then
-    text("VEL OFF", 25, by + 7, 241)
-  elseif lvl == LVL_GHOST then
-    text("VEL GHST", 23, by + 7, 250)
-  elseif lvl == LVL_NORM then
-    text("VEL NORM", 23, by + 7, 253)
-  else
-    text("VEL ACC", 25, by + 7, 255)
-  end
-
-  rect(80, by, 76, 20, 237)
+  rect(2, ATT_Y, 117, ATT_H, 237)
   if extra == 0 then
-    text("ROLL 1", 106, by + 7, 248)
+    text("ROLL 1", 48, ATT_Y + 7, 248)
   elseif extra == 1 then
-    text("ROLL 2", 106, by + 7, 252)
+    text("ROLL 2", 48, ATT_Y + 7, 252)
   else
-    text("ROLL 3", 106, by + 7, 255)
+    text("ROLL 3", 48, ATT_Y + 7, 255)
   end
 
-  rect(160, by, 78, 20, 237)
+  rect(121, ATT_Y, 117, ATT_H, 237)
   if mic == 0 then
-    text("MIC EARLY", 181, by + 7, 250)
+    text("MIC EARLY", 161, ATT_Y + 7, 250)
   elseif mic == 1 then
-    text("MIC ON", 187, by + 7, 248)
+    text("MIC ON", 167, ATT_Y + 7, 248)
   else
-    text("MIC LATE", 183, by + 7, 253)
+    text("MIC LATE", 163, ATT_Y + 7, 253)
   end
 end
 
--- Row two, in mixer view: what the two bars in every strip are. Said once at
--- the top rather than six times down the side — there is no room in a 40 px
--- strip for a column heading, and the answer is the same for all of them.
+-- What the two bars in every strip are. Said once above them rather than six
+-- times down the side — there is no room in a 40 px strip for a column
+-- heading, and the answer is the same for all of them.
+--
+-- It sits in the row grid view gives to the top of the grid, so the strips
+-- below it start where they always did and only this label moved.
 function draw_mix_head()
-  rect(0, PEN_Y, DIM, PEN_H, 234)
-  text("MIXER", 6, PEN_Y + 8, 252)
-  rect(62, PEN_Y + 6, 8, 8, 208)
-  text("LEVEL", 74, PEN_Y + 8, 245)
-  rect(132, PEN_Y + 6, 8, 8, 252)
-  text("HIT", 144, PEN_Y + 8, 245)
+  rect(0, MIX_Y, DIM, MIX_H, 234)
+  text("MIXER", 6, MIX_Y + 7, 252)
+  rect(62, MIX_Y + 5, 8, 8, 208)
+  text("LEVEL", 74, MIX_Y + 7, 245)
+  rect(132, MIX_Y + 5, 8, 8, 252)
+  text("HIT", 144, MIX_Y + 7, 245)
 end
 
 function draw_mixer()
@@ -1300,7 +1348,6 @@ function draw()
     draw_mix_head()
     draw_mixer()
   else
-    draw_pen()
     draw_labels()
     draw_grid()
     draw_detail()
@@ -1314,12 +1361,13 @@ function draw()
   -- ambient a third of it, which no arrangement of round lights achieves
   -- without bleeding into the grid.
   light_rect(0, HDR_Y, DIM, HDR_H, 64, 64, 64)
-  light_rect(0, PEN_Y, DIM, BTN_Y + BTN_H - PEN_Y, 58, 58, 62)
+  light_rect(0, BTN_Y, DIM, BTN_H, 58, 58, 62)
   if loop_all == 1 then
-    -- The names, and the two button rows. The fader band between them is lit
-    -- lower than neutral on purpose: a meter has to be able to rise *above* its
-    -- surroundings, and it cannot do that over a strip already at 64.
-    light_rect(0, GRID_Y, DIM, FDR_Y - GRID_Y, 58, 58, 62)
+    -- The legend and the names, and the two button rows. The fader band between
+    -- them is lit lower than neutral on purpose: a meter has to be able to rise
+    -- *above* its surroundings, and it cannot do that over a strip already
+    -- at 64.
+    light_rect(0, MIX_Y, DIM, FDR_Y - MIX_Y, 58, 58, 62)
     light_rect(0, FDR_Y, DIM, FDR_H, 40, 40, 46)
     light_rect(0, MUTE_Y, DIM, DIM - MUTE_Y, 58, 58, 62)
     -- An engaged mute or solo is lit past neutral, so the button that is doing
