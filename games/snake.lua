@@ -1,4 +1,4 @@
--- snake.lua — classic snake on a 16x16 grid (8px cells). Arrows steer; eat the
+-- snake.lua — classic snake on a 30x30 grid (8px cells). Arrows steer; eat the
 -- red food to grow; hitting a wall or yourself ends the run (press A to restart).
 --
 --   kessel run games/snake.lua
@@ -34,22 +34,22 @@ sprite food {
 
 record Cell { x, y }
 
-local body: array(64, Cell)   -- grid coords; body[0] is the head
+local body: array(128, Cell)  -- grid coords; body[0] is the head
 local len = 3
 local dx = 1                  -- heading; -1 is stored as (0-1) = 65535 (word)
 local dy = 0
-local fx = 12                 -- food cell
-local fy = 8
+local fx = 22                 -- food cell
+local fy = 15
 local tick = 0
 local dead = 0
 
 function reset_game()
-  body[0].x = 8  body[0].y = 8
-  body[1].x = 7  body[1].y = 8
-  body[2].x = 6  body[2].y = 8
+  body[0].x = 15  body[0].y = 15
+  body[1].x = 14  body[1].y = 15
+  body[2].x = 13  body[2].y = 15
   len = 3
   dx = 1  dy = 0
-  fx = 12  fy = 8
+  fx = 22  fy = 15
   tick = 0
   dead = 0
 end
@@ -78,7 +78,7 @@ function update()
 
   local nx = body[0].x + dx
   local ny = body[0].y + dy
-  if nx >= 16 or ny >= 16 then dead = 1  return end   -- wall (also catches wrap)
+  if nx >= 30 or ny >= 30 then dead = 1  return end   -- wall (also catches wrap)
 
   local i = 0
   while i < len do
@@ -89,7 +89,7 @@ function update()
 
   local ate = 0
   if nx == fx and ny == fy then ate = 1 end
-  if ate == 1 and len < 64 then len = len + 1 end
+  if ate == 1 and len < 128 then len = len + 1 end
 
   -- shift the body toward the tail (descending, so we don't clobber)
   local j = len - 1
@@ -101,8 +101,8 @@ function update()
   body[0].x = nx  body[0].y = ny
 
   if ate == 1 then
-    fx = rnd(16)
-    fy = rnd(16)
+    fx = rnd(30)
+    fy = rnd(30)
   end
 end
 

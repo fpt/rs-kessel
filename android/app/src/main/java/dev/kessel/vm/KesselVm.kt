@@ -28,8 +28,8 @@ object Buttons {
     }
 }
 
-/** Screen edge length of [dev.kessel.vm.KesselNative]'s default mode. */
-const val CLASSIC_DIM = 128
+/** The short side of every console screen, and both sides of the default one. */
+const val SHORT_SIDE = 240
 
 /** Touch slots the console reports. Must match `MAX_TOUCHES` in `device.rs`. */
 const val MAX_TOUCHES = 4
@@ -73,7 +73,7 @@ class VmInput {
  * Every method is `synchronized` **except [renderAudio]**. The native console
  * is internally locked and would be safe to call concurrently, but `close`
  * racing a `tick` would not be, and one lock here removes the whole question.
- * The cost is bounded — a frame of a 128×128 machine is microseconds, so a UI
+ * The cost is bounded — a frame of a 240×240 machine is microseconds, so a UI
  * thread asking [isPaused] never waits long enough to notice.
  *
  * The audio thread is the exception, and has to be: it would be waiting on a
@@ -90,13 +90,17 @@ class KesselVm : AutoCloseable {
     private var handle: Long = KesselNative.playerNew()
 
     /**
-     * Screen edge length; the framebuffer is `screenDim()²` pixels.
+     * Screen width; the framebuffer is `screenWidth() * screenHeight()` pixels,
+     * row-major, so this is also the row stride.
      *
      * **Only meaningful after [load].** The ROM picks the resolution through
      * its `screen { … }` block, so anything sized from this before a game is
-     * loaded gets the 128 default — and would tear a 240×240 game across it.
+     * loaded gets the 240×240 default — and would tear a 320×240 game across it.
      */
-    fun screenDim(): Int = if (handle == 0L) CLASSIC_DIM else KesselNative.playerScreenDim(handle)
+    fun screenWidth(): Int = if (handle == 0L) SHORT_SIDE else KesselNative.playerScreenWidth(handle)
+
+    /** Screen height. Same caveat as [screenWidth]. */
+    fun screenHeight(): Int = if (handle == 0L) SHORT_SIDE else KesselNative.playerScreenHeight(handle)
 
     /**
      * The frame staging buffer. Direct, so the native side can write into it
@@ -106,7 +110,7 @@ class KesselVm : AutoCloseable {
      * Grown on demand instead of at construction, because the size is not known
      * until a ROM has been loaded.
      */
-    private var frame: ByteBuffer = ByteBuffer.allocateDirect(CLASSIC_DIM * CLASSIC_DIM * 4)
+    private var frame: ByteBuffer = ByteBuffer.allocateDirect(SHORT_SIDE * SHORT_SIDE * 4)
 
     /**
      * Make [source] available at [path] for a later [load] to `#include`.
@@ -152,7 +156,7 @@ class KesselVm : AutoCloseable {
     }
 
     /**
-     * Copy the current frame into [bitmap], which must be [screenDim]² and
+     * Copy the current frame into [bitmap], which must be [screenWidth]×[screenHeight] and
      * [Bitmap.Config.ARGB_8888]. Returns false — leaving [bitmap] untouched —
      * when there is no ROM yet, so a caller can keep presenting its last frame.
      *
@@ -164,7 +168,7 @@ class KesselVm : AutoCloseable {
     @Synchronized
     fun readFrame(bitmap: Bitmap): Boolean {
         if (handle == 0L) return false
-        val need = screenDim() * screenDim() * 4
+        val need = screenWidth() * screenHeight() * 4
         if (frame.capacity() < need) {
             frame = ByteBuffer.allocateDirect(need)
         }

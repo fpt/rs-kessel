@@ -10,11 +10,11 @@
 //!
 //! ```text
 //! HELLO  →  [0x00]
-//!        ←  [version u8][busy u8][dim u16 LE][controls_len u16 LE][controls_json …]
+//!        ←  [version u8][busy u8][width u16 LE][height u16 LE][controls_len u16 LE][controls_json …]
 //!
 //! TICK   →  [0x01][buttons u8][stick_x i16 LE][stick_y i16 LE]
 //!               [touches u8][ (x u16 LE, y u16 LE, down u8) × MAX_TOUCHES ]
-//!        ←  [flags u8][dim u16 LE][rgba dim*dim*4]
+//!        ←  [flags u8][width u16 LE][height u16 LE][rgba width*height*4]
 //! ```
 //!
 //! The TICK request is a fixed size even though the touch count is on the wire:
@@ -22,13 +22,13 @@
 //! is caught as a refused handshake rather than a stream that shears at the
 //! first touch.
 //!
-//! Each TICK response carries its own `dim` rather than relying on HELLO's.
+//! Each TICK response carries its own size rather than relying on HELLO's.
 //! The agent can load a ROM with a different `screen { … }` mode at any moment,
 //! and a length the reader only *assumed* would desynchronise the stream for
-//! good — a framing bug, not a wrong picture. HELLO's `dim` is now just the
-//! opening size, so a client can allocate before the first frame arrives.
+//! good — a framing bug, not a wrong picture. HELLO's size is now just the
+//! opening one, so a client can allocate before the first frame arrives.
 //!
-//! Historically both sides knew `dim` up front, so every TICK response was a fixed size and
+//! Historically both sides knew the size up front, so every TICK response was a fixed size and
 //! needs no length prefix.
 
 // Both halves of the codec are always compiled, even though a headless build
@@ -43,7 +43,9 @@ use std::io::{self, Read, Write};
 /// clear message rather than left to misparse a frame stream.
 ///
 /// 2: TICK carries the analog stick and touch points, not just buttons.
-pub const PROTOCOL_VERSION: u8 = 2;
+/// 3: HELLO and every TICK response carry a width and a height — the screen is
+///    no longer square.
+pub const PROTOCOL_VERSION: u8 = 3;
 
 pub const MSG_HELLO: u8 = 0x00;
 pub const MSG_TICK: u8 = 0x01;
@@ -114,7 +116,7 @@ impl Tick {
 }
 
 // TICK response flag bits.
-/// Largest screen edge a frame may claim. The console tops out at 240; this is
+/// Largest screen side a frame may claim. The console tops out at 320; this is
 /// a sanity bound on a length read off a socket, not a machine limit.
 pub const MAX_DIM: usize = 1024;
 
@@ -130,8 +132,9 @@ pub struct Hello {
     /// straight after, so the newcomer gets a clear refusal instead of sitting
     /// in the accept backlog waiting for a turn that may never come.
     pub busy: bool,
-    /// Screen edge length in pixels (square).
-    pub dim: u16,
+    /// Screen size in pixels.
+    pub width: u16,
+    pub height: u16,
     /// The loaded ROM's control-layout metadata, as JSON.
     pub controls_json: String,
 }
@@ -141,32 +144,35 @@ impl Hello {
         let controls = self.controls_json.as_bytes();
         let len = u16::try_from(controls.len()).unwrap_or(u16::MAX);
         w.write_all(&[self.version, self.busy as u8])?;
-        w.write_all(&self.dim.to_le_bytes())?;
+        w.write_all(&self.width.to_le_bytes())?;
+        w.write_all(&self.height.to_le_bytes())?;
         w.write_all(&len.to_le_bytes())?;
         w.write_all(&controls[..len as usize])?;
         w.flush()
     }
 
     pub fn read(r: &mut impl Read) -> io::Result<Self> {
-        let mut head = [0u8; 6];
+        let mut head = [0u8; 8];
         r.read_exact(&mut head)?;
         let version = head[0];
         let busy = head[1] != 0;
-        let dim = u16::from_le_bytes([head[2], head[3]]);
-        let len = u16::from_le_bytes([head[4], head[5]]) as usize;
+        let width = u16::from_le_bytes([head[2], head[3]]);
+        let height = u16::from_le_bytes([head[4], head[5]]);
+        let len = u16::from_le_bytes([head[6], head[7]]) as usize;
         let mut controls = vec![0u8; len];
         r.read_exact(&mut controls)?;
         Ok(Hello {
             version,
             busy,
-            dim,
+            width,
+            height,
             controls_json: String::from_utf8_lossy(&controls).into_owned(),
         })
     }
 
-    /// Bytes in one TICK response body, once `dim` is known.
+    /// Bytes in one TICK response body, once the size is known.
     pub fn frame_bytes(&self) -> usize {
-        self.dim as usize * self.dim as usize * 4
+        self.width as usize * self.height as usize * 4
     }
 }
 
@@ -176,10 +182,11 @@ pub struct Frame {
     pub has_rom: bool,
     pub paused: bool,
     pub halted: bool,
-    /// Screen edge length this frame was rendered at. May differ from HELLO's
-    /// if the agent has since loaded a ROM with another `screen` mode.
-    pub dim: u16,
-    /// RGBA, `dim * dim * 4` bytes. All zeroes when no ROM is loaded.
+    /// Screen size this frame was rendered at. May differ from HELLO's if the
+    /// agent has since loaded a ROM with another `screen` mode.
+    pub width: u16,
+    pub height: u16,
+    /// RGBA, `width * height * 4` bytes. All zeroes when no ROM is loaded.
     pub rgba: Vec<u8>,
 }
 
@@ -200,7 +207,8 @@ impl Frame {
 
     pub fn write(&self, w: &mut impl Write) -> io::Result<()> {
         w.write_all(&[self.flags()])?;
-        w.write_all(&self.dim.to_le_bytes())?;
+        w.write_all(&self.width.to_le_bytes())?;
+        w.write_all(&self.height.to_le_bytes())?;
         w.write_all(&self.rgba)?;
         w.flush()
     }
@@ -208,24 +216,26 @@ impl Frame {
     /// Read one response. The length comes off the wire, so a resolution change
     /// on the far side resizes the reader instead of tearing the stream.
     pub fn read(r: &mut impl Read) -> io::Result<Self> {
-        let mut head = [0u8; 3];
+        let mut head = [0u8; 5];
         r.read_exact(&mut head)?;
-        let dim = u16::from_le_bytes([head[1], head[2]]);
+        let width = u16::from_le_bytes([head[1], head[2]]);
+        let height = u16::from_le_bytes([head[3], head[4]]);
         // A corrupt or hostile length would otherwise be a multi-gigabyte
         // allocation on a loopback socket.
-        if dim as usize > MAX_DIM {
+        if width as usize > MAX_DIM || height as usize > MAX_DIM {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("frame dim {dim} exceeds the {MAX_DIM} maximum"),
+                format!("frame size {width}×{height} exceeds the {MAX_DIM} maximum"),
             ));
         }
-        let mut rgba = vec![0u8; dim as usize * dim as usize * 4];
+        let mut rgba = vec![0u8; width as usize * height as usize * 4];
         r.read_exact(&mut rgba)?;
         Ok(Frame {
             has_rom: head[0] & FLAG_HAS_ROM != 0,
             paused: head[0] & FLAG_PAUSED != 0,
             halted: head[0] & FLAG_HALTED != 0,
-            dim,
+            width,
+            height,
             rgba,
         })
     }
@@ -240,7 +250,8 @@ mod tests {
         let h = Hello {
             version: PROTOCOL_VERSION,
             busy: false,
-            dim: 128,
+            width: 320,
+            height: 240,
             controls_json: r#"{"pause":"START"}"#.to_string(),
         };
         let mut buf = Vec::new();
@@ -248,9 +259,9 @@ mod tests {
         let back = Hello::read(&mut buf.as_slice()).unwrap();
         assert_eq!(back.version, PROTOCOL_VERSION);
         assert!(!back.busy);
-        assert_eq!(back.dim, 128);
+        assert_eq!((back.width, back.height), (320, 240), "not swapped");
         assert_eq!(back.controls_json, h.controls_json);
-        assert_eq!(back.frame_bytes(), 128 * 128 * 4);
+        assert_eq!(back.frame_bytes(), 320 * 240 * 4);
     }
 
     #[test]
@@ -266,13 +277,14 @@ mod tests {
                 has_rom,
                 paused,
                 halted,
-                dim: 1,
+                width: 1,
+                height: 1,
                 rgba: vec![1, 2, 3, 4],
             };
             let mut buf = Vec::new();
             f.write(&mut buf).unwrap();
             let back = Frame::read(&mut buf.as_slice()).unwrap();
-            assert_eq!(back.dim, 1);
+            assert_eq!((back.width, back.height), (1, 1));
             assert_eq!(back.has_rom, has_rom);
             assert_eq!(back.paused, paused);
             assert_eq!(back.halted, halted);
@@ -287,28 +299,29 @@ mod tests {
         let h = Hello {
             version: PROTOCOL_VERSION,
             busy: true,
-            dim: 64,
+            width: 64,
+            height: 64,
             controls_json: String::new(),
         };
         let mut buf = Vec::new();
         h.write(&mut buf).unwrap();
         let back = Hello::read(&mut buf.as_slice()).unwrap();
         assert!(back.busy);
-        assert_eq!(back.dim, 64);
+        assert_eq!(back.width, 64);
     }
 
     /// A truncated stream must surface as an error, not a silently short frame
     /// that would render as garbage.
     #[test]
     fn a_short_frame_is_an_error() {
-        // Claims dim 1 (4 bytes of pixels) but carries 3.
-        let buf = vec![FLAG_HAS_ROM, 1, 0, 1, 2, 3];
+        // Claims 1×1 (4 bytes of pixels) but carries 3.
+        let buf = vec![FLAG_HAS_ROM, 1, 0, 1, 0, 1, 2, 3];
         assert!(Frame::read(&mut buf.as_slice()).is_err());
     }
 
     /// The reader must take its length from the wire, so the agent switching
-    /// to a 240×240 ROM mid-session resizes the client instead of shearing
-    /// every subsequent frame by 57 KiB.
+    /// to a 320×240 ROM mid-session resizes the client instead of shearing
+    /// every subsequent frame by 75 KiB.
     #[test]
     fn a_frame_may_change_size_between_ticks() {
         let mut buf = Vec::new();
@@ -316,7 +329,8 @@ mod tests {
             has_rom: true,
             paused: false,
             halted: false,
-            dim: 2,
+            width: 2,
+            height: 2,
             rgba: vec![7; 16],
         }
         .write(&mut buf)
@@ -325,8 +339,9 @@ mod tests {
             has_rom: true,
             paused: false,
             halted: false,
-            dim: 3,
-            rgba: vec![9; 36],
+            width: 3,
+            height: 2,
+            rgba: vec![9; 24],
         }
         .write(&mut buf)
         .unwrap();
@@ -334,8 +349,12 @@ mod tests {
         let mut r = buf.as_slice();
         let a = Frame::read(&mut r).unwrap();
         let b = Frame::read(&mut r).unwrap();
-        assert_eq!((a.dim, a.rgba.len()), (2, 16));
-        assert_eq!((b.dim, b.rgba.len()), (3, 36), "stream stayed in sync");
+        assert_eq!((a.width, a.height, a.rgba.len()), (2, 2, 16));
+        assert_eq!(
+            (b.width, b.height, b.rgba.len()),
+            (3, 2, 24),
+            "stream stayed in sync through a rectangular frame"
+        );
     }
 
     /// A tick carries the whole input, so a player attached to an agent session
@@ -418,8 +437,10 @@ mod tests {
     /// A length read off a socket must be bounded, or a corrupt header is a
     /// multi-gigabyte allocation.
     #[test]
-    fn an_absurd_dim_is_refused_rather_than_allocated() {
-        let buf = vec![FLAG_HAS_ROM, 0xff, 0xff];
-        assert!(Frame::read(&mut buf.as_slice()).is_err());
+    fn an_absurd_size_is_refused_rather_than_allocated() {
+        let buf = vec![FLAG_HAS_ROM, 0xff, 0xff, 1, 0];
+        assert!(Frame::read(&mut buf.as_slice()).is_err(), "width");
+        let buf = vec![FLAG_HAS_ROM, 1, 0, 0xff, 0xff];
+        assert!(Frame::read(&mut buf.as_slice()).is_err(), "height");
     }
 }

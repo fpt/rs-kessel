@@ -36,7 +36,7 @@
 -- sounding: a voice's velocity is fixed when it starts, and re-triggering a
 -- held chord to fake it would stutter every note in it.
 
-screen { mode = Extended240 }
+screen { mode = Square240 }
 
 controls {
   dpad  = false

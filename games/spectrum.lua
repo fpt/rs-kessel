@@ -6,7 +6,7 @@
 --
 --   kessel run games/spectrum.lua
 
-screen { mode = Extended240 }
+screen { mode = Square240 }
 
 controls {
   dpad = true       -- left/right pick a bank, up/down fade

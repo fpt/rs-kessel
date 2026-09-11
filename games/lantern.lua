@@ -117,7 +117,7 @@ sprite stair {
   ........
 }
 
-tilemap cave(16, 16)
+tilemap cave(30, 30)
 
 record Wisp  { x, y, dir, alive }
 record Torch { x, y, lit }
@@ -144,8 +144,8 @@ local fy = 0
 local fdir = 1
 local flife = 0
 
-local sx = 104          -- the stairs down
-local sy = 104
+local sx = 216          -- the stairs down
+local sy = 216
 local flicker = 0
 
 signal fuel_left
@@ -155,9 +155,9 @@ signal state            -- 0 exploring, 1 snuffed out
 
 function build_cave()
   fset(wall, SOLID, 1)
-  for y = 0, 15 do
-    for x = 0, 15 do
-      if x == 0 or y == 0 or x == 15 or y == 15 then
+  for y = 0, 29 do
+    for x = 0, 29 do
+      if x == 0 or y == 0 or x == 29 or y == 29 then
         mset(x, y, wall)
       elseif rnd(11) == 0 then
         mset(x, y, moss)
@@ -169,9 +169,9 @@ function build_cave()
   -- Pillars. Fixed rather than random: a cave you cannot walk across is a
   -- softlock, and this game has no way to tell you that is what happened.
   local i = 0
-  while i < 4 do
+  while i < 8 do
     local px = 3 + i * 3
-    local py = 4 + ((i + depth) % 3) * 4
+    local py = 4 + ((i + depth) % 5) * 5
     mset(px, py, wall)
     mset(px, py + 1, wall)
     i = i + 1
@@ -186,14 +186,16 @@ function place(n)
   dead = 0
   bitten = 0
 
-  fires[0].x = 96  fires[0].y = 24  fires[0].lit = 1
-  fires[1].x = 24  fires[1].y = 88  fires[1].lit = 1
-  fires[2].x = 72  fires[2].y = 64  fires[2].lit = 1
+  -- Tile columns that are not a multiple of 3, so a brazier never lands
+  -- inside one of the pillars `build_cave` puts at x = 3, 6, 9, …
+  fires[0].x = 176  fires[0].y = 40   fires[0].lit = 1
+  fires[1].x = 40   fires[1].y = 168  fires[1].lit = 1
+  fires[2].x = 128  fires[2].y = 120  fires[2].lit = 1
 
   local i = 0
   while i < 4 do
-    wisps[i].x = 40 + (i % 2) * 56
-    wisps[i].y = 40 + (i / 2) * 48
+    wisps[i].x = 64 + (i % 2) * 112
+    wisps[i].y = 72 + (i / 2) * 88
     wisps[i].dir = i % 4
     wisps[i].alive = 1
     i = i + 1
@@ -305,7 +307,7 @@ end
 
 function draw()
   cls(0)
-  map(0, 0, 0, 0, 16, 16)
+  map(0, 0, 0, 0, 30, 30)
 
   local i = 0
   while i < 3 do
@@ -338,8 +340,8 @@ function draw()
 
   -- Walls stop light. Declared after the flood (which clears them) and before
   -- any lamp, because a blocker only affects the lamps that come after it.
-  for ty = 0, 15 do
-    for tx = 0, 15 do
+  for ty = 0, 29 do
+    for tx = 0, 29 do
       if fget(mget(tx, ty), SOLID) then shadow_rect(tx * 8, ty * 8, 8, 8) end
     end
   end
@@ -370,9 +372,9 @@ function draw()
     light(hx + 4, hy + 4, fuel + flicker, 58, 42, 22)
   end
 
-  light_rect(0, 0, 128, 8, 64, 64, 64)   -- the HUD bar, at neutral
+  light_rect(0, 0, 240, 8, 64, 64, 64)   -- the HUD bar, at neutral
 
-  rect(0, 0, 128, 8, 0)
+  rect(0, 0, 240, 8, 0)
   text("DEPTH", 2, 2, 6)
   number(depth, 26, 2, 7)
   text("TORCH", 46, 2, 6)
@@ -383,10 +385,10 @@ function draw()
   rect(70, 3, bar, 4, bc)
 
   if dead == 1 then
-    light_rect(24, 52, 80, 24, 64, 64, 64)
-    rect(24, 52, 80, 24, 0)
-    text("DARK", 50, 58, 8)
-    text("A - AGAIN", 40, 66, 6)
+    light_rect(60, 106, 120, 28, 64, 64, 64)
+    rect(60, 106, 120, 28, 0)
+    text("DARK", 112, 112, 8)
+    text("A - AGAIN", 102, 122, 6)
   end
 
   signal(fuel_left, fuel)

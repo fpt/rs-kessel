@@ -355,21 +355,32 @@ pub extern "C" fn kessel_player_audio_dropped(p: *mut KesselPlayer) -> u64 {
     handle!(p, 0).queue.rejected()
 }
 
-/// Screen edge length in pixels; the framebuffer is `dim * dim * 4` bytes.
+/// Screen width in pixels — also the framebuffer's row stride. A frame is
+/// `width * height * 4` bytes.
 ///
 /// **Read this after [`kessel_player_load`], not before.** The resolution comes
 /// from the ROM's `screen { … }` block, so a host that sizes its frame buffer
-/// at start-up gets the 128 default and will tear a 240×240 game across it.
-/// Without a ROM this reports the default.
+/// at start-up gets the 240×240 default and will tear a 320×240 game across
+/// it. Without a ROM this reports the default.
 #[no_mangle]
-pub extern "C" fn kessel_player_screen_dim(p: *mut KesselPlayer) -> u32 {
-    player!(p, kessel_vm::device::CLASSIC_DIM as u32).screen_dim()
+pub extern "C" fn kessel_player_screen_width(p: *mut KesselPlayer) -> u32 {
+    player!(p, kessel_vm::device::SHORT_SIDE as u32)
+        .screen_size()
+        .0
+}
+
+/// Screen height in pixels. Same caveat as [`kessel_player_screen_width`].
+#[no_mangle]
+pub extern "C" fn kessel_player_screen_height(p: *mut KesselPlayer) -> u32 {
+    player!(p, kessel_vm::device::SHORT_SIDE as u32)
+        .screen_size()
+        .1
 }
 
 /// Write the current frame as packed RGBA into `dst`.
 ///
 /// Returns true if a frame was written. False means no ROM is loaded or `dst` is
-/// smaller than `kessel_player_screen_dim(p)^2 * 4` — in both cases `dst` is untouched,
+/// smaller than `width * height * 4` — in both cases `dst` is untouched,
 /// so a host can keep showing the last good frame.
 ///
 /// This is the 60 Hz path, which is why it fills a caller-owned buffer rather
@@ -461,10 +472,10 @@ mod tests {
     // The audio tests below drive the ABI exactly as a host does: enable, tick
     // on one thread, render on another.
     use super::*;
-    use kessel_vm::device::{BTN_RIGHT, CLASSIC_DIM};
+    use kessel_vm::device::{BTN_RIGHT, SHORT_SIDE};
 
     /// The default screen, which every test here but the mode one uses.
-    const SCREEN_PIXELS: usize = CLASSIC_DIM * CLASSIC_DIM;
+    const SCREEN_PIXELS: usize = SHORT_SIDE * SHORT_SIDE;
 
     const MOVER: &str = r#"
         local x = 32
@@ -510,14 +521,14 @@ mod tests {
             assert_eq!(load(p, MOVER, "mover.lua"), "");
             assert!(kessel_player_has_rom(p));
 
-            let n = (kessel_player_screen_dim(p) * kessel_player_screen_dim(p) * 4) as usize;
+            let n = (kessel_player_screen_width(p) * kessel_player_screen_height(p) * 4) as usize;
             assert_eq!(n, SCREEN_PIXELS * 4);
             let mut fb = vec![0u8; n];
 
             kessel_player_tick(p, 0);
             assert!(kessel_player_framebuffer(p, fb.as_mut_ptr(), fb.len()));
             // (32,60) drawn in colour 7 — opaque.
-            let idx = (60 * kessel_player_screen_dim(p) as usize + 32) * 4;
+            let idx = (60 * kessel_player_screen_width(p) as usize + 32) * 4;
             assert_eq!(fb[idx + 3], 0xff);
 
             // Holding RIGHT moves the pixel, so successive frames differ.
@@ -550,8 +561,8 @@ mod tests {
         unsafe {
             let p = kessel_player_new();
             assert_eq!(load(p, PROBE, "probe.lua"), "");
-            let dim = kessel_player_screen_dim(p) as usize;
-            let mut fb = vec![0u8; dim * dim * 4];
+            let dim = kessel_player_screen_width(p) as usize;
+            let mut fb = vec![0u8; dim * kessel_player_screen_height(p) as usize * 4];
             // Colour 7 is (0xFF,0xF1,0xE8); index 0 is black. Comparing the red
             // channel is enough to tell them apart.
             let lit = |fb: &[u8], x: usize, y: usize| fb[(y * dim + x) * 4] == 0xFF;

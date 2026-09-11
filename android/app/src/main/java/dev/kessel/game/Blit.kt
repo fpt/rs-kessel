@@ -14,27 +14,29 @@ data class ScreenRect(val left: Int, val top: Int, val right: Int, val bottom: I
 }
 
 /**
- * Where a `dim`×`dim` console frame lands on a `width`×`height` surface.
+ * Where a `w`×`h` console frame lands on a `width`×`height` surface.
  *
  * Integer upscale, centred, never below 1× — the same rule as `blit` in
  * `crates/cli/src/play.rs`, so a game looks identical on a phone and in the
  * desktop window. A fractional scale would put uneven pixel sizes next to each
- * other, which on 128×128 pixel art is immediately visible.
+ * other, which on 8×8 pixel art is immediately visible. One scale for both
+ * axes, or a 320×240 game would be stretched to whatever shape the surface is.
  *
  * Pulled out as a pure function for the reason the desktop `blit` is tested
  * separately: getting this wrong produces a plausible-but-wrong picture rather
  * than a crash, so nothing else would catch it.
  */
-fun destRect(dim: Int, width: Int, height: Int): ScreenRect {
-    if (dim <= 0 || width <= 0 || height <= 0) return ScreenRect(0, 0, 0, 0)
+fun destRect(w: Int, h: Int, width: Int, height: Int): ScreenRect {
+    if (w <= 0 || h <= 0 || width <= 0 || height <= 0) return ScreenRect(0, 0, 0, 0)
 
-    val scale = maxOf(1, minOf(width / dim, height / dim))
-    val side = dim * scale
+    val scale = maxOf(1, minOf(width / w, height / h))
+    val drawW = w * scale
+    val drawH = h * scale
     // A surface smaller than the frame still gets its top-left corner rather
     // than a negative offset.
-    val left = maxOf(0, (width - side) / 2)
-    val top = maxOf(0, (height - side) / 2)
-    return ScreenRect(left, top, left + side, top + side)
+    val left = maxOf(0, (width - drawW) / 2)
+    val top = maxOf(0, (height - drawH) / 2)
+    return ScreenRect(left, top, left + drawW, top + drawH)
 }
 
 /** [consoleTouch]'s answer for a point that is not on the drawn frame. */
@@ -53,14 +55,14 @@ const val OFF_SCREEN = -1
  * pointer loop and a per-finger allocation there is exactly the kind of garbage
  * that shows up as a stutter mid-gesture.
  */
-fun consoleTouch(x: Float, y: Float, width: Int, height: Int, dim: Int): Int {
-    val r = destRect(dim, width, height)
+fun consoleTouch(x: Float, y: Float, width: Int, height: Int, w: Int, h: Int): Int {
+    val r = destRect(w, h, width, height)
     if (r.isEmpty) return OFF_SCREEN
-    val scale = maxOf(1, r.width / dim)
+    val scale = maxOf(1, r.width / w)
     // Compose reports pointers outside the view during a drag, and a negative
     // coordinate divided into the frame would land back inside it.
     if (x < r.left || y < r.top) return OFF_SCREEN
     val cx = (x.toInt() - r.left) / scale
     val cy = (y.toInt() - r.top) / scale
-    return if (cx < dim && cy < dim) (cx shl 16) or cy else OFF_SCREEN
+    return if (cx < w && cy < h) (cx shl 16) or cy else OFF_SCREEN
 }

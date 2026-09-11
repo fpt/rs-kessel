@@ -36,13 +36,18 @@ class TouchTracker {
     private var anyDown = false
     private var width = 0
     private var height = 0
-    private var dim = 0
+    private var screenW = 0
+    private var screenH = 0
 
-    /** Start an event. [width]/[height] are the view's size in surface pixels. */
-    fun begin(width: Int, height: Int, dim: Int) {
+    /**
+     * Start an event. [width]/[height] are the view's size in surface pixels;
+     * [screenW]/[screenH] the console's.
+     */
+    fun begin(width: Int, height: Int, screenW: Int, screenH: Int) {
         this.width = width
         this.height = height
-        this.dim = dim
+        this.screenW = screenW
+        this.screenH = screenH
         seen.fill(false)
         out.fill(0)
         anyDown = false
@@ -63,7 +68,7 @@ class TouchTracker {
         val slot = slotFor(id) ?: return
         seen[slot] = true
 
-        val packed = consoleTouch(x, y, width, height, dim)
+        val packed = consoleTouch(x, y, width, height, screenW, screenH)
         if (packed == OFF_SCREEN) return
 
         out[slot * 3] = packed shr 16

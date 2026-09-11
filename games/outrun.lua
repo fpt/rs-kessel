@@ -71,6 +71,8 @@
 --   and is bank 0 on purpose; `outrun/smoke.lua` says why.
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+screen { mode = Landscape320 }
+
 controls {
   dpad = true       -- left/right steer, up accelerate, down brake
   a = "boost"
@@ -94,10 +96,11 @@ sprite sun {
 -- The road is the bottom 40% of the screen, as it is in Out Runners: a high
 -- horizon puts the vanishing point in the middle of the picture and leaves the
 -- scenery nothing to stand in front of.
-local HORIZON = 76          -- sky at this row and above, road below
-local BOTTOM = 127
-local DEPTH = 51            -- BOTTOM - HORIZON (rows of road)
-local ROAD_HALF = 60        -- road half-width at the nearest row
+local HORIZON = 144         -- sky at this row and above, road below
+local BOTTOM = 239
+local DEPTH = 95            -- BOTTOM - HORIZON (rows of road)
+local ROAD_HALF = 150       -- road half-width at the nearest row
+local MID = 160             -- screen centre; the car never leaves it
 
 -- The road in world units: row `y` is at world distance `ZSCALE / d`, so one
 -- near row spans ~1.2 units and one row at the horizon spans thousands.
@@ -115,14 +118,18 @@ local STRIPE_D = 16         -- nearer than this: stripes. Beyond: haze.
 local SCENE_D = 6           -- nearest the horizon a scenery slot may land
 
 local SPEED_MAX = 48
-local DRIFT = 32            -- sub-pixel units per pixel of centrifugal drift
+local DRIFT = 13            -- sub-pixel units per pixel of centrifugal drift
 local OFF_TOP = 12          -- what the dirt lets you hold
-local OFF_LIMIT = 48        -- |px| past this and a wheel is off the tarmac
-local PX_MAX = 88           -- far enough out to be lost, near enough to see back
+local OFF_LIMIT = 120       -- |px| past this and a wheel is off the tarmac
+local PX_MAX = 220          -- far enough out to be lost, near enough to see back
 
 local LEAN_MAX = 24         -- full opposite lock, in the units `lean` counts
 local CAR_W = 48            -- the car sprite, so the smoke knows where its
 local CAR_H = 32            -- rear wheels are
+local CAR_SC = 640          -- ...drawn at 2.5x (8.8 fixed), since the tarmac is
+                            -- 300 px wide here and a 48-px car sits on it like
+                            -- a toy. Art this size is drawn once and scaled,
+                            -- not redrawn per screen.
 
 -- Sunset sky, top to horizon; the last band is close to the far road so the
 -- tarmac melts into it instead of ending on a line. Every colour below is a
@@ -454,7 +461,7 @@ function update()
   -- not 1. In the dirt `speed` is pinned at OFF_TOP, and a floor that fell below
   -- the drift would leave a curve holding the car off the road with the wheel
   -- turned. Full lock at full speed crosses the tarmac in about thirty frames.
-  local st = speed / 24 + 2
+  local st = speed / 10 + 5
   if btn(LEFT)  then px = px + st end
   if btn(RIGHT) then px = px - st end
 
@@ -547,12 +554,12 @@ end
 -- reason `cmag`/`cneg` exist: `/` is unsigned, so a negative numerator here puts
 -- the horizon about six hundred rows below the screen and the sky vanishes.
 function hz_at(x: int)
-  local dx: int = x - 64
+  local dx: int = x - MID
   local r: int = roll
   local neg = 0
   if r < 0 then r = 0 - r  neg = 1 end
   if dx < 0 then dx = 0 - dx  neg = 1 - neg end
-  local m = r * dx / 96
+  local m = r * dx / 128
   if neg == 1 then return HORIZON - m end
   return HORIZON + m
 end
@@ -561,7 +568,7 @@ end
 -- distance `k`, so far rows swing most; `k*k/512` is positive, so the sign is
 -- put back by hand from `cneg`.
 function road_cx(k)
-  local bend = cmag * (k * k / 128) / 8
+  local bend = cmag * (k * k / 128) / 11
   -- The bank, linear in distance. `k` is 0 at the bottom row, so the pivot is
   -- the car: the near tarmac stays under it and the far road swings, which is
   -- what a driver's-eye roll does. Pivoting at the horizon instead slides the
@@ -569,8 +576,8 @@ function road_cx(k)
   local r: int = roll
   local rneg = 0
   if r < 0 then r = 0 - r  rneg = 1 end
-  local tilt = r * k / 64
-  local base: int = 64 + px
+  local tilt = r * k / 48
+  local base: int = MID + px
   if rneg == 1 then base = base - tilt else base = base + tilt end
   if cneg == 1 then return base - bend end
   return base + bend
@@ -593,6 +600,23 @@ function spr2(id, cx: int, base, sc)
   spr_scaled(id + 1, x + sz, y, sc, 0)
   spr_scaled(id + 2, x, y + sz, sc, 0)
   spr_scaled(id + 3, x + sz, y + sz, sc, 0)
+end
+
+-- Draw a `w`x`h` tile block scaled by `sc`, top-left at (`x`, `y`).
+--
+-- `sprn` reads a declared sprite's size but does not scale, and `spr_scaled`
+-- scales but takes one tile — so for anything that is both big and scaled the
+-- tiles are walked by hand. A flip has to mirror the *column order* as well as
+-- each tile's pixels, or the car's near side ends up on its far side.
+function spr_block(id, x: int, y, w, h, sc, flip)
+  local sz = 8 * sc / 256
+  for row = 0, h - 1 do
+    for col = 0, w - 1 do
+      local src = col
+      if flip == 1 then src = w - 1 - col end
+      spr_scaled(id + row * w + src, x + col * sz, y + row * sz, sc, flip)
+    end
+  end
 end
 
 -- One roadside object at row `y`: 0 tree, 1 palm, 2 building, 3 billboard.
@@ -647,7 +671,7 @@ end
 -- One puff at a rear wheel. The four frames are separate sprites at contiguous
 -- ids, so the frame is arithmetic rather than a branch.
 function puff_at(cx: int, n)
-  spr2(puff0 + n * 4, cx, BOTTOM, 352)
+  spr2(puff0 + n * 4, cx, BOTTOM, 880)
 end
 
 -- A backing plate for the banners. The sky is a sunset and there is a 32-pixel
@@ -655,7 +679,7 @@ end
 -- onto it is legible everywhere except over the sun — and the banner is the one
 -- thing on the screen that has to read every time.
 function plate()
-  rect(28, 50, 72, 22, 0)
+  rect(100, 96, 120, 32, 0)
 end
 
 function draw()
@@ -663,14 +687,14 @@ function draw()
   local y = 0
   while y <= HORIZON do
     local c = SKY0
-    if y >= 67 then c = SKY7
-    elseif y >= 57 then c = SKY6
-    elseif y >= 48 then c = SKY5
-    elseif y >= 38 then c = SKY4
-    elseif y >= 27 then c = SKY3
-    elseif y >= 17 then c = SKY2
-    elseif y >= 9 then c = SKY1 end
-    hline(0, 127, y, c)
+    if y >= 127 then c = SKY7
+    elseif y >= 108 then c = SKY6
+    elseif y >= 91 then c = SKY5
+    elseif y >= 72 then c = SKY4
+    elseif y >= 51 then c = SKY3
+    elseif y >= 32 then c = SKY2
+    elseif y >= 17 then c = SKY1 end
+    hline(0, 319, y, c)
     y = y + 1
   end
 
@@ -678,12 +702,12 @@ function draw()
   -- branching so the unsigned divide only ever sees a non-negative value.
   local a = frame_count() / 2
   local s: int = sin(a)
-  local sun_y = 48
-  if s > 0 then sun_y = 48 - s / 80 else sun_y = 48 + (0 - s) / 80 end
+  local sun_y = 91
+  if s > 0 then sun_y = 91 - s / 43 else sun_y = 91 + (0 - s) / 43 end
   -- ...and it rides the bank with the horizon it is sitting on. Left level while
   -- the horizon tilted under it, the sun reads as a sticker on the glass.
-  sun_y = sun_y + hz_at(78) - HORIZON
-  spr_scaled(sun, 78, sun_y, 1024, 0)      -- 4x, drawn before the road
+  sun_y = sun_y + hz_at(234) - HORIZON
+  spr_scaled(sun, 206, sun_y, 1792, 0)     -- 7x, drawn before the road
 
   -- Road, one scanline at a time from the near bottom row up to the horizon.
   y = BOTTOM
@@ -705,7 +729,7 @@ function draw()
     elseif d < 11 then grass = GRASS_2  road = ROAD_2  rumble = RUMB_2
     elseif d < STRIPE_D then grass = GRASS_1  road = ROAD_1  rumble = RUMB_1 end
 
-    hline(0, 127, y, grass)                 -- grass first
+    hline(0, 319, y, grass)                 -- grass first
     local lx: int = cx - half
     local rx: int = cx + half
     hline(lx, rx, y, road)                  -- tarmac
@@ -735,12 +759,12 @@ function draw()
   -- guillotines the far trees — which is what the first version did, and it
   -- looked like the sky was eating them.
   --
-  -- 128 columns rather than the whole sky repainted per column: the sunset's
+  -- 320 columns rather than the whole sky repainted per column: the sunset's
   -- bands are horizontal and stay that way, which nobody reads as wrong, while
   -- the one line everybody does read is the edge between sky and ground.
   if roll ~= 0 then
     local hx = 0
-    while hx < 128 do
+    while hx < 320 do
       local h: int = hz_at(hx)
       if h < HORIZON then
         vline(h + 1, HORIZON, hx, GRASS_3)
@@ -784,8 +808,8 @@ function draw()
   if smoking == 1 then
     local n = frame_count() / 3 % 4
     -- The two wheels run out of phase, or the pair pulses as one cloud.
-    puff_at(64 - 17, n)
-    puff_at(64 + 17, (n + 2) % 4)
+    puff_at(MID - 42, n)
+    puff_at(MID + 42, (n + 2) % 4)
   end
 
   -- The player's car, fixed near the bottom centre (the road moves under it).
@@ -802,39 +826,41 @@ function draw()
   local flip = 0
   if lean < 0 then flip = 1 end
   sprbank(1)
-  sprn(id, 64 - CAR_W / 2, BOTTOM + 1 - CAR_H + shake, CAR_W / 8, CAR_H / 8, flip)
+  local cw = CAR_W * CAR_SC / 256
+  local ch = CAR_H * CAR_SC / 256
+  spr_block(id, MID - cw / 2, BOTTOM + 1 - ch + shake, CAR_W / 8, CAR_H / 8, CAR_SC, flip)
   sprbank(0)
 
   -- The HUD. Glyphs advance 4 px, so all three readouts fit on one row of a
-  -- 128-wide screen. `speed * 4` is a speedometer's worth of numbers rather than
+  -- 320-wide screen. `speed * 4` is a speedometer's worth of numbers rather than
   -- the engine's 0..48 — the *signal* below reports the raw value, because that
   -- is the one a person tuning the handling is looking at.
-  text("SPD", 2, 2, 7)
-  number(speed * 4, 18, 2, 7)
-  text("TIME", 40, 2, 10)
-  number((time_t + 59) / 60, 60, 2, 10)
-  text("NEXT", 84, 2, 7)
-  number(target_m() - dist, 104, 2, 7)
+  text("SPD", 4, 4, 7)
+  number(speed * 4, 28, 4, 7)
+  text("TIME", 84, 4, 10)
+  number((time_t + 59) / 60, 124, 4, 10)
+  text("NEXT", 184, 4, 7)
+  number(target_m() - dist, 228, 4, 7)
 
   if offroad == 1 then
-    if frame_count() % 20 < 12 then text("OFF ROAD", 48, 88, 8) end
+    if frame_count() % 20 < 12 then text("OFF ROAD", 144, 152, 8) end
   end
   if cp_flash > 0 then
     if cp_flash % 20 < 12 then
       plate()
-      text("CHECKPOINT", 44, 54, 10)
-      text("+15 SEC", 50, 63, 7)
+      text("CHECKPOINT", 140, 104, 10)
+      text("+15 SEC", 146, 116, 7)
     end
   end
   if state == 1 then
     plate()
-    text("TIME UP", 50, 54, 8)
-    text("PRESS A", 50, 63, 7)
+    text("TIME UP", 146, 104, 8)
+    text("PRESS A", 146, 116, 7)
   end
   if state == 2 then
     plate()
-    text("GOAL", 56, 54, 10)
-    text("PRESS A", 50, 63, 7)
+    text("GOAL", 152, 104, 10)
+    text("PRESS A", 146, 116, 7)
   end
 
   -- Reported for observation: the car's place, then the numbers. These used to

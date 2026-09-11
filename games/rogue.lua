@@ -136,7 +136,7 @@ sprite stairs {
   66666666
 }
 
-tilemap dungeon(16, 16)
+tilemap dungeon(30, 30)
 
 record Mob { x, y, alive }
 
@@ -156,16 +156,16 @@ local flicker = 0   -- the torch's wobble, sampled once a frame so `draw` stays
 local chest_x = 7
 local chest_y = 2
 local chest_opened = 0
-local stair_x = 13
-local stair_y = 13
+local stair_x = 25
+local stair_y = 25
 
 function build_level()
   fset(wall, SOLID, 1)
   local y = 0
-  while y < 16 do
+  while y < 30 do
     local x = 0
-    while x < 16 do
-      if x == 0 or y == 0 or x == 15 or y == 15 then
+    while x < 30 do
+      if x == 0 or y == 0 or x == 29 or y == 29 then
         mset(x, y, wall)
       else
         mset(x, y, floor)
@@ -174,10 +174,13 @@ function build_level()
     end
     y = y + 1
   end
-  -- a few interior walls
-  mset(4, 4, wall)   mset(5, 4, wall)   mset(6, 4, wall)
-  mset(10, 8, wall)  mset(10, 9, wall)  mset(10, 10, wall)
-  mset(4, 11, wall)  mset(5, 11, wall)
+  -- A few interior walls. Runs rather than `mset` triples: the board is 30
+  -- tiles square now, and a three-tile stub in the middle of it reads as a
+  -- stray block rather than as a wall to work around.
+  for x = 7, 13 do mset(x, 7, wall) end
+  for x = 17, 23 do mset(x, 11, wall) end
+  for y = 15, 21 do mset(19, y, wall) end
+  for x = 7, 11 do mset(x, 21, wall) end
 end
 
 function load_stage(n)
@@ -190,25 +193,25 @@ function load_stage(n)
 
   local layout = (n - 1) % 4
   if layout == 0 then
-    hx = 2  hy = 2  chest_x = 7  chest_y = 2  stair_x = 13  stair_y = 13
-    enemies[0].x = 12  enemies[0].y = 3   enemies[0].alive = 1
-    enemies[1].x = 12  enemies[1].y = 12  enemies[1].alive = 1
-    enemies[2].x = 3   enemies[2].y = 13  enemies[2].alive = 1
+    hx = 3  hy = 3  chest_x = 13  chest_y = 3  stair_x = 25  stair_y = 25
+    enemies[0].x = 23  enemies[0].y = 5   enemies[0].alive = 1
+    enemies[1].x = 23  enemies[1].y = 23  enemies[1].alive = 1
+    enemies[2].x = 5   enemies[2].y = 25  enemies[2].alive = 1
   elseif layout == 1 then
-    hx = 13  hy = 2  chest_x = 8  chest_y = 6  stair_x = 2  stair_y = 13
-    enemies[0].x = 3   enemies[0].y = 3   enemies[0].alive = 1
-    enemies[1].x = 11  enemies[1].y = 6   enemies[1].alive = 1
-    enemies[2].x = 6   enemies[2].y = 12  enemies[2].alive = 1
+    hx = 25  hy = 3  chest_x = 15  chest_y = 13  stair_x = 3  stair_y = 25
+    enemies[0].x = 5   enemies[0].y = 5   enemies[0].alive = 1
+    enemies[1].x = 21  enemies[1].y = 13  enemies[1].alive = 1
+    enemies[2].x = 11  enemies[2].y = 25  enemies[2].alive = 1
   elseif layout == 2 then
-    hx = 2  hy = 13  chest_x = 7  chest_y = 8  stair_x = 13  stair_y = 2
-    enemies[0].x = 12  enemies[0].y = 12  enemies[0].alive = 1
-    enemies[1].x = 9   enemies[1].y = 3   enemies[1].alive = 1
-    enemies[2].x = 3   enemies[2].y = 7   enemies[2].alive = 1
+    hx = 3  hy = 25  chest_x = 13  chest_y = 17  stair_x = 25  stair_y = 3
+    enemies[0].x = 23  enemies[0].y = 23  enemies[0].alive = 1
+    enemies[1].x = 17  enemies[1].y = 5   enemies[1].alive = 1
+    enemies[2].x = 5   enemies[2].y = 13  enemies[2].alive = 1
   else
-    hx = 13  hy = 13  chest_x = 5  chest_y = 6  stair_x = 2  stair_y = 2
-    enemies[0].x = 11  enemies[0].y = 11  enemies[0].alive = 1
-    enemies[1].x = 8   enemies[1].y = 5   enemies[1].alive = 1
-    enemies[2].x = 4   enemies[2].y = 12  enemies[2].alive = 1
+    hx = 25  hy = 25  chest_x = 9  chest_y = 13  stair_x = 3  stair_y = 3
+    enemies[0].x = 21  enemies[0].y = 21  enemies[0].alive = 1
+    enemies[1].x = 15  enemies[1].y = 9   enemies[1].alive = 1
+    enemies[2].x = 7   enemies[2].y = 23  enemies[2].alive = 1
   end
 end
 
@@ -312,7 +315,7 @@ end
 
 function draw()
   cls(0)
-  map(0, 0, 0, 0, 16, 16)
+  map(0, 0, 0, 0, 30, 30)
   if chest_opened == 0 then
     spr(chest, chest_x * 8, chest_y * 8, 0)
     entity(chest_x * 8, chest_y * 8, 20)
@@ -345,20 +348,20 @@ function draw()
   -- makes it readable also erases the darkness and the shadows under it, and at
   -- two lines that strip covered a row the hero can walk on. One row of wall is
   -- the only part of the board where a flat-lit band costs nothing.
-  rect(0, 0, 128, 8, 0)
+  rect(0, 0, 240, 8, 0)
   i = 0
   while i < 5 do
     if i < hp then spr(heart, 2 + i * 9, 0, 0) else spr(heart_empty, 2 + i * 9, 0, 0) end
     i = i + 1
   end
-  text("STAGE", 50, 2, 7)
-  number(stage, 72, 2, 10)
-  text("LOOT", 88, 2, 7)
-  number(loot, 106, 2, 10)
+  text("STAGE", 120, 2, 7)
+  number(stage, 146, 2, 10)
+  text("LOOT", 176, 2, 7)
+  number(loot, 198, 2, 10)
   if hp == 0 then
-    rect(40, 50, 48, 22, 0)
-    text("GAME OVER", 46, 54, 8)
-    text("PRESS A", 50, 64, 7)
+    rect(70, 106, 100, 28, 0)
+    text("GAME OVER", 102, 112, 8)
+    text("PRESS A", 106, 122, 7)
   end
 
   -- ---- light ---------------------------------------------------------------
@@ -373,8 +376,8 @@ function draw()
   -- Walls stop light, so a torch lights the room it is in and not the one
   -- through the wall. Declared after the flood (which clears them) and before
   -- any lamp: a blocker only affects the lamps that come after it.
-  for ty = 0, 15 do
-    for tx = 0, 15 do
+  for ty = 0, 29 do
+    for tx = 0, 29 do
       if fget(mget(tx, ty), SOLID) then shadow_rect(tx * 8, ty * 8, 8, 8) end
     end
   end
@@ -400,8 +403,8 @@ function draw()
     light(hx * 8 + 4, hy * 8 + 4, reach, 36, 28, 17)
   end
 
-  light_rect(0, 0, 128, 8, 64, 64, 64)                        -- the HUD bar
-  if hp == 0 then light_rect(40, 50, 48, 22, 64, 64, 64) end
+  light_rect(0, 0, 240, 8, 64, 64, 64)                        -- the HUD bar
+  if hp == 0 then light_rect(70, 106, 100, 28, 64, 64, 64) end
 
   entity(hx * 8, hy * 8, hp)
   entity(stage, loot, 30)

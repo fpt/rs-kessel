@@ -38,9 +38,11 @@ import dev.kessel.vm.KesselVm
 /**
  * One game, running.
  *
- * Portrait by design: the console's screen is square, which leaves the bottom
- * third of a phone free for a pad that no thumb has to reach across the picture
- * to use.
+ * Portrait by design: the console's short side is its width on the square and
+ * portrait screens, which leaves the bottom of a phone free for a pad that no
+ * thumb has to reach across the picture to use. A landscape ROM is shown the
+ * same way for now — letterboxed inside a 4:3 box above the pad — until the
+ * pad learns to split itself either side of a rotated screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,10 +101,18 @@ fun PlayScreen(
                 return@Column
             }
 
+            // The box takes the ROM's own shape, so a 320×240 game is not
+            // letterboxed inside a square it never asked for. Square until the
+            // ROM has loaded and said otherwise.
+            val aspect = if (state.screenWidth > 0 && state.screenHeight > 0) {
+                state.screenWidth.toFloat() / state.screenHeight
+            } else {
+                1f
+            }
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
+                    .aspectRatio(aspect)
                     .background(Color.Black),
                 contentAlignment = Alignment.Center,
             ) {
@@ -114,7 +124,8 @@ fun PlayScreen(
                     // handler over its screen. Otherwise every game would eat
                     // taps meant for whatever the system draws on top.
                     touchable = state.controls.touch != null,
-                    screenDim = state.screenDim,
+                    screenWidth = state.screenWidth,
+                    screenHeight = state.screenHeight,
                 )
                 if (state.halted) {
                     Banner("Game over — tap back to return")

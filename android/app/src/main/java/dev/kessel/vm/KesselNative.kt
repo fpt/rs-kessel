@@ -61,16 +61,20 @@ internal object KesselNative {
     )
 
     /**
-     * Screen edge length in pixels — valid only after [playerLoad], since the
-     * ROM's `screen { … }` block chooses it. Reports the 128 default before.
+     * Screen width in pixels — also the frame's row stride. Valid only after
+     * [playerLoad], since the ROM's `screen { … }` block chooses it; reports
+     * the 240×240 default before.
      */
-    external fun playerScreenDim(handle: Long): Int
+    external fun playerScreenWidth(handle: Long): Int
+
+    /** Screen height in pixels. Same caveat as [playerScreenWidth]. */
+    external fun playerScreenHeight(handle: Long): Int
 
     /**
      * Write the current frame into [dst] as packed RGBA.
      *
      * [dst] **must** be direct ([ByteBuffer.allocateDirect]) and at least
-     * `screenDim()^2 * 4` bytes; a heap buffer silently returns false, because
+     * `screenWidth() * screenHeight() * 4` bytes; a heap buffer silently returns false, because
      * the native side cannot address it. False also means "no ROM yet", and in
      * every false case [dst] is left untouched.
      */

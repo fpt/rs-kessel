@@ -24,7 +24,8 @@ const TICK_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 /// A live attachment to a running `kessel mcp`.
 pub struct AttachClient {
-    dim: u32,
+    /// The size HELLO advertised, used until the first frame arrives.
+    size: (u32, u32),
     /// What the UI thread wants sent with the next tick; read by the worker.
     ///
     /// A mutex rather than the atomic this used to be: an `Input` is buttons,
@@ -83,7 +84,7 @@ impl AttachClient {
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let client = AttachClient {
-            dim: hello.dim as u32,
+            size: (hello.width as u32, hello.height as u32),
             input: input.clone(),
             latest: latest.clone(),
             connected: connected.clone(),
@@ -123,16 +124,16 @@ impl AttachClient {
         Ok(client)
     }
 
-    /// Screen edge length of the most recent frame, falling back to the size
-    /// HELLO advertised before one has arrived.
+    /// Screen size of the most recent frame, falling back to the size HELLO
+    /// advertised before one has arrived.
     ///
     /// Reads the *frame* rather than a value latched at connect time: the agent
     /// can load a ROM with another `screen` mode while someone is attached, and
     /// the window has to follow it.
-    pub fn screen_dim(&self) -> u32 {
+    pub fn screen_size(&self) -> (u32, u32) {
         match self.latest.lock().as_ref() {
-            Some(f) if f.dim > 0 => f.dim as u32,
-            _ => self.dim,
+            Some(f) if f.width > 0 && f.height > 0 => (f.width as u32, f.height as u32),
+            _ => self.size,
         }
     }
 
@@ -198,7 +199,8 @@ mod tests {
         let wrong = Hello {
             version: PROTOCOL_VERSION.wrapping_add(1),
             busy: false,
-            dim: 128,
+            width: 240,
+            height: 240,
             controls_json: "{}".into(),
         };
         let mut buf = Vec::new();
@@ -215,11 +217,12 @@ mod tests {
             has_rom: false,
             paused: false,
             halted: false,
-            dim: 2,
+            width: 2,
+            height: 2,
             rgba: vec![0; 16],
         })));
         let client = AttachClient {
-            dim: 2,
+            size: (2, 2),
             input: Arc::new(Mutex::new(Input::default())),
             latest: latest.clone(),
             connected: Arc::new(AtomicBool::new(true)),
@@ -232,7 +235,8 @@ mod tests {
             has_rom: true,
             paused: true,
             halted: false,
-            dim: 2,
+            width: 2,
+            height: 2,
             rgba: vec![9; 16],
         });
         assert_eq!(client.framebuffer_rgba(), Some(vec![9; 16]));

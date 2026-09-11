@@ -3,13 +3,14 @@
 A tiny **fantasy console** for AI agents and humans.
 
 Kessel gives a model a real machine to write games for: a 16-bit stack VM with a
-128×128 screen, a gamepad, and a statically-typed Lua-ish language that compiles
-to it. The model writes a game, assembles it, runs frames, looks at the screen,
+240×240 screen (or 240×320 / 320×240, if the game says so), a gamepad, and a
+statically-typed Lua-ish language that compiles to it. The model writes a game, assembles it, runs frames, looks at the screen,
 and debugs — then you play the result in a window.
 
 ```bash
 kessel mcp                      # serve the console to an agent over MCP
 kessel run games/tetris.lua    # play a game yourself
+kessel shot games/outrun.lua   # write a frame to a .png, no window needed
 ```
 
 ## Why
@@ -105,7 +106,7 @@ the screen changed — an MCP round trip per frame is pure overhead.
 kessel run games/2048.lua      # arrows slide tiles, A starts a new game
 kessel run games/tetris.lua    # L/R move, A rotates, Down soft-drops
 kessel run games/platform.lua  # arrows move, A jumps and wall-jumps
-kessel run games/outrun.lua    # pseudo-3D road racer
+kessel run games/outrun.lua    # pseudo-3D road racer, on the 320x240 screen
 kessel run games/spectrum.lua  # 240x240, the 256-colour palette, sprite banks
 kessel run games/popn.lua      # six keys, no d-pad at all
 kessel run games/paint.lua     # drag to draw; arrows steer the brush
@@ -174,10 +175,11 @@ an iOS app is a build-system problem rather than a second port.
 ### Screens and colour
 
 The console is an 8-bit palette-index framebuffer over a 256-entry palette, in
-one of two square sizes:
+one of three sizes with a 240-pixel short side:
 
 ```lua
-screen { mode = Extended240 }   -- 240×240; omit for the 128×128 default
+screen { mode = Landscape320 }  -- 320×240; Portrait320 is 240×320,
+                                -- omit for the 240×240 default
 ```
 
 Only the size differs between modes — same ports, same 4bpp sprites, same

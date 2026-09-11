@@ -25,11 +25,13 @@ import java.util.concurrent.locks.LockSupport
 data class PlayState(
     val controls: Controls = Controls(),
     /**
-     * Screen edge length, known only once the ROM is loaded — its `screen { … }`
-     * block picks it. Needed by the UI so a touch on the screen can be
-     * unprojected into console pixels; 0 until [GameEngine.start] succeeds.
+     * Screen size, known only once the ROM is loaded — its `screen { … }`
+     * block picks it. Needed by the UI to shape the screen's box and so a
+     * touch on it can be unprojected into console pixels; 0 until
+     * [GameEngine.start] succeeds.
      */
-    val screenDim: Int = 0,
+    val screenWidth: Int = 0,
+    val screenHeight: Int = 0,
     val paused: Boolean = false,
     /** The machine halted or faulted — game over, or a crash. */
     val halted: Boolean = false,
@@ -136,7 +138,7 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
      */
     private var scratch: Bitmap? = null
 
-    /** Nearest-neighbour: smoothing a 128×128 image is not nicer, just blurrier. */
+    /** Nearest-neighbour: smoothing a 240×240 image is not nicer, just blurrier. */
     private val paint = Paint().apply {
         isFilterBitmap = false
         isAntiAlias = false
@@ -214,10 +216,11 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
             return
         }
         // Only now is the resolution known.
-        val dim = vm.screenDim()
-        scratch = Bitmap.createBitmap(dim, dim, Bitmap.Config.ARGB_8888)
-        src.set(0, 0, dim, dim)
-        _state.value = PlayState(controls = vm.controls(), screenDim = dim)
+        val w = vm.screenWidth()
+        val h = vm.screenHeight()
+        scratch = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        src.set(0, 0, w, h)
+        _state.value = PlayState(controls = vm.controls(), screenWidth = w, screenHeight = h)
 
         // After the load, because the synth needs the ROM's instruments — and
         // before the game thread, so the first frame's sound has somewhere to
@@ -349,7 +352,7 @@ class GameEngine(private val vm: KesselVm) : AutoCloseable {
             // Letterbox rather than leave whatever the previous owner of this
             // buffer left behind.
             canvas.drawColor(Color.BLACK)
-            val r = destRect(bmp.width, canvas.width, canvas.height)
+            val r = destRect(bmp.width, bmp.height, canvas.width, canvas.height)
             if (!r.isEmpty) {
                 dst.set(r.left, r.top, r.right, r.bottom)
                 canvas.drawBitmap(bmp, src, dst, paint)

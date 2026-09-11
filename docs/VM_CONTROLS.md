@@ -158,9 +158,11 @@ subtracting two `u16`s and wrapping on any leftward drag. Note iOS's
 `onScroll` `distanceX/Y` is the delta *since the last call*, which is a
 well-known footgun.
 
-**The threshold is `dim / 8`** — 16 px on Classic128, 30 on Extended240. Screen-
-relative, so the gesture is the same *physical* size on both screens; a fixed
-pixel count would feel shorter on the denser one. Android reaches the same place
+**The threshold is `min(width, height) / 8`** — 30 px on every screen, since
+the short side is 240 on all three. Screen-relative rather than a fixed pixel
+count so the gesture stays one physical size if a denser screen is ever added,
+and the *short* side so turning a 240×320 screen on its side does not change
+how far a swipe is. Android reaches the same place
 from the other direction with `ViewConfiguration.getScaledTouchSlop`, which is
 in dp precisely so it means one physical distance.
 

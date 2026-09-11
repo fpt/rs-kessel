@@ -703,7 +703,7 @@ impl VmTool for GetFramebuffer {
         "vm_get_framebuffer"
     }
     fn description(&self) -> &str {
-        "Return the current 128×128 screen as a PNG image for visual inspection."
+        "Return the current screen as a PNG image for visual inspection (240×240 by default; 240×320 or 320×240 if the ROM's `screen` block asks)."
     }
     fn parameters_schema(&self) -> Value {
         json!({ "type": "object", "properties": {} })
@@ -712,7 +712,7 @@ impl VmTool for GetFramebuffer {
         let c = self.0.lock();
         let base64 = c.framebuffer_png_base64();
         Ok(ToolResult::with_images(
-            "128x128 framebuffer (PNG)".into(),
+            "framebuffer (PNG)".into(),
             vec![ImageContent {
                 base64,
                 media_type: "image/png".to_string(),

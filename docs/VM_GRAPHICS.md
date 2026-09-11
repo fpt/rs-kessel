@@ -51,8 +51,15 @@ The console has two screens, and **only the size differs** — same ports, same
 
 | mode | screen | framebuffer | selected by |
 |------|--------|-------------|-------------|
-| `Classic128` | 128×128 | 16 KiB | the default |
-| `Extended240` | 240×240 | 56.25 KiB | `screen { mode = Extended240 }` |
+| `Square240` | 240×240 | 56.25 KiB | the default |
+| `Portrait320` | 240 wide × 320 tall | 75 KiB | `screen { mode = Portrait320 }` |
+| `Landscape320` | 320 wide × 240 tall | 75 KiB | `screen { mode = Landscape320 }` |
+
+The short side is 240 on every screen, so art and gestures are the same fraction
+of the picture whichever a game picks. `240x320` and `320x240` are accepted as
+plain spellings of the two rectangular modes, and `Extended240` — the old name
+of the square screen — still means `Square240`. The framebuffer is row-major
+with the **width** as its stride.
 
 The mode is fixed when the ROM loads and never changes under a running game. The
 framebuffer lives outside the 64 KiB address space, so the wider screen costs a
@@ -84,9 +91,10 @@ the order a stack machine produces for free — `pal(i,r,g,b)` pushes `i` first,
 - `sprbank(n)` — draw subsequent sprites through bank `n` (0–15), so a tile's
   nibble `c` becomes colour `n*16 + c`. Bank 0 is the identity. One tile, up to
   sixteen colour schemes; nibble 0 stays transparent in every bank.
-- `screen { mode = Extended240 }` — a 240×240 screen instead of 128×128. Declared
+- `screen { mode = Landscape320 }` — a 320×240 screen instead of 240×240. Declared
   like `controls`, read by the host when the ROM loads, fixed for the run.
-  `games/spectrum.lua` demonstrates all three.
+  `games/spectrum.lua` demonstrates all three (its `screen` block picks the
+  square).
 
 ## Light
 

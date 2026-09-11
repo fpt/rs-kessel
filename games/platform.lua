@@ -98,10 +98,12 @@ sprite enemy {
   ........
 }
 
-tilemap level(32, 16)
+tilemap level(60, 30)
 
-local WORLD_TILES = 32
-local CAMERA_MAX = 128
+local WORLD_TILES = 60
+local WORLD_ROWS = 30        -- 30 tiles of 8 px is exactly the 240-px screen
+local FLOOR_ROW = 28
+local CAMERA_MAX = 240       -- WORLD_TILES*8 - 240, the rightmost scroll
 
 -- y4 and vy use quarter-pixel units for a smoother, less abrupt jump arc.
 record Player { x, y, y4: int, vy: int, grounded }
@@ -123,39 +125,54 @@ function init()
   fset(block, SOLID, 1)          -- the block tile is solid
 
   -- A two-screen stage with a floor, boundary walls, and rising platforms.
+  -- The screen is 240 px on both axes now, so the world is 30 rows tall (a
+  -- screenful) and twice as wide, and the whole stage sits above FLOOR_ROW.
   local i = 0
-  while i < WORLD_TILES do mset(i, 14, block)  i = i + 1 end
-  for y = 0, 13 do mset(0, y, block)  mset(WORLD_TILES - 1, y, block) end
-  mset(4, 11, block)  mset(5, 11, block)  mset(6, 11, block)
-  mset(10, 9, block)  mset(11, 9, block)
-  mset(16, 11, block)  mset(17, 11, block)  mset(18, 11, block)
-  mset(22, 8, block)   mset(23, 8, block)   mset(24, 8, block)
-  mset(28, 10, block)  mset(29, 10, block)
-  -- Pillars above platforms provide wall-jump routes while leaving the floor open.
-  for y = 8, 10 do
-    mset(6, y, block)  mset(18, y, block)
+  while i < WORLD_TILES do
+    mset(i, FLOOR_ROW, block)
+    mset(i, FLOOR_ROW + 1, block)
+    i = i + 1
   end
-  for y = 5, 7 do
-    mset(24, y, block)
+  for y = 0, FLOOR_ROW - 1 do mset(0, y, block)  mset(WORLD_TILES - 1, y, block) end
+  mset(4, 25, block)   mset(5, 25, block)   mset(6, 25, block)
+  mset(10, 23, block)  mset(11, 23, block)
+  mset(16, 25, block)  mset(17, 25, block)  mset(18, 25, block)
+  mset(22, 22, block)  mset(23, 22, block)  mset(24, 22, block)
+  mset(28, 24, block)  mset(29, 24, block)
+  mset(33, 25, block)  mset(34, 25, block)  mset(35, 25, block)
+  mset(39, 22, block)  mset(40, 22, block)
+  mset(44, 24, block)  mset(45, 24, block)  mset(46, 24, block)
+  mset(50, 21, block)  mset(51, 21, block)  mset(52, 21, block)
+  mset(55, 24, block)  mset(56, 24, block)
+  -- Pillars above platforms provide wall-jump routes while leaving the floor open.
+  for y = 22, 24 do
+    mset(6, y, block)  mset(18, y, block)  mset(35, y, block)
+  end
+  for y = 19, 21 do
+    mset(24, y, block)  mset(46, y, block)
+  end
+  for y = 18, 20 do
+    mset(52, y, block)
   end
 
-  p.x = 16  p.y = 96  p.y4 = 96 * 4  p.vy = 0  p.grounded = 0
+  p.x = 16  p.y = 208  p.y4 = 208 * 4  p.vy = 0  p.grounded = 0
   cam_x = 0  coins_collected = 0  invuln = 0  knock_timer = 0  knock_dir = 0
   wall_jump_timer = 0  wall_jump_dir = 0  enemy_tick = 0
 
-  enemies[0].x = 64   enemies[0].y = 104  enemies[0].dir = 1      enemies[0].alive = 1
-  enemies[1].x = 128  enemies[1].y = 104  enemies[1].dir = 0 - 1  enemies[1].alive = 1
-  enemies[2].x = 208  enemies[2].y = 104  enemies[2].dir = 1      enemies[2].alive = 1
-  enemies[3].x = 136  enemies[3].y = 80   enemies[3].dir = 1      enemies[3].alive = 1
+  -- The floor's top is FLOOR_ROW*8 = 224, so something standing on it is at 216.
+  enemies[0].x = 120  enemies[0].y = 216  enemies[0].dir = 1      enemies[0].alive = 1
+  enemies[1].x = 240  enemies[1].y = 216  enemies[1].dir = 0 - 1  enemies[1].alive = 1
+  enemies[2].x = 380  enemies[2].y = 216  enemies[2].dir = 1      enemies[2].alive = 1
+  enemies[3].x = 136  enemies[3].y = 192  enemies[3].dir = 1      enemies[3].alive = 1
 
-  coins[0].x = 24   coins[0].y = 104
-  coins[1].x = 40   coins[1].y = 80
-  coins[2].x = 88   coins[2].y = 64
-  coins[3].x = 152  coins[3].y = 104
-  coins[4].x = 184  coins[4].y = 56
-  coins[5].x = 232  coins[5].y = 72
-  coins[6].x = 224  coins[6].y = 104
-  coins[7].x = 112  coins[7].y = 104
+  coins[0].x = 24   coins[0].y = 216
+  coins[1].x = 40   coins[1].y = 192
+  coins[2].x = 88   coins[2].y = 176
+  coins[3].x = 184  coins[3].y = 168
+  coins[4].x = 232  coins[4].y = 184
+  coins[5].x = 320  coins[5].y = 192
+  coins[6].x = 404  coins[6].y = 160
+  coins[7].x = 448  coins[7].y = 216
   local c = 0
   while c < 8 do coins[c].taken = 0  c = c + 1 end
 end
@@ -285,7 +302,7 @@ function update()
   resolve_enemies()
 
   -- Keep the player near the horizontal centre, clamped at both stage edges.
-  cam_x = p.x - 60
+  cam_x = p.x - 116
   if cam_x < 0 then cam_x = 0 end
   if cam_x > CAMERA_MAX then cam_x = CAMERA_MAX end
 end
@@ -293,7 +310,7 @@ end
 function draw()
   cls(12)
   camera(cam_x, 0)
-  map(0, 0, 0, 0, WORLD_TILES, 16)
+  map(0, 0, 0, 0, WORLD_TILES, WORLD_ROWS)
   entity(p.x, p.y, 1)
   local i = 0
   while i < 8 do

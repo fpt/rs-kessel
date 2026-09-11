@@ -11,7 +11,7 @@
 --
 -- Twelve stages from **Microban**, by David W. Skinner, who released the set for
 -- free use: <http://users.bentonrea.com/~sasquatch/sokoban/>. They are the
--- standard set for exactly this situation — small enough to fit a 128x128 screen
+-- standard set for exactly this situation — small enough to fit one screen
 -- without scrolling, and graded from "one push" to genuinely hard.
 --
 -- Every stage is guarded by `crates/vm/tests/sokoban_levels.rs`, which reads the
@@ -305,6 +305,12 @@ local W = 12          -- the data grid; every stage is padded to it
 local H = 12
 local STAGES = 12
 local BAR = 8         -- the HUD bar owns the top 8 px and nothing else
+-- The board draws at 2x. A Microban stage is at most 12 tiles across, which is
+-- 96 px of a 240-px screen drawn 1:1 — a postage stamp with a wide black
+-- margin. The level data is transcribed and must not change to suit the
+-- screen, so the *presentation* scales instead: `spr_scaled` at 512 (8.8
+-- fixed, 2x) and a 16-px pitch everywhere a cell is placed.
+local CELL = 16
 
 local px = 0          -- player tile position, in grid coordinates
 local py = 0
@@ -385,8 +391,8 @@ function load_stage(n)
   bx = x0  by = y0
   bw = x1 - x0 + 1
   bh = y1 - y0 + 1
-  ox = (128 - bw * 8) / 2
-  oy = BAR + (128 - BAR - bh * 8) / 2
+  ox = (240 - bw * CELL) / 2
+  oy = BAR + (240 - BAR - bh * CELL) / 2
 
   stage = n
   moves = 0
@@ -462,22 +468,28 @@ end
 
 function draw()
   cls(0)
-  map(bx, by, ox, oy, bw, bh)
-  spr(player, ox + (px - bx) * 8, oy + (py - by) * 8, 0)
+  -- `map` draws the tilemap 1:1, so the board is walked a cell at a time and
+  -- each tile blown up instead.
+  for y = 0, bh - 1 do
+    for x = 0, bw - 1 do
+      spr_scaled(mget(bx + x, by + y), ox + x * CELL, oy + y * CELL, 512, 0)
+    end
+  end
+  spr_scaled(player, ox + (px - bx) * CELL, oy + (py - by) * CELL, 512, 0)
 
-  rect(0, 0, 128, BAR, 0)
+  rect(0, 0, 240, BAR, 0)
   text("STAGE", 2, 2, 6)
   number(stage, 26, 2, 10)
   text("MOVES", 60, 2, 6)
   number(moves, 86, 2, 10)
   if won == 1 then
-    rect(28, 52, 72, 22, 0)
+    rect(60, 106, 120, 28, 0)
     if stage < STAGES then
-      text("STAGE CLEAR", 32, 56, 11)
+      text("STAGE CLEAR", 88, 112, 11)
     else
-      text("ALL CLEAR", 40, 56, 11)
+      text("ALL CLEAR", 96, 112, 11)
     end
-    text("PRESS A", 46, 64, 7)
+    text("PRESS A", 106, 122, 7)
   end
 
   -- ---- light ---------------------------------------------------------------
@@ -495,7 +507,7 @@ function draw()
     for x = 0, bw - 1 do
       local t = mget(bx + x, by + y)
       if t == wall or t == box or t == boxt or t == void then
-        shadow_rect(ox + x * 8, oy + y * 8, 8, 8)
+        shadow_rect(ox + x * CELL, oy + y * CELL, CELL, CELL)
       end
     end
   end
@@ -507,17 +519,17 @@ function draw()
     for x = 0, bw - 1 do
       local t = mget(bx + x, by + y)
       if t == target then
-        light(ox + x * 8 + 4, oy + y * 8 + 4, 11, 30, 15, 4)
+        light(ox + x * CELL + 8, oy + y * CELL + 8, 20, 30, 15, 4)
       elseif t == boxt then
-        light(ox + x * 8 + 4, oy + y * 8 + 4, 12, 5, 28, 14)
+        light(ox + x * CELL + 8, oy + y * CELL + 8, 22, 5, 28, 14)
       end
     end
   end
 
-  light(ox + (px - bx) * 8 + 4, oy + (py - by) * 8 + 4, 34, 30, 25, 13)
+  light(ox + (px - bx) * CELL + 8, oy + (py - by) * CELL + 8, 60, 30, 25, 13)
 
-  light_rect(0, 0, 128, BAR, 64, 64, 64)
-  if won == 1 then light_rect(28, 52, 72, 22, 64, 64, 64) end
+  light_rect(0, 0, 240, BAR, 64, 64, 64)
+  if won == 1 then light_rect(60, 106, 120, 28, 64, 64, 64) end
 
   signal(stage_now, stage)
   signal(moves_now, moves)

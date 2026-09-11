@@ -13,7 +13,7 @@ record P { x, y }
 local p: P
 
 function init()
-  p.x = 60  p.y = 60
+  p.x = 119  p.y = 119
 end
 
 function update()

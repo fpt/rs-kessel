@@ -21,59 +21,78 @@
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
 //! | 0xd | touch   | 0 slot (write) / count (read) · 1 x · 2 y · 3 state (bit0 down, bit1 pressed, bit2 released) · 4 swipe · 5 dx · 6 dy · 7 frames held |
 
-/// Screen edge length for [`VideoMode::Classic128`].
-pub const CLASSIC_DIM: usize = 128;
-/// Screen edge length for [`VideoMode::Extended240`].
-pub const EXTENDED_DIM: usize = 240;
+/// The short side of every screen: 240 px.
+pub const SHORT_SIDE: usize = 240;
+/// The long side of the two rectangular screens: 320 px.
+pub const LONG_SIDE: usize = 320;
 
 /// The screen a ROM asks for.
 ///
-/// Both modes are the *same machine*: an 8-bit palette-index framebuffer, one
-/// 256-entry palette, the same drawing ports, the same 4bpp sprite sheet. The
-/// only difference is how many pixels there are. Keeping it that way is the
-/// whole point — a second mode that also changed the colour model would double
-/// the blitter, the PNG path, and every host's upload code for no gain.
+/// Three screens, and **only the size differs**: an 8-bit palette-index
+/// framebuffer, one 256-entry palette, the same drawing ports, the same 4bpp
+/// sprite sheet. A mode that also changed the colour model would double the
+/// blitter, the PNG path, and every host's upload code for no gain.
 ///
-/// The screen stays square in both. That is what lets every host treat the
-/// framebuffer as one number (`dim`) rather than a width and a height it has to
-/// keep in agreement.
+/// The short side is 240 on all three, so a sprite, a font and a swipe are the
+/// same fraction of the screen whichever a game picks. `Portrait320` is the
+/// phone held upright; `Landscape320` is the same screen turned on its side.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum VideoMode {
-    /// 128×128 — the original console. What a ROM gets if it asks for nothing.
+    /// 240×240 — what a ROM gets if it asks for nothing.
     #[default]
-    Classic128,
-    /// 240×240 — room for a HUD beside the play field.
-    Extended240,
+    Square240,
+    /// 240 wide × 320 tall.
+    Portrait320,
+    /// 320 wide × 240 tall.
+    Landscape320,
 }
 
 impl VideoMode {
-    /// Screen edge length in pixels.
-    pub fn dim(self) -> usize {
+    /// `(width, height)` in pixels.
+    pub fn size(self) -> (usize, usize) {
         match self {
-            VideoMode::Classic128 => CLASSIC_DIM,
-            VideoMode::Extended240 => EXTENDED_DIM,
+            VideoMode::Square240 => (SHORT_SIDE, SHORT_SIDE),
+            VideoMode::Portrait320 => (SHORT_SIDE, LONG_SIDE),
+            VideoMode::Landscape320 => (LONG_SIDE, SHORT_SIDE),
         }
+    }
+
+    pub fn width(self) -> usize {
+        self.size().0
+    }
+
+    pub fn height(self) -> usize {
+        self.size().1
     }
 
     /// Total framebuffer cells (one palette index each).
     pub fn pixels(self) -> usize {
-        self.dim() * self.dim()
+        self.width() * self.height()
     }
 
     /// Parse a mode name as written in a `screen { … }` block. Case-insensitive
-    /// so `Extended240` and `extended240` both work.
+    /// so `Square240` and `square240` both work; `240x320` and `320x240` are
+    /// accepted as the plain spelling of the same thing.
+    ///
+    /// `Extended240` was the name of the 240×240 screen when a 128×128 one
+    /// still existed. It stays accepted so the corpus written against it keeps
+    /// compiling while it is moved over.
     pub fn from_name(name: &str) -> Option<VideoMode> {
         match name.to_ascii_lowercase().as_str() {
-            "classic128" | "classic" | "128" => Some(VideoMode::Classic128),
-            "extended240" | "extended" | "240" => Some(VideoMode::Extended240),
+            "square240" | "square" | "240" | "240x240" | "extended240" => {
+                Some(VideoMode::Square240)
+            }
+            "portrait320" | "portrait" | "240x320" => Some(VideoMode::Portrait320),
+            "landscape320" | "landscape" | "320x240" => Some(VideoMode::Landscape320),
             _ => None,
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            VideoMode::Classic128 => "Classic128",
-            VideoMode::Extended240 => "Extended240",
+            VideoMode::Square240 => "Square240",
+            VideoMode::Portrait320 => "Portrait320",
+            VideoMode::Landscape320 => "Landscape320",
         }
     }
 }
@@ -143,12 +162,13 @@ struct Gesture {
 }
 
 /// How far a finger must travel to count as a swipe, as a fraction of the
-/// screen: `dim / SWIPE_DIVISOR`, so 16 px on Classic128 and 30 on
-/// Extended240.
+/// screen's **short** side: `min(width, height) / SWIPE_DIVISOR`, so 30 px on
+/// every screen this console has.
 ///
-/// Screen-relative rather than a fixed pixel count because the two screens are
-/// the same physical size — a fixed count would make the gesture feel shorter on
-/// the denser one. Android reaches the same place from the other direction with
+/// Screen-relative rather than a fixed pixel count because the screens are the
+/// same physical size — a fixed count would make the gesture feel shorter on a
+/// denser one. The short side rather than the long one so that turning a
+/// 240×320 screen on its side does not change how far a swipe is. Android reaches the same place from the other direction with
 /// `ViewConfiguration.getScaledTouchSlop`, which is in dp precisely so it means
 /// one physical distance.
 const SWIPE_DIVISOR: usize = 8;
@@ -432,11 +452,12 @@ const MAX_LIGHT_RADIUS_SCREENS: i32 = 4;
 /// All device-side state. Cloned wholesale for snapshots.
 #[derive(Clone)]
 pub struct Devices {
-    /// `dim * dim` palette indices, one byte each.
+    /// `width * height` palette indices, one byte each, row-major.
     pub framebuffer: Vec<u8>,
-    /// Screen edge length. Fixed for the life of a loaded ROM — see
+    /// Screen size. Fixed for the life of a loaded ROM — see
     /// [`set_mode`](Devices::set_mode).
-    dim: usize,
+    width: usize,
+    height: usize,
     pub palette: [(u8, u8, u8); 256],
     /// Per-pixel light, three bytes (r,g,b) each, `LIGHT_UNIT` = unchanged.
     ///
@@ -585,7 +606,8 @@ impl Devices {
     pub fn with_mode(mode: VideoMode) -> Self {
         Devices {
             framebuffer: vec![0u8; mode.pixels()],
-            dim: mode.dim(),
+            width: mode.width(),
+            height: mode.height(),
             palette: DEFAULT_PALETTE,
             // Not allocated until a ROM lights something: an unlit game must
             // not pay 169 KiB and a per-pixel multiply for a feature it never
@@ -733,7 +755,7 @@ impl Devices {
     /// host-side recognizer would make one recorded frame mean different things
     /// depending on who replayed it.
     fn track_gestures(&mut self) {
-        let threshold = (self.dim / SWIPE_DIVISOR) as i32;
+        let threshold = (self.width.min(self.height) / SWIPE_DIVISOR) as i32;
         for (slot, g) in self.gestures.iter_mut().enumerate() {
             let now = self.touches[slot];
             let was = self.prev_touch_down[slot];
@@ -1124,14 +1146,24 @@ impl Devices {
         self.halt_requested = false;
     }
 
-    /// Screen edge length in pixels.
-    pub fn dim(&self) -> usize {
-        self.dim
+    /// Screen width in pixels — also the framebuffer's row stride.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Screen height in pixels.
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// `(width, height)` in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
 
     /// Total framebuffer cells.
     pub fn pixels(&self) -> usize {
-        self.dim * self.dim
+        self.width * self.height
     }
 
     /// Switch resolution, resizing and clearing the framebuffer.
@@ -1143,9 +1175,10 @@ impl Devices {
     /// previous ROM's pixels reinterpreted at the new stride, which is exactly
     /// the plausible-but-wrong picture that is hard to diagnose.
     pub fn set_mode(&mut self, mode: VideoMode) {
-        self.dim = mode.dim();
+        self.width = mode.width();
+        self.height = mode.height();
         self.framebuffer = vec![0u8; mode.pixels()];
-        // The light layer is sized off `dim` too, so it has to be dropped here
+        // The light layer is sized off the screen too, so it has to be dropped here
         // or the next ROM reads the previous one's light at the new stride —
         // the plausible-but-wrong picture this clear exists to prevent, only
         // smeared diagonally.
@@ -1209,14 +1242,14 @@ impl Devices {
             return;
         }
         self.enable_light();
-        let dim = self.dim as i32;
+        let (sw, sh) = (self.width as i32, self.height as i32);
         let (x, y) = (x as i16 as i32, y as i16 as i32);
         let (x, y) = (x - self.cam_x as i32, y - self.cam_y as i32);
         let (x0, y0) = (x.max(0), y.max(0));
-        let x1 = (x + w as i32 - 1).min(dim - 1);
-        let y1 = (y + h as i32 - 1).min(dim - 1);
+        let x1 = (x + w as i32 - 1).min(sw - 1);
+        let y1 = (y + h as i32 - 1).min(sh - 1);
         for py in y0..=y1 {
-            let row = py as usize * self.dim;
+            let row = py as usize * self.width;
             for px in x0..=x1 {
                 self.shadow[row + px as usize] = 1;
             }
@@ -1244,16 +1277,16 @@ impl Devices {
             return;
         }
         self.enable_light();
-        let dim = self.dim as i32;
+        let (sw, sh) = (self.width as i32, self.height as i32);
         // Signed on both axes, like `rect` — the box it mirrors.
         let (x, y) = (x as i16 as i32, y as i16 as i32);
         let (x, y) = (x - self.cam_x as i32, y - self.cam_y as i32);
         let (x0, y0) = (x.max(0), y.max(0));
-        let x1 = (x + w as i32 - 1).min(dim - 1);
-        let y1 = (y + h as i32 - 1).min(dim - 1);
+        let x1 = (x + w as i32 - 1).min(sw - 1);
+        let y1 = (y + h as i32 - 1).min(sh - 1);
         let fill = [self.lr, self.lg, self.lb];
         for py in y0..=y1 {
-            let row = py as usize * self.dim;
+            let row = py as usize * self.width;
             for px in x0..=x1 {
                 let i = (row + px as usize) * 3;
                 self.light[i..i + 3].copy_from_slice(&fill);
@@ -1273,19 +1306,20 @@ impl Devices {
     /// **add** and saturate, which is what makes two torches overlap brighter
     /// and a red light beside a blue one read as magenta between them.
     fn draw_light(&mut self, x: u16, y: u16, radius: u16) {
-        let rad = (radius as i32).min(self.dim as i32 * MAX_LIGHT_RADIUS_SCREENS);
+        let rad =
+            (radius as i32).min(self.width.max(self.height) as i32 * MAX_LIGHT_RADIUS_SCREENS);
         if rad <= 0 {
             return;
         }
         self.enable_light();
-        let dim = self.dim as i32;
+        let (w, h) = (self.width as i32, self.height as i32);
         // Signed, so a lamp just off the left edge still spills onto the
         // screen — the same rule as the spans and the box.
         let cx = x as i16 as i32 - self.cam_x as i32;
         let cy = y as i16 as i32 - self.cam_y as i32;
         let r2 = rad * rad;
-        let (y0, y1) = ((cy - rad).max(0), (cy + rad).min(dim - 1));
-        let (x0, x1) = ((cx - rad).max(0), (cx + rad).min(dim - 1));
+        let (y0, y1) = ((cy - rad).max(0), (cy + rad).min(h - 1));
+        let (x0, x1) = ((cx - rad).max(0), (cx + rad).min(w - 1));
         let tint = [self.lr as i32, self.lg as i32, self.lb as i32];
         let vis = self
             .occluded
@@ -1294,7 +1328,7 @@ impl Devices {
         for py in y0..=y1 {
             let dy = py - cy;
             let dy2 = dy * dy;
-            let row = py as usize * self.dim;
+            let row = py as usize * self.width;
             for px in x0..=x1 {
                 let dx = px - cx;
                 let d2 = dx * dx + dy2;
@@ -1378,7 +1412,7 @@ impl Devices {
         let solid = |px: i32, py: i32| {
             (x0..=x1).contains(&px)
                 && (y0..=y1).contains(&py)
-                && self.shadow[py as usize * self.dim + px as usize] != 0
+                && self.shadow[py as usize * self.width + px as usize] != 0
         };
         for &sx in &[1i32, -1] {
             for &sy in &[1i32, -1] {
@@ -1437,9 +1471,9 @@ impl Devices {
     fn put_pixel(&mut self, x: u16, y: u16, color: u8) {
         let sx = x as i32 - self.cam_x as i32;
         let sy = y as i32 - self.cam_y as i32;
-        let dim = self.dim as i32;
-        if (0..dim).contains(&sx) && (0..dim).contains(&sy) {
-            self.framebuffer[sy as usize * self.dim + sx as usize] = color;
+        let (w, h) = (self.width as i32, self.height as i32);
+        if (0..w).contains(&sx) && (0..h).contains(&sy) {
+            self.framebuffer[sy as usize * self.width + sx as usize] = color;
         }
     }
 
@@ -1476,7 +1510,7 @@ impl Devices {
     /// cheap enough to draw a full pseudo-3D road one row at a time.
     fn draw_hline(&mut self, xa: u16, xb: u16, y: u16, color: u8) {
         let sy = y as i32 - self.cam_y as i32;
-        if !(0..self.dim as i32).contains(&sy) {
+        if !(0..self.height as i32).contains(&sy) {
             return;
         }
         // Interpret the endpoints as signed, so a span whose left edge runs off
@@ -1485,9 +1519,9 @@ impl Devices {
         let (xa, xb) = (xa as i16 as i32, xb as i16 as i32);
         let (lo, hi) = if xa <= xb { (xa, xb) } else { (xb, xa) };
         let sxa = (lo - self.cam_x as i32).max(0);
-        let sxb = (hi - self.cam_x as i32).min(self.dim as i32 - 1);
+        let sxb = (hi - self.cam_x as i32).min(self.width as i32 - 1);
         let c = color;
-        let row = sy as usize * self.dim;
+        let row = sy as usize * self.width;
         let mut sx = sxa;
         while sx <= sxb {
             self.framebuffer[row + sx as usize] = c;
@@ -1503,17 +1537,17 @@ impl Devices {
     /// tilted horizon does the moment the tilt lifts one end above row 0.
     fn draw_vline(&mut self, ya: u16, yb: u16, x: u16, color: u8) {
         let sx = x as i32 - self.cam_x as i32;
-        if !(0..self.dim as i32).contains(&sx) {
+        if !(0..self.width as i32).contains(&sx) {
             return;
         }
         let (ya, yb) = (ya as i16 as i32, yb as i16 as i32);
         let (lo, hi) = if ya <= yb { (ya, yb) } else { (yb, ya) };
         let sya = (lo - self.cam_y as i32).max(0);
-        let syb = (hi - self.cam_y as i32).min(self.dim as i32 - 1);
+        let syb = (hi - self.cam_y as i32).min(self.height as i32 - 1);
         let c = color;
         let mut sy = sya;
         while sy <= syb {
-            self.framebuffer[sy as usize * self.dim + sx as usize] = c;
+            self.framebuffer[sy as usize * self.width + sx as usize] = c;
             sy += 1;
         }
     }
@@ -1545,12 +1579,12 @@ impl Devices {
         let (x, y) = (x as i16 as i32, y as i16 as i32);
         let (w, h) = (w as i32, h as i32);
         let x0 = (x - self.cam_x as i32).max(0);
-        let x1 = (x + w - 1 - self.cam_x as i32).min(self.dim as i32 - 1);
+        let x1 = (x + w - 1 - self.cam_x as i32).min(self.width as i32 - 1);
         let y0 = (y - self.cam_y as i32).max(0);
-        let y1 = (y + h - 1 - self.cam_y as i32).min(self.dim as i32 - 1);
+        let y1 = (y + h - 1 - self.cam_y as i32).min(self.height as i32 - 1);
         let mut sy = y0;
         while sy <= y1 {
-            let row = sy as usize * self.dim;
+            let row = sy as usize * self.width;
             let mut sx = x0;
             while sx <= x1 {
                 self.framebuffer[row + sx as usize] = color;
@@ -1570,7 +1604,8 @@ impl Devices {
         let flip_x = self.sprite_flags & 0x01 != 0;
         let flip_y = self.sprite_flags & 0x02 != 0;
         // Destination side length in px = 8 * scale / 256, at least 1.
-        let dst = ((8u32 * self.scale_fp as u32 / 256).max(1)).min(self.dim as u32) as u16;
+        let dst = ((8u32 * self.scale_fp as u32 / 256).max(1))
+            .min(self.width.max(self.height) as u32) as u16;
         for dy in 0..dst {
             let src_row0 = (dy as u32 * 8 / dst as u32) as u16; // 0..7
             let src_row = if flip_y { 7 - src_row0 } else { src_row0 };
@@ -1611,7 +1646,7 @@ impl Devices {
     }
 
     /// The same expansion, written into a caller-owned buffer. Returns false if
-    /// `dst` is smaller than `dim * dim * 4`.
+    /// `dst` is smaller than `width * height * 4`.
     ///
     /// This exists for hosts that blit every frame at 60 Hz — a mobile app
     /// filling a direct `ByteBuffer`, say. Handing them the allocating variant
@@ -1656,7 +1691,7 @@ mod tests {
     use super::*;
 
     /// Every test here runs the default screen.
-    const CLASSIC_PIXELS: usize = CLASSIC_DIM * CLASSIC_DIM;
+    const CLASSIC_PIXELS: usize = SHORT_SIDE * SHORT_SIDE;
 
     #[test]
     fn pixel_and_cls() {
@@ -1666,7 +1701,7 @@ mod tests {
         d.write(0x11, 10, &mem); // x = 10
         d.write(0x12, 20, &mem); // y = 20
         d.write(0x14, 0, &mem); // pixel
-        assert_eq!(d.framebuffer[20 * CLASSIC_DIM + 10], 5);
+        assert_eq!(d.framebuffer[20 * SHORT_SIDE + 10], 5);
         d.write(0x16, 3, &mem); // cls color 3
         assert!(d.framebuffer.iter().all(|&p| p == 3));
     }
@@ -1709,7 +1744,7 @@ mod tests {
         d.write(0x11, 12, &mem);
         d.write(0x12, 7, &mem);
         d.write(0x14, 0, &mem); // pixel
-        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 2], 6);
+        assert_eq!(d.framebuffer[2 * SHORT_SIDE + 2], 6);
         // World (0,0) -> screen (-10,-5) -> clipped.
         d.write(0x11, 0, &mem);
         d.write(0x12, 0, &mem);
@@ -1751,7 +1786,8 @@ mod tests {
         }
         d.write(0x1b, 0, &mem); // tileset base
 
-        let corner = |d: &Devices, cx: usize, cy: usize| d.framebuffer[cy * 8 * 128 + cx * 8];
+        let corner =
+            |d: &Devices, cx: usize, cy: usize| d.framebuffer[cy * 8 * SHORT_SIDE + cx * 8];
 
         // Unflipped: ids 1,2 / 3,4 across the 2×2 block.
         d.write(0x19, 0x00, &mem);
@@ -1784,9 +1820,13 @@ mod tests {
         d.write(0x11, 0, &mem);
         d.write(0x12, 0, &mem);
         d.write(0xa3, 0, &mem);
-        assert_eq!(d.framebuffer[7 * 128], 3, "tile 3 belongs in the top cell");
         assert_eq!(
-            d.framebuffer[15 * 128],
+            d.framebuffer[7 * SHORT_SIDE],
+            3,
+            "tile 3 belongs in the top cell"
+        );
+        assert_eq!(
+            d.framebuffer[15 * SHORT_SIDE],
             1,
             "tile 1 belongs in the bottom cell"
         );
@@ -1802,7 +1842,7 @@ mod tests {
         d.write(0x11, 3, &mem); // x = 3
         d.write(0x12, 4, &mem); // y = 4
         d.write(0x1a, 1, &mem); // blit id 1
-        assert_eq!(d.framebuffer[4 * CLASSIC_DIM + 3], 5);
+        assert_eq!(d.framebuffer[4 * SHORT_SIDE + 3], 5);
     }
 
     #[test]
@@ -1828,7 +1868,7 @@ mod tests {
         d.write(0x77, 2, &mem); // th
         d.write(0x78, 0, &mem); // draw
         assert_eq!(d.framebuffer[8], 5); // cell (1,0) = tile 1 -> screen (8,0)
-        assert_eq!(d.framebuffer[8 * CLASSIC_DIM], 5); // cell (0,1) -> screen (0,8)
+        assert_eq!(d.framebuffer[8 * SHORT_SIDE], 5); // cell (0,1) -> screen (0,8)
         assert_eq!(d.framebuffer[0], 0); // cell (0,0) = tile 0 (blank)
     }
 
@@ -1955,21 +1995,35 @@ mod tests {
             .collect()
     }
 
-    /// The threshold is a fraction of the screen, so the *same* drag is a swipe
-    /// on Classic and merely a drag on Extended. That is the point: the screens
-    /// are the same physical size, so a gesture should be the same fraction of
-    /// it rather than the same pixel count.
+    /// The threshold is a fraction of the screen's *short* side, so the same
+    /// drag is the same gesture on every screen — including the rectangular
+    /// ones, where the long side would otherwise make a horizontal swipe
+    /// longer than a vertical one.
     #[test]
-    fn the_swipe_threshold_scales_with_the_screen() {
-        assert_eq!(CLASSIC_DIM / SWIPE_DIVISOR, 16);
-        assert_eq!(EXTENDED_DIM / SWIPE_DIVISOR, 30);
+    fn the_swipe_threshold_follows_the_short_side_on_every_screen() {
+        assert_eq!(SHORT_SIDE / SWIPE_DIVISOR, 30);
 
-        // 20 px right: past Classic's 16, short of Extended's 30.
-        let steps = [(40, 40), (60, 40)];
-        let mut classic = Devices::new();
-        assert_eq!(drag_path(&mut classic, &steps)[1].0, BTN_RIGHT as u16);
-        let mut extended = Devices::with_mode(VideoMode::Extended240);
-        assert_eq!(drag_path(&mut extended, &steps)[1].0, 0);
+        // 20 px right is a drag; 40 px is a swipe — on all three screens.
+        let short = [(40, 40), (60, 40)];
+        let long = [(40, 40), (80, 40)];
+        for mode in [
+            VideoMode::Square240,
+            VideoMode::Portrait320,
+            VideoMode::Landscape320,
+        ] {
+            let mut d = Devices::with_mode(mode);
+            assert_eq!(
+                drag_path(&mut d, &short)[1].0,
+                0,
+                "{mode:?}: 20 px is not a swipe"
+            );
+            let mut d = Devices::with_mode(mode);
+            assert_eq!(
+                drag_path(&mut d, &long)[1].0,
+                BTN_RIGHT as u16,
+                "{mode:?}: 40 px is a swipe"
+            );
+        }
     }
 
     /// A swipe is recognized *mid-gesture*, the frame the finger passes the
@@ -1982,10 +2036,10 @@ mod tests {
         let seen = drag_path(
             &mut d,
             &[
-                (60, 60), // press: no travel yet
-                (70, 60), // 10 px — under the 16 px threshold
-                (80, 60), // 20 px — recognized here
-                (95, 60), // still dragging: one press is one swipe
+                (60, 60),  // press: no travel yet
+                (80, 60),  // 20 px — under the 30 px threshold
+                (95, 60),  // 35 px — recognized here
+                (110, 60), // still dragging: one press is one swipe
             ],
         );
         assert_eq!(seen[0].0, 0, "a landing finger cannot have swiped");
@@ -2208,7 +2262,7 @@ mod tests {
         d.write(0x11, 5, &mem);
         d.write(0x12, 6, &mem);
         d.write(0x14, 0, &mem); // pixel
-        assert_eq!(d.framebuffer[6 * CLASSIC_DIM + 5], 200);
+        assert_eq!(d.framebuffer[6 * SHORT_SIDE + 5], 200);
 
         d.write(0x16, 231, &mem); // cls to a cube colour
         assert!(d.framebuffer.iter().all(|&p| p == 231));
@@ -2252,43 +2306,88 @@ mod tests {
     }
 
     #[test]
-    fn extended_mode_resizes_and_clears_the_framebuffer() {
+    fn a_mode_switch_resizes_and_clears_the_framebuffer() {
         let mut d = Devices::new();
         let mem = [0u8; 8];
-        d.write(0x16, 7, &mem); // dirty the classic framebuffer
-        assert_eq!(d.dim(), CLASSIC_DIM);
+        d.write(0x16, 7, &mem); // dirty the square framebuffer
+        assert_eq!(d.size(), (SHORT_SIDE, SHORT_SIDE));
 
-        d.set_mode(VideoMode::Extended240);
-        assert_eq!(d.dim(), EXTENDED_DIM);
-        assert_eq!(d.framebuffer.len(), EXTENDED_DIM * EXTENDED_DIM);
+        d.set_mode(VideoMode::Landscape320);
+        assert_eq!(d.size(), (LONG_SIDE, SHORT_SIDE));
+        assert_eq!(d.framebuffer.len(), LONG_SIDE * SHORT_SIDE);
         assert!(
             d.framebuffer.iter().all(|&p| p == 0),
             "stale pixels would be re-read at the new stride"
         );
     }
 
-    /// Clipping must follow the *current* screen, not a compile-time constant.
-    /// x=200 is off-screen on Classic and on-screen on Extended.
+    /// Clipping must follow the *current* screen on each axis separately, not
+    /// a compile-time constant. x=300 is off-screen on the square and the
+    /// portrait screen, on-screen on the landscape one; y=300 the reverse.
     #[test]
-    fn clipping_follows_the_active_mode() {
+    fn clipping_follows_the_active_mode_per_axis() {
         let mem = [0u8; 8];
-        let mut d = Devices::new();
-        d.write(0x13, 5, &mem);
-        d.write(0x11, 200, &mem);
-        d.write(0x12, 10, &mem);
-        d.write(0x14, 0, &mem);
-        assert!(d.framebuffer.iter().all(|&p| p == 0), "clipped on Classic");
+        let pset = |d: &mut Devices, x: u16, y: u16| {
+            d.write(0x13, 5, &mem);
+            d.write(0x11, x, &mem);
+            d.write(0x12, y, &mem);
+            d.write(0x14, 0, &mem);
+        };
 
-        let mut d = Devices::with_mode(VideoMode::Extended240);
-        d.write(0x13, 5, &mem);
-        d.write(0x11, 200, &mem);
-        d.write(0x12, 10, &mem);
-        d.write(0x14, 0, &mem);
-        assert_eq!(
-            d.framebuffer[10 * EXTENDED_DIM + 200],
-            5,
-            "drawn on Extended"
+        let mut d = Devices::new();
+        pset(&mut d, 300, 10);
+        pset(&mut d, 10, 300);
+        assert!(
+            d.framebuffer.iter().all(|&p| p == 0),
+            "clipped on the square"
         );
+
+        let mut d = Devices::with_mode(VideoMode::Landscape320);
+        pset(&mut d, 300, 10);
+        pset(&mut d, 10, 300);
+        assert_eq!(
+            d.framebuffer[10 * LONG_SIDE + 300],
+            5,
+            "x=300 drawn on landscape"
+        );
+        assert_eq!(
+            d.framebuffer.iter().filter(|&&p| p == 5).count(),
+            1,
+            "y=300 clipped"
+        );
+
+        let mut d = Devices::with_mode(VideoMode::Portrait320);
+        pset(&mut d, 300, 10);
+        pset(&mut d, 10, 300);
+        assert_eq!(
+            d.framebuffer[300 * SHORT_SIDE + 10],
+            5,
+            "y=300 drawn on portrait"
+        );
+        assert_eq!(
+            d.framebuffer.iter().filter(|&&p| p == 5).count(),
+            1,
+            "x=300 clipped"
+        );
+    }
+
+    /// A rectangular screen's stride is its *width*. Getting that wrong draws a
+    /// sheared picture rather than crashing, so pin the row stride directly.
+    #[test]
+    fn the_stride_is_the_width_on_a_rectangular_screen() {
+        let mem = [0u8; 8];
+        let mut d = Devices::with_mode(VideoMode::Landscape320);
+        d.write(0x13, 9, &mem);
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 1, &mem);
+        d.write(0x14, 0, &mem);
+        assert_eq!(d.framebuffer[LONG_SIDE], 9, "(0,1) is one full row in");
+        assert_eq!(d.framebuffer[SHORT_SIDE], 0, "not one short side in");
+
+        let rgba = d.framebuffer_rgba();
+        assert_eq!(rgba.len(), LONG_SIDE * SHORT_SIDE * 4);
+        let (r, g, b) = d.palette[9];
+        assert_eq!(&rgba[LONG_SIDE * 4..LONG_SIDE * 4 + 3], &[r, g, b]);
     }
 
     #[test]
@@ -2390,10 +2489,10 @@ mod tests {
         d.write(0x12, 3, &mem); // sy = 3
         d.write(0x11, 10, &mem); // sx = 10 (x1)
         d.write(0x1d, 14, &mem); // x2 = 14 -> draw span 10..=14 at row 3
-        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 9], 0);
-        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 10], 5);
-        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 14], 5);
-        assert_eq!(d.framebuffer[3 * CLASSIC_DIM + 15], 0);
+        assert_eq!(d.framebuffer[3 * SHORT_SIDE + 9], 0);
+        assert_eq!(d.framebuffer[3 * SHORT_SIDE + 10], 5);
+        assert_eq!(d.framebuffer[3 * SHORT_SIDE + 14], 5);
+        assert_eq!(d.framebuffer[3 * SHORT_SIDE + 15], 0);
     }
 
     #[test]
@@ -2404,10 +2503,10 @@ mod tests {
         d.write(0x11, 3, &mem); // sx = 3
         d.write(0x12, 10, &mem); // sy = 10 (y1)
         d.write(0x1f, 14, &mem); // y2 = 14 -> draw column 3, rows 10..=14
-        assert_eq!(d.framebuffer[9 * CLASSIC_DIM + 3], 0);
-        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 3], 5);
-        assert_eq!(d.framebuffer[14 * CLASSIC_DIM + 3], 5);
-        assert_eq!(d.framebuffer[15 * CLASSIC_DIM + 3], 0);
+        assert_eq!(d.framebuffer[9 * SHORT_SIDE + 3], 0);
+        assert_eq!(d.framebuffer[10 * SHORT_SIDE + 3], 5);
+        assert_eq!(d.framebuffer[14 * SHORT_SIDE + 3], 5);
+        assert_eq!(d.framebuffer[15 * SHORT_SIDE + 3], 0);
     }
 
     /// The reason the endpoints are read signed. A tilted horizon lifts one end
@@ -2423,8 +2522,8 @@ mod tests {
         d.write(0x12, 0xFFEC, &mem); // y1 = -20 as u16
         d.write(0x1f, 30, &mem); // y2 = 30
         assert_eq!(d.framebuffer[2], 9, "top edge drawn");
-        assert_eq!(d.framebuffer[30 * CLASSIC_DIM + 2], 9, "bottom end drawn");
-        assert_eq!(d.framebuffer[31 * CLASSIC_DIM + 2], 0);
+        assert_eq!(d.framebuffer[30 * SHORT_SIDE + 2], 9, "bottom end drawn");
+        assert_eq!(d.framebuffer[31 * SHORT_SIDE + 2], 0);
     }
 
     #[test]
@@ -2436,17 +2535,17 @@ mod tests {
         d.write(0xe1, 5, &mem); // w = 5
         d.write(0x12, 10, &mem); // y = 10
         d.write(0xe2, 20, &mem); // x = 20 -> draw 20..=24 x 10..=12
-        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 19], 0, "left of the box");
-        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 20], 4);
-        assert_eq!(d.framebuffer[10 * CLASSIC_DIM + 24], 4);
+        assert_eq!(d.framebuffer[10 * SHORT_SIDE + 19], 0, "left of the box");
+        assert_eq!(d.framebuffer[10 * SHORT_SIDE + 20], 4);
+        assert_eq!(d.framebuffer[10 * SHORT_SIDE + 24], 4);
         assert_eq!(
-            d.framebuffer[10 * CLASSIC_DIM + 25],
+            d.framebuffer[10 * SHORT_SIDE + 25],
             0,
             "w is a size, not x2"
         );
-        assert_eq!(d.framebuffer[12 * CLASSIC_DIM + 24], 4, "last row");
+        assert_eq!(d.framebuffer[12 * SHORT_SIDE + 24], 4, "last row");
         assert_eq!(
-            d.framebuffer[13 * CLASSIC_DIM + 20],
+            d.framebuffer[13 * SHORT_SIDE + 20],
             0,
             "h is a size, not y2"
         );
@@ -2492,9 +2591,9 @@ mod tests {
         d.write(0x12, 0xFFFA, &mem); // y = -6
         d.write(0xe2, 0xFFFA, &mem); // x = -6 -> only the 6x6 at the origin shows
         assert_eq!(d.framebuffer[0], 6, "the visible corner");
-        assert_eq!(d.framebuffer[5 * CLASSIC_DIM + 5], 6, "last visible pixel");
-        assert_eq!(d.framebuffer[6 * CLASSIC_DIM + 5], 0, "one row past");
-        assert_eq!(d.framebuffer[5 * CLASSIC_DIM + 6], 0, "one column past");
+        assert_eq!(d.framebuffer[5 * SHORT_SIDE + 5], 6, "last visible pixel");
+        assert_eq!(d.framebuffer[6 * SHORT_SIDE + 5], 0, "one row past");
+        assert_eq!(d.framebuffer[5 * SHORT_SIDE + 6], 0, "one column past");
     }
 
     /// A box far wider than the screen clips instead of panicking on the
@@ -2524,9 +2623,9 @@ mod tests {
         d.write(0x12, 2, &mem); // row 2
         d.write(0x11, 0xFFEC, &mem); // x1 = -20 as u16
         d.write(0x1d, 30, &mem); // x2 = 30
-        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 0], 9, "left edge drawn");
-        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 30], 9, "right end drawn");
-        assert_eq!(d.framebuffer[2 * CLASSIC_DIM + 31], 0);
+        assert_eq!(d.framebuffer[2 * SHORT_SIDE + 0], 9, "left edge drawn");
+        assert_eq!(d.framebuffer[2 * SHORT_SIDE + 30], 9, "right end drawn");
+        assert_eq!(d.framebuffer[2 * SHORT_SIDE + 31], 0);
     }
 
     // ---- lighting ----
@@ -2541,7 +2640,7 @@ mod tests {
 
     fn px(d: &Devices, x: usize, y: usize) -> [u8; 3] {
         let rgba = d.framebuffer_rgba();
-        let i = (y * d.dim() + x) * 4;
+        let i = (y * d.width() + x) * 4;
         [rgba[i], rgba[i + 1], rgba[i + 2]]
     }
 
@@ -2864,18 +2963,18 @@ mod tests {
         assert!(px(&d, 100, 30)[0] > dark, "and only where the block is");
     }
 
-    /// The layer is sized off `dim`, so a mode switch has to drop it — the same
-    /// reason the framebuffer is cleared there.
+    /// The layer is sized off the screen, so a mode switch has to drop it — the
+    /// same reason the framebuffer is cleared there.
     #[test]
     fn a_mode_switch_drops_the_light_layer() {
         let mut d = white_screen();
         ambient(&mut d, 4, 4, 4);
         assert!(d.is_lit());
-        d.set_mode(VideoMode::Extended240);
+        d.set_mode(VideoMode::Landscape320);
         assert!(!d.is_lit());
         assert!(d.light.is_empty());
         // And it comes back at the new size, not the old one.
         ambient(&mut d, 4, 4, 4);
-        assert_eq!(d.light.len(), EXTENDED_DIM * EXTENDED_DIM * 3);
+        assert_eq!(d.light.len(), LONG_SIDE * SHORT_SIDE * 3);
     }
 }

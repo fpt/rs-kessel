@@ -18,7 +18,7 @@
 -- On a machine with no touchscreen the mouse is slot 0 and the arrow keys
 -- deflect the stick, so every path here is reachable from a keyboard.
 
-screen { mode = Extended240 }
+screen { mode = Square240 }
 
 controls {
   dpad  = false
