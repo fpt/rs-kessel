@@ -96,7 +96,7 @@ pub struct VmConsole {
     audio_epoch: u64,
     /// The screen each assembled ROM asked for, keyed the same way.
     modes: HashMap<String, VideoMode>,
-    /// The loaded ROM's screen. Drives `screen_dim` and the framebuffer size.
+    /// The loaded ROM's screen. Drives `screen_size` and the framebuffer size.
     active_mode: VideoMode,
     /// Control metadata of the currently loaded ROM (default until a load).
     active_controls: luax::Controls,
@@ -477,7 +477,7 @@ impl VmConsole {
             fb,
             &self.prev_light,
             light,
-            self.vm.devices.dim(),
+            self.vm.devices.width(),
         );
         let fault = match outcome {
             RunOutcome::CapExceeded => Some(format!("frame cycle cap ({}) exceeded", vm::cap())),
@@ -539,10 +539,11 @@ impl VmConsole {
         self.vm.devices.framebuffer_rgba_into(dst)
     }
 
-    /// Screen edge length in pixels (square). Mirrors [`VmPlayer::screen_dim`],
-    /// for hosts that drive a console directly.
-    pub fn screen_dim(&self) -> u32 {
-        self.vm.devices.dim() as u32
+    /// Screen size in pixels, `(width, height)`. Mirrors
+    /// [`VmPlayer::screen_size`], for hosts that drive a console directly.
+    pub fn screen_size(&self) -> (u32, u32) {
+        let (w, h) = self.vm.devices.size();
+        (w as u32, h as u32)
     }
 
     /// The loaded ROM's screen mode.
@@ -553,8 +554,8 @@ impl VmConsole {
     /// Encode the current framebuffer as a base64 PNG.
     pub fn framebuffer_png_base64(&self) -> String {
         let rgba = self.framebuffer_rgba();
-        let dim = self.screen_dim();
-        let png = png::encode_rgba(dim, dim, &rgba);
+        let (w, h) = self.screen_size();
+        let png = png::encode_rgba(w, h, &rgba);
         png::base64_encode(&png)
     }
 
@@ -812,7 +813,7 @@ fn changed_bbox(
     cur: &[u8],
     prev_light: &[u8],
     light: &[u8],
-    dim: usize,
+    width: usize,
 ) -> Option<[u16; 4]> {
     let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
     let mut any = false;
@@ -824,8 +825,8 @@ fn changed_bbox(
         let l = lit && prev_light[i * 3..i * 3 + 3] != light[i * 3..i * 3 + 3];
         if a != b || l {
             any = true;
-            let x = (i % dim) as u16;
-            let y = (i / dim) as u16;
+            let x = (i % width) as u16;
+            let y = (i / width) as u16;
             x0 = x0.min(x);
             y0 = y0.min(y);
             x1 = x1.max(x);

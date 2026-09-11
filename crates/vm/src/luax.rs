@@ -72,7 +72,7 @@ pub struct Compiled {
     pub asm: String,
     pub diagnostics: Vec<Diagnostic>,
     pub controls: Controls,
-    /// The screen the ROM asked for via `screen { … }`; Classic128 by default.
+    /// The screen the ROM asked for via `screen { … }`; Square240 by default.
     pub mode: VideoMode,
     /// Instruments and sound effects declared by `instrument`/`sfx` blocks.
     ///
@@ -464,8 +464,7 @@ impl Includer<'_> {
 }
 
 /// Pull the single `screen { … }` block out of the parsed program. Absent →
-/// [`VideoMode::Classic128`], so a ROM that says nothing gets the console it
-/// always had.
+/// [`VideoMode::Square240`], the default screen.
 fn extract_mode(decls: &[Decl], d: &mut Vec<Diagnostic>) -> VideoMode {
     let mut found: Option<VideoMode> = None;
     for decl in decls {
@@ -1128,7 +1127,7 @@ impl Parser {
     /// host-UI layout metadata. Entries are `key = value` pairs (commas
     /// optional); recognized keys: `dpad` (bool), `a`/`b`/`start`/`select`
     /// (string label), `pause` (a button name). Emits no code.
-    /// `screen { mode = Extended240 }` — which resolution the ROM is authored
+    /// `screen { mode = Landscape320 }` — which resolution the ROM is authored
     /// for. Emits no code; the console reads it when the ROM is loaded, the
     /// same way it reads `controls`.
     ///
@@ -1152,7 +1151,7 @@ impl Parser {
                         None => d.push(err(
                             key_line,
                             format!(
-                                "unknown screen mode '{name}' (expected Classic128 or Extended240)"
+                                "unknown screen mode '{name}' (expected Square240, Portrait320 or Landscape320)"
                             ),
                         )),
                     }
@@ -3919,7 +3918,7 @@ fn fn_has_return(decl: &Decl) -> bool {
 mod tests {
     use super::*;
     use crate::assembler::assemble;
-    use crate::device::{BTN_A, BTN_LEFT, BTN_RIGHT};
+    use crate::device::{BTN_A, BTN_LEFT, BTN_RIGHT, SHORT_SIDE};
     use crate::VmConsole;
     use kessel_audio::AudioEvent;
 
@@ -4441,8 +4440,8 @@ mod tests {
         c.run_frame(0);
         assert_eq!(c.vm.devices.framebuffer[0], 1); // (0,0) id a
         assert_eq!(c.vm.devices.framebuffer[8], 2); // (8,0) id b
-        assert_eq!(c.vm.devices.framebuffer[8 * 128], 3); // (0,8) id c
-        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 4); // (8,8) id d
+        assert_eq!(c.vm.devices.framebuffer[8 * SHORT_SIDE], 3); // (0,8) id c
+        assert_eq!(c.vm.devices.framebuffer[8 * SHORT_SIDE + 8], 4); // (8,8) id d
     }
 
     /// One 16×16 declaration, drawn as itself. Each quadrant is a solid colour, so
@@ -4480,11 +4479,11 @@ mod tests {
         // `base + row*w + col`, or the colours land in the wrong quarters.
         assert_eq!(fb[0], 1, "top-left");
         assert_eq!(fb[15], 2, "top-right");
-        assert_eq!(fb[15 * 128], 3, "bottom-left");
-        assert_eq!(fb[15 * 128 + 15], 4, "bottom-right");
+        assert_eq!(fb[15 * SHORT_SIDE], 3, "bottom-left");
+        assert_eq!(fb[15 * SHORT_SIDE + 15], 4, "bottom-right");
         // ...and the seams are filled, not just the corners.
-        assert_eq!(fb[7 * 128 + 7], 1);
-        assert_eq!(fb[8 * 128 + 8], 4);
+        assert_eq!(fb[7 * SHORT_SIDE + 7], 1);
+        assert_eq!(fb[8 * SHORT_SIDE + 8], 4);
     }
 
     /// A non-square declaration: 8 wide, 16 tall is 1×2 tiles. Rows and row length
@@ -4515,8 +4514,8 @@ mod tests {
         let mut c = load(src);
         c.run_frame(0);
         assert_eq!(c.vm.devices.framebuffer[0], 5);
-        assert_eq!(c.vm.devices.framebuffer[8 * 128], 6);
-        assert_eq!(c.vm.devices.framebuffer[15 * 128], 6);
+        assert_eq!(c.vm.devices.framebuffer[8 * SHORT_SIDE], 6);
+        assert_eq!(c.vm.devices.framebuffer[15 * SHORT_SIDE], 6);
     }
 
     /// Ids come off a tile cursor, so a multi-tile sprite pushes the next
@@ -4555,7 +4554,7 @@ mod tests {
         // panel occupies ids 0..=3, so coin is id 4. Had it been given id 1 — the
         // old declaration-index rule — this pixel would be panel's top-right
         // quadrant instead, and panel itself would draw coin in that corner.
-        assert_eq!(fb[16 * 128], 7, "coin drew the wrong tile");
+        assert_eq!(fb[16 * SHORT_SIDE], 7, "coin drew the wrong tile");
         assert_eq!(fb[15], 2, "panel's top-right quadrant was displaced");
     }
 
@@ -4711,14 +4710,18 @@ mod tests {
         let mut c = load(src);
         c.run_frame(0);
         let fb = &c.vm.devices.framebuffer;
-        assert_eq!(fb[20 * 128 + 9], 0, "left of the box");
-        assert_eq!(fb[20 * 128 + 10], 7, "top-left corner");
-        assert_eq!(fb[20 * 128 + 14], 7, "top-right corner");
-        assert_eq!(fb[20 * 128 + 15], 0, "w is a size, not a second x");
-        assert_eq!(fb[22 * 128 + 14], 7, "bottom-right corner");
-        assert_eq!(fb[23 * 128 + 10], 0, "h is a size, not a second y");
-        assert_eq!(fb[19 * 128 + 10], 0, "above the box");
-        assert_eq!(fb[103 * 128 + 103], 9, "the second box is whole on screen");
+        assert_eq!(fb[20 * SHORT_SIDE + 9], 0, "left of the box");
+        assert_eq!(fb[20 * SHORT_SIDE + 10], 7, "top-left corner");
+        assert_eq!(fb[20 * SHORT_SIDE + 14], 7, "top-right corner");
+        assert_eq!(fb[20 * SHORT_SIDE + 15], 0, "w is a size, not a second x");
+        assert_eq!(fb[22 * SHORT_SIDE + 14], 7, "bottom-right corner");
+        assert_eq!(fb[23 * SHORT_SIDE + 10], 0, "h is a size, not a second y");
+        assert_eq!(fb[19 * SHORT_SIDE + 10], 0, "above the box");
+        assert_eq!(
+            fb[103 * SHORT_SIDE + 103],
+            9,
+            "the second box is whole on screen"
+        );
     }
 
     /// `rect` leaves the stack balanced. It is the only drawing builtin whose
@@ -4743,8 +4746,8 @@ mod tests {
         let obs = c.run_frame(0);
         assert!(obs.fault.is_none(), "faulted: {:?}", obs.fault);
         let fb = &c.vm.devices.framebuffer;
-        assert_eq!(fb[60 * 128 + 60], 8, "the 41st rect still lands");
-        assert_eq!(fb[2 * 128 + 2], 5);
+        assert_eq!(fb[60 * SHORT_SIDE + 60], 8, "the 41st rect still lands");
+        assert_eq!(fb[2 * SHORT_SIDE + 2], 5);
     }
 
     #[test]
@@ -4764,16 +4767,16 @@ mod tests {
         let mut c = load(src);
         c.run_frame(0);
         let fb = &c.vm.devices.framebuffer;
-        assert_eq!(fb[9 * 128 + 5], 0, "above the span untouched");
-        assert_eq!(fb[10 * 128 + 5], 7);
-        assert_eq!(fb[20 * 128 + 5], 7);
-        assert_eq!(fb[21 * 128 + 5], 0, "below the span untouched");
+        assert_eq!(fb[9 * SHORT_SIDE + 5], 0, "above the span untouched");
+        assert_eq!(fb[10 * SHORT_SIDE + 5], 7);
+        assert_eq!(fb[20 * SHORT_SIDE + 5], 7);
+        assert_eq!(fb[21 * SHORT_SIDE + 5], 0, "below the span untouched");
         assert_eq!(
-            fb[25 * 128 + 6],
+            fb[25 * SHORT_SIDE + 6],
             3,
             "reversed endpoints draw the same column"
         );
-        assert_eq!(fb[30 * 128 + 6], 3);
+        assert_eq!(fb[30 * SHORT_SIDE + 6], 3);
     }
 
     #[test]
@@ -4791,12 +4794,12 @@ mod tests {
         let mut c = load(src);
         c.run_frame(0);
         let fb = &c.vm.devices.framebuffer;
-        assert_eq!(fb[5 * 128 + 9], 0, "left of span untouched");
-        assert_eq!(fb[5 * 128 + 10], 7, "span start");
-        assert_eq!(fb[5 * 128 + 20], 7, "span end (inclusive)");
-        assert_eq!(fb[5 * 128 + 21], 0, "right of span untouched");
-        assert_eq!(fb[6 * 128 + 25], 3, "reversed span start");
-        assert_eq!(fb[6 * 128 + 30], 3, "reversed span end");
+        assert_eq!(fb[5 * SHORT_SIDE + 9], 0, "left of span untouched");
+        assert_eq!(fb[5 * SHORT_SIDE + 10], 7, "span start");
+        assert_eq!(fb[5 * SHORT_SIDE + 20], 7, "span end (inclusive)");
+        assert_eq!(fb[5 * SHORT_SIDE + 21], 0, "right of span untouched");
+        assert_eq!(fb[6 * SHORT_SIDE + 25], 3, "reversed span start");
+        assert_eq!(fb[6 * SHORT_SIDE + 30], 3, "reversed span end");
     }
 
     #[test]
@@ -4820,8 +4823,16 @@ mod tests {
         c.run_frame(0);
         let fb = &c.vm.devices.framebuffer;
         assert_eq!(fb[0], 7, "top-left drawn");
-        assert_eq!(fb[15 * 128 + 15], 7, "16x16 block filled at 2x scale");
-        assert_eq!(fb[16 * 128 + 16], 0, "nothing past the scaled bounds");
+        assert_eq!(
+            fb[15 * SHORT_SIDE + 15],
+            7,
+            "16x16 block filled at 2x scale"
+        );
+        assert_eq!(
+            fb[16 * SHORT_SIDE + 16],
+            0,
+            "nothing past the scaled bounds"
+        );
     }
 
     #[test]
@@ -4914,7 +4925,7 @@ mod tests {
         // cell (0,0) tile a=0 -> screen (0,0): top-left pixel 1
         assert_eq!(c.vm.devices.framebuffer[0], 1);
         // cell (1,1) tile a -> screen (8,8): top-left pixel 1
-        assert_eq!(c.vm.devices.framebuffer[8 * 128 + 8], 1);
+        assert_eq!(c.vm.devices.framebuffer[8 * SHORT_SIDE + 8], 1);
     }
 
     #[test]
@@ -5202,8 +5213,8 @@ mod tests {
         assert_eq!(c.vm.devices.framebuffer[0], 7); // (0,0)
         assert_eq!(c.vm.devices.framebuffer[1], 7); // (1,0)
         assert_eq!(c.vm.devices.framebuffer[2], 7); // (2,0)
-        assert_eq!(c.vm.devices.framebuffer[128], 7); // (0,1)
-        assert_eq!(c.vm.devices.framebuffer[129], 0); // (1,1) gap
+        assert_eq!(c.vm.devices.framebuffer[SHORT_SIDE], 7); // (0,1)
+        assert_eq!(c.vm.devices.framebuffer[SHORT_SIDE + 1], 0); // (1,1) gap
     }
 
     #[test]
@@ -5606,7 +5617,7 @@ mod tests {
 #[cfg(test)]
 mod video_tests {
     use super::*;
-    use crate::device::{VideoMode, CLASSIC_DIM, EXTENDED_DIM};
+    use crate::device::{VideoMode, LONG_SIDE, SHORT_SIDE};
     use crate::VmConsole;
 
     fn load(src: &str) -> VmConsole {
@@ -5619,31 +5630,43 @@ mod video_tests {
     }
 
     #[test]
-    fn a_rom_without_a_screen_block_gets_the_classic_console() {
+    fn a_rom_without_a_screen_block_gets_the_square_screen() {
         let c = load("function draw() cls(0) end");
-        assert_eq!(c.video_mode(), VideoMode::Classic128);
-        assert_eq!(c.screen_dim(), CLASSIC_DIM as u32);
+        assert_eq!(c.video_mode(), VideoMode::Square240);
+        assert_eq!(c.screen_size(), (SHORT_SIDE as u32, SHORT_SIDE as u32));
     }
 
     #[test]
-    fn screen_block_selects_the_extended_console() {
+    fn screen_block_selects_a_rectangular_screen() {
+        let c = load("screen { mode = Landscape320 } function draw() cls(0) end");
+        assert_eq!(c.video_mode(), VideoMode::Landscape320);
+        assert_eq!(c.screen_size(), (LONG_SIDE as u32, SHORT_SIDE as u32));
+        assert_eq!(c.framebuffer_rgba().len(), LONG_SIDE * SHORT_SIDE * 4);
+
+        let c = load("screen { mode = Portrait320 } function draw() cls(0) end");
+        assert_eq!(c.video_mode(), VideoMode::Portrait320);
+        assert_eq!(c.screen_size(), (SHORT_SIDE as u32, LONG_SIDE as u32));
+    }
+
+    /// `Extended240` named the 240×240 screen while a 128×128 one existed. The
+    /// corpus was written against it, so it stays a spelling of the square.
+    #[test]
+    fn the_old_extended_name_still_means_the_square_screen() {
         let c = load("screen { mode = Extended240 } function draw() cls(0) end");
-        assert_eq!(c.video_mode(), VideoMode::Extended240);
-        assert_eq!(c.screen_dim(), EXTENDED_DIM as u32);
-        assert_eq!(c.framebuffer_rgba().len(), EXTENDED_DIM * EXTENDED_DIM * 4);
+        assert_eq!(c.video_mode(), VideoMode::Square240);
     }
 
     /// The extra pixels have to be *reachable*, not just allocated — this is
     /// the whole point of the mode.
     #[test]
-    fn extended_mode_can_draw_beyond_the_classic_edge() {
+    fn a_landscape_screen_can_draw_beyond_the_square_edge() {
         let mut c = load(
-            "screen { mode = Extended240 }
-             function draw() cls(0)  pset(200, 200, 7) end",
+            "screen { mode = Landscape320 }
+             function draw() cls(0)  pset(300, 200, 7) end",
         );
         c.run_frame(0);
-        let dim = c.screen_dim() as usize;
-        assert_eq!(c.vm.devices.framebuffer[200 * dim + 200], 7);
+        let (w, _) = c.screen_size();
+        assert_eq!(c.vm.devices.framebuffer[200 * w as usize + 300], 7);
     }
 
     /// A typo must be a diagnostic. Silently falling back to 128 would draw a
@@ -5662,8 +5685,8 @@ mod video_tests {
     #[test]
     fn two_screen_blocks_are_a_diagnostic() {
         let c = compile(
-            "screen { mode = Classic128 }
-             screen { mode = Extended240 }
+            "screen { mode = Square240 }
+             screen { mode = Landscape320 }
              function draw() cls(0) end",
         );
         assert!(!c.ok());
@@ -5696,7 +5719,7 @@ mod video_tests {
         let fb = &c.vm.devices.framebuffer;
         for (i, want) in (0u8..12).enumerate() {
             let (x, y) = (i % 4, i / 4);
-            assert_eq!(fb[y * 128 + x], want, "cell ({x},{y})");
+            assert_eq!(fb[y * SHORT_SIDE + x], want, "cell ({x},{y})");
         }
     }
 
@@ -5813,7 +5836,8 @@ mod video_tests {
              end",
         );
         c.run_frame(0);
-        let dim = c.screen_dim() as usize;
+        let (dim, _) = c.screen_size();
+        let dim = dim as usize;
         let rgba = c.framebuffer_rgba();
         let at = |x: usize, y: usize| {
             let i = (y * dim + x) * 4;
@@ -6007,7 +6031,7 @@ mod include_tests {
     #[test]
     fn screen_and_controls_belong_to_the_game_not_an_include() {
         let mut r = files(&[
-            ("scr.lua", "screen { mode = Extended240 }"),
+            ("scr.lua", "screen { mode = Landscape320 }"),
             ("ctl.lua", "controls { a = \"jump\" }"),
         ]);
         let c = compile_with(
@@ -6019,7 +6043,7 @@ mod include_tests {
         assert!(m.contains("scr.lua line 1: 'screen' belongs"), "{m}");
         assert!(m.contains("ctl.lua line 1: 'controls' belongs"), "{m}");
         // …and the game keeps the console it asked for.
-        assert_eq!(c.mode, VideoMode::Classic128);
+        assert_eq!(c.mode, VideoMode::Square240);
     }
 
     #[test]

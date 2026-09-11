@@ -281,18 +281,28 @@ pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerAudioDropped(
     crate::kessel_player_audio_dropped(handle as *mut KesselPlayer) as jlong
 }
 
-/// Screen edge length. Valid only after `playerLoad` — the ROM chooses it.
+/// Screen width. Valid only after `playerLoad` — the ROM chooses it.
 #[no_mangle]
-pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerScreenDim(
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerScreenWidth(
     _env: JNIEnv,
     _class: JClass,
     handle: jlong,
 ) -> jint {
-    crate::kessel_player_screen_dim(handle as *mut KesselPlayer) as jint
+    crate::kessel_player_screen_width(handle as *mut KesselPlayer) as jint
+}
+
+/// Screen height. Valid only after `playerLoad` — the ROM chooses it.
+#[no_mangle]
+pub extern "system" fn Java_dev_kessel_vm_KesselNative_playerScreenHeight(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    crate::kessel_player_screen_height(handle as *mut KesselPlayer) as jint
 }
 
 /// Write the current frame into `dst`, which **must** be a direct `ByteBuffer`
-/// of at least `screenDim()^2 * 4` bytes.
+/// of at least `screenWidth() * screenHeight() * 4` bytes.
 ///
 /// Returns false — leaving `dst` untouched — for a non-direct or undersized
 /// buffer, or when no ROM is loaded. The app keeps showing its last frame.

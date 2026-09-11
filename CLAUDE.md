@@ -36,18 +36,35 @@ Android app ── android/ (Kotlin/Compose)          │
              60 Hz game thread, direct ByteBuffer
 ```
 
-### Video: two sizes, one colour model
+### Video: three screens, one colour model
 
-The console has two screens — `Classic128` (128×128) and `Extended240`
-(240×240) — and **only the size differs**. Both are an 8-bit palette-index
-framebuffer over one 256-entry palette, with the same ports and the same 4bpp
-sprite sheet. A second mode that also changed the colour model would fork the
-blitter, the PNG encoder, and every host's upload path for nothing.
+The console has three screens — `Square240` (240×240, the default),
+`Portrait320` (240 wide × 320 tall) and `Landscape320` (320 × 240) — and **only
+the size differs**. All are an 8-bit palette-index framebuffer over one
+256-entry palette, with the same ports and the same 4bpp sprite sheet. A mode
+that also changed the colour model would fork the blitter, the PNG encoder, and
+every host's upload path for nothing.
 
-A ROM picks its screen with `screen { mode = Extended240 }`, parsed like
+The short side is 240 on every screen, so a sprite, a glyph and a swipe are the
+same fraction of the picture whichever a game picks. There is no 128×128 screen
+any more: effects were unreadable at that size and a phone showed it as a small
+square with a lot of bezel. `Extended240` is still accepted as a spelling of
+`Square240` so the corpus written against it keeps compiling until it is moved
+over.
+
+A ROM picks its screen with `screen { mode = Landscape320 }`, parsed like
 `controls` and carried as ROM metadata rather than in the ROM bytes. The mode is
 fixed when the ROM loads: `Vm::load_rom` takes it, because the reset vector
 draws and must draw at the size the game asked for.
+
+The screen is a `(width, height)` pair everywhere — `Devices::size`,
+`VmConsole::screen_size`, `kessel_player_screen_width/height`, the attach
+protocol's HELLO and TICK frames — never one number. The stride of the
+framebuffer is the **width**, and every host's blit scales both axes by the
+*same* integer, so a 320×240 game letterboxes on the axis the window has spare
+rather than stretching to the window's shape. Both are the plausible-but-wrong
+picture class of bug, which is why `blit` / `window_to_console` in `play.rs`
+and `destRect` / `consoleTouch` in `Blit.kt` each have a rectangular test case.
 
 Three things follow, and none of them should be re-litigated:
 
@@ -118,9 +135,9 @@ Five things follow, and none should be re-litigated:
   thing the record exists not to do.
 
 `dim` is runtime state on `Devices`, not a constant. Anything that sizes a
-buffer must read it **after** the ROM loads — `kessel_player_screen_dim(p)`,
-`KesselVm.screenDim()`. Reading it earlier silently yields 128 and tears a
-240×240 game across the buffer.
+buffer must read it **after** the ROM loads — `kessel_player_screen_width(p)` /
+`_height(p)`, `KesselVm.screenWidth()` / `screenHeight()`. Reading it earlier
+silently yields 240×240 and tears a 320×240 game across the buffer.
 
 ### Input: one struct, three surfaces
 

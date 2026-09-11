@@ -186,7 +186,7 @@ impl VmPlayer {
         self.inner.lock().controls().to_json().to_string()
     }
 
-    /// The current framebuffer expanded to `dim*dim*4` RGBA bytes, or `None`
+    /// The current framebuffer expanded to `width*height*4` RGBA bytes, or `None`
     /// when no ROM is loaded.
     pub fn framebuffer_rgba(&self) -> Option<Vec<u8>> {
         let c = self.inner.lock();
@@ -207,13 +207,13 @@ impl VmPlayer {
         c.rom_loaded && c.framebuffer_rgba_into(dst)
     }
 
-    /// Screen edge length in pixels (square).
+    /// Screen size in pixels, `(width, height)`.
     ///
     /// Set by the loaded ROM's `screen { … }` block, so a host must read it
     /// *after* [`load`](Self::load) — sizing a frame buffer before then gets
-    /// the default 128, and a 240×240 game would tear across it.
-    pub fn screen_dim(&self) -> u32 {
-        self.inner.lock().screen_dim()
+    /// the 240×240 default, and a 320×240 game would tear across it.
+    pub fn screen_size(&self) -> (u32, u32) {
+        self.inner.lock().screen_size()
     }
 
     pub fn has_rom(&self) -> bool {
@@ -229,7 +229,7 @@ impl VmPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::{BTN_RIGHT, CLASSIC_DIM};
+    use crate::device::{BTN_RIGHT, SHORT_SIDE};
 
     const MOVER: &str = r#"
         local player_x = 32
@@ -252,14 +252,14 @@ mod tests {
         let err = p.load(MOVER.to_string(), "mover.lua".to_string());
         assert!(err.is_empty(), "load error: {err}");
         assert!(p.has_rom());
-        assert_eq!(p.screen_dim(), CLASSIC_DIM as u32);
+        assert_eq!(p.screen_size(), (SHORT_SIDE as u32, SHORT_SIDE as u32));
 
         // Tick a frame; framebuffer should now be the right size and drawable.
         p.tick(0);
         let fb = p.framebuffer_rgba().expect("has rom");
-        assert_eq!(fb.len(), (CLASSIC_DIM * CLASSIC_DIM) * 4);
+        assert_eq!(fb.len(), (SHORT_SIDE * SHORT_SIDE) * 4);
         // Pixel (32,60) drawn in colour 7 (opaque). Alpha byte is 0xff.
-        let idx = (60 * CLASSIC_DIM + 32) * 4;
+        let idx = (60 * SHORT_SIDE + 32) * 4;
         assert_eq!(fb[idx + 3], 0xff);
 
         // Hold RIGHT: the player pixel advances one column each tick.
@@ -267,8 +267,8 @@ mod tests {
         p.tick(BTN_RIGHT);
         // The pixel is now at x=34; the old column (32) should be background.
         let fb = p.framebuffer_rgba().unwrap();
-        let old = (60 * CLASSIC_DIM + 32) * 4;
-        let new = (60 * CLASSIC_DIM + 34) * 4;
+        let old = (60 * SHORT_SIDE + 32) * 4;
+        let new = (60 * SHORT_SIDE + 34) * 4;
         assert_ne!(
             &fb[new..new + 3],
             &fb[old..old + 3],

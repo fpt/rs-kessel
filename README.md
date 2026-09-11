@@ -3,7 +3,7 @@
 A tiny **fantasy console** for AI agents and humans.
 
 Kessel gives a model a real machine to write games for: a 16-bit stack VM with a
-128×128 screen, a gamepad, and a statically-typed Lua-ish language that compiles
+240×240 screen, a gamepad, and a statically-typed Lua-ish language that compiles
 to it. The model writes a game, assembles it, runs frames, looks at the screen,
 and debugs — then you play the result in a window.
 
@@ -174,10 +174,11 @@ an iOS app is a build-system problem rather than a second port.
 ### Screens and colour
 
 The console is an 8-bit palette-index framebuffer over a 256-entry palette, in
-one of two square sizes:
+one of three sizes with a 240-pixel short side:
 
 ```lua
-screen { mode = Extended240 }   -- 240×240; omit for the 128×128 default
+screen { mode = Landscape320 }  -- 320×240; Portrait320 is 240×320,
+                                -- omit for the 240×240 default
 ```
 
 Only the size differs between modes — same ports, same 4bpp sprites, same

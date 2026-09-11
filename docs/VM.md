@@ -23,8 +23,9 @@ reads or plays through has its own reference:
 ## Machine
 
 - 16-bit stack machine. Data stack + return stack, 256 `u16` cells each.
-- **Video**: a square, 8-bit palette-index framebuffer plus one 256-entry RGB
-  palette, in one of two sizes — 128×128 or 240×240, fixed when the ROM loads.
+- **Video**: an 8-bit palette-index framebuffer plus one 256-entry RGB
+  palette, in one of three sizes — 240×240, 240×320 or 320×240, fixed when the
+  ROM loads.
   Only the size differs between them; the framebuffer lives outside the 64 KiB
   address space, so the wider screen costs a game no RAM. See
   [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
@@ -553,8 +554,8 @@ attached, agent runs are exactly as deterministic as before.
 
 `kessel run` loads a `.lua`/`.asm` file into a `VmPlayer` (`crates/vm/src/player.rs`),
 opens a window with `winit`, and on a 60 Hz tick calls `tick(buttons)` +
-`framebuffer_rgba()`, blitting the framebuffer (128×128 or 240×240, whichever
-the ROM asked for) scaled up with nearest-neighbour into a `softbuffer` CPU
+`framebuffer_rgba()`, blitting the framebuffer (240×240, 240×320 or 320×240,
+whichever the ROM asked for) scaled up with nearest-neighbour into a `softbuffer` CPU
 surface (`crates/cli/src/play.rs`).
 
 **Sound** comes out of the same tick: each frame's `sfx()` triggers go through a

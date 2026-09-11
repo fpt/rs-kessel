@@ -198,14 +198,15 @@ fn serve_player(console: &Shared, stream: TcpStream, taken: &AtomicBool) {
                     holds_slot = true;
                 }
 
-                let (dim, controls) = {
+                let ((width, height), controls) = {
                     let c = console.lock();
-                    (c.screen_dim() as u16, c.controls().to_json().to_string())
+                    (c.screen_size(), c.controls().to_json().to_string())
                 };
                 let hello = Hello {
                     version: PROTOCOL_VERSION,
                     busy,
-                    dim,
+                    width: width as u16,
+                    height: height as u16,
                     controls_json: controls,
                 };
                 let _ = hello.write(&mut writer);
@@ -256,25 +257,27 @@ fn serve_player(console: &Shared, stream: TcpStream, taken: &AtomicBool) {
 /// the wire, so a slow socket never blocks a tool call.
 fn tick(console: &Shared, input: kessel_vm::device::Input) -> Frame {
     let mut c = console.lock();
+    let (width, height) = c.screen_size();
     if c.rom_loaded {
         c.play_tick(input);
         Frame {
             has_rom: true,
             paused: c.is_paused(),
             halted: c.vm.halted,
-            dim: c.screen_dim() as u16,
+            width: width as u16,
+            height: height as u16,
             rgba: c.framebuffer_rgba(),
         }
     } else {
         // The agent may not have loaded a ROM yet, or just reset. Report an
         // empty screen rather than dropping the connection — it will load one.
-        let dim = c.screen_dim() as usize;
         Frame {
             has_rom: false,
             paused: false,
             halted: false,
-            dim: dim as u16,
-            rgba: vec![0; dim * dim * 4],
+            width: width as u16,
+            height: height as u16,
+            rgba: vec![0; width as usize * height as usize * 4],
         }
     }
 }
@@ -319,7 +322,8 @@ mod tests {
         let c = console();
         let f = tick(&c, Input::default());
         assert!(!f.has_rom);
-        assert_eq!(f.rgba.len(), 128 * 128 * 4);
+        assert_eq!((f.width, f.height), (240, 240), "the default screen");
+        assert_eq!(f.rgba.len(), 240 * 240 * 4);
         assert!(f.rgba.iter().all(|b| *b == 0));
     }
 

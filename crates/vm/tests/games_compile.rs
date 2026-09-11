@@ -38,8 +38,8 @@ fn libs(path: &str) -> Option<String> {
 /// `rogue` picked up a light layer and every point-assert against its RGBA broke
 /// at once, all of them about sprites that were still exactly where they were.
 fn index_at(c: &VmConsole, x: usize, y: usize) -> u8 {
-    let dim = c.screen_dim() as usize;
-    c.vm.devices.framebuffer[y * dim + x]
+    let (w, _) = c.screen_size();
+    c.vm.devices.framebuffer[y * w as usize + x]
 }
 
 fn assert_game_ok(name: &str, src: &str) {
@@ -147,11 +147,11 @@ fn platform_has_clear_background_and_smooth_jump() {
 fn platform_camera_follows_player_across_stage() {
     const RIGHT: u8 = 0x02;
 
-    fn white_x_bounds(rgba: &[u8]) -> Option<(usize, usize)> {
+    fn white_x_bounds(rgba: &[u8], width: usize) -> Option<(usize, usize)> {
         let mut bounds: Option<(usize, usize)> = None;
         for (index, pixel) in rgba.chunks_exact(4).enumerate() {
             if pixel == [0xff, 0xf1, 0xe8, 0xff] {
-                let x = index % 128;
+                let x = index % width;
                 bounds = Some(match bounds {
                     Some((min_x, max_x)) => (min_x.min(x), max_x.max(x)),
                     None => (x, x),
@@ -180,7 +180,8 @@ fn platform_camera_follows_player_across_stage() {
         player = c.run_frame(RIGHT).entities[0];
     }
     assert!(player.x > 128, "player never entered the second screen");
-    let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba()).expect("hero is visible");
+    let width = c.screen_size().0 as usize;
+    let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba(), width).expect("hero is visible");
     assert!(
         (50..=70).contains(&min_x),
         "camera did not centre hero: x={min_x}"
@@ -194,7 +195,8 @@ fn platform_camera_follows_player_across_stage() {
         player = c.run_frame(RIGHT).entities[0];
     }
     assert_eq!(player.x, 240, "right boundary did not stop the player");
-    let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba()).expect("hero is visible");
+    let width = c.screen_size().0 as usize;
+    let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba(), width).expect("hero is visible");
     assert!(
         min_x >= 112 && max_x < 128,
         "hero disappeared at stage edge"
@@ -942,7 +944,7 @@ fn game_2048_merges_wins_loses_and_restarts() {
         .iter()
         .any(|e| e.tag == 4 && (e.x, e.y) == (48, 29)));
     let rgba = c.framebuffer_rgba();
-    let nudged_edge = (29 * 128 + 30) * 4;
+    let nudged_edge = (29 * c.screen_size().0 as usize + 30) * 4;
     assert_eq!(
         &rgba[nudged_edge..nudged_edge + 4],
         &[0xc2, 0xc3, 0xc7, 0xff],
@@ -1370,11 +1372,11 @@ fn piano_octave_shift_releases_held_notes_and_retunes_the_keybed() {
 }
 
 /// spectrum.lua is the reference for the video features, so its ROM must
-/// actually select the wide screen and paint colours a 16-entry palette could
-/// not name. A silent fallback to 128×128 would still "work" and still be wrong.
+/// actually select the square screen and paint colours a 16-entry palette could
+/// not name.
 #[test]
-fn spectrum_uses_the_extended_screen_and_high_colours() {
-    use kessel_vm::device::{VideoMode, EXTENDED_DIM};
+fn spectrum_uses_the_square_screen_and_high_colours() {
+    use kessel_vm::device::{VideoMode, SHORT_SIDE};
 
     let mut c = VmConsole::new();
     c.write_source("s.lua", include_str!("../../../games/spectrum.lua"))
@@ -1382,12 +1384,12 @@ fn spectrum_uses_the_extended_screen_and_high_colours() {
     assert!(c.assemble("s.lua").unwrap().ok());
     c.load_rom("s.lua").unwrap();
 
-    assert_eq!(c.video_mode(), VideoMode::Extended240);
-    assert_eq!(c.screen_dim(), EXTENDED_DIM as u32);
+    assert_eq!(c.video_mode(), VideoMode::Square240);
+    assert_eq!(c.screen_size(), (SHORT_SIDE as u32, SHORT_SIDE as u32));
 
     c.run_frame(0);
     let fb = &c.vm.devices.framebuffer;
-    assert_eq!(fb.len(), EXTENDED_DIM * EXTENDED_DIM);
+    assert_eq!(fb.len(), SHORT_SIDE * SHORT_SIDE);
     assert!(
         fb.iter().any(|&p| p > 15),
         "nothing drawn above index 15 — the deep palette is unused"

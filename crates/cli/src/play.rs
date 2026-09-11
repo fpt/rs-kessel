@@ -33,8 +33,9 @@ use winit::window::{Window, WindowId};
 /// rendering as fast as the display allows.
 const FRAME_TIME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
-/// Initial window scale. 128×128 is unusably small on a modern display.
-const DEFAULT_SCALE: u32 = 5;
+/// Initial window scale. 240×240 is unusably small on a modern display; 3×
+/// keeps a 240×320 game inside a laptop's 1080-row display.
+const DEFAULT_SCALE: u32 = 3;
 
 /// What the window is driving.
 ///
@@ -53,10 +54,10 @@ enum Source {
 }
 
 impl Source {
-    fn screen_dim(&self) -> u32 {
+    fn screen_size(&self) -> (u32, u32) {
         match self {
-            Source::Local { player, .. } => player.screen_dim(),
-            Source::Attached(c) => c.screen_dim(),
+            Source::Local { player, .. } => player.screen_size(),
+            Source::Attached(c) => c.screen_size(),
         }
     }
 
@@ -165,7 +166,7 @@ fn run_window(source: Source) -> Result<(), String> {
         window: None,
         surface: None,
         next_frame: Instant::now(),
-        dim: 0,
+        size: (0, 0),
         shown_title: String::new(),
         #[cfg(feature = "audio")]
         audio: start_audio(&source),
@@ -231,7 +232,9 @@ struct App {
     window: Option<std::sync::Arc<Window>>,
     surface: Option<softbuffer::Surface<std::sync::Arc<Window>, std::sync::Arc<Window>>>,
     next_frame: Instant,
-    dim: u32,
+    /// The console's `(width, height)`, re-read each tick so an attached
+    /// window follows a ROM the agent swaps under it.
+    size: (u32, u32),
     /// Last title pushed to the window, so we only call into the window system
     /// when it actually changes.
     shown_title: String,
@@ -315,7 +318,8 @@ impl App {
         if let (Some((cx, cy)), true) = (self.cursor, self.cursor_down) {
             if let Some(window) = &self.window {
                 let size = window.inner_size();
-                if let Some((x, y)) = window_to_console(cx, cy, size.width, size.height, self.dim) {
+                if let Some((x, y)) = window_to_console(cx, cy, size.width, size.height, self.size)
+                {
                     touches[0] = Touch { x, y, down: true };
                 }
             }
@@ -347,7 +351,7 @@ impl App {
         };
 
         match self.source.framebuffer_rgba() {
-            Some(fb) => blit(&mut buffer, size.width, size.height, &fb, self.dim),
+            Some(fb) => blit(&mut buffer, size.width, size.height, &fb, self.size),
             // No ROM (a failed reload, or an agent that hasn't loaded one yet) —
             // clear rather than leaving a stale frame on screen.
             None => buffer.fill(0),
@@ -361,12 +365,12 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        self.dim = self.source.screen_dim();
+        self.size = self.source.screen_size();
         self.shown_title = self.source.title();
-        let side = self.dim * DEFAULT_SCALE;
+        let (w, h) = (self.size.0 * DEFAULT_SCALE, self.size.1 * DEFAULT_SCALE);
         let attrs = Window::default_attributes()
             .with_title(&self.shown_title)
-            .with_inner_size(winit::dpi::LogicalSize::new(side, side));
+            .with_inner_size(winit::dpi::LogicalSize::new(w, h));
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => std::sync::Arc::new(w),
@@ -472,28 +476,29 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Nearest-neighbour upscale `src` (a `dim`×`dim` RGBA image) into `dst` (a
+/// Nearest-neighbour upscale `src` (a `w`×`h` RGBA image) into `dst` (a
 /// `dst_w`×`dst_h` buffer of `0RGB` u32s), centred and letterboxed.
 ///
 /// The scale is an integer so pixels stay square and crisp: a fractional scale
 /// would make some source pixels one output pixel wider than their neighbours,
-/// which on 8×8 sprite art is glaring.
-fn blit(dst: &mut [u32], dst_w: u32, dst_h: u32, src: &[u8], dim: u32) {
+/// which on 8×8 sprite art is glaring. One scale for both axes, or a 320×240
+/// game would be stretched to whatever the window's shape happened to be.
+fn blit(dst: &mut [u32], dst_w: u32, dst_h: u32, src: &[u8], (w, h): (u32, u32)) {
     dst.fill(0);
-    if dim == 0 {
+    if w == 0 || h == 0 {
         return;
     }
-    let scale = (dst_w / dim).min(dst_h / dim).max(1);
-    let draw = dim * scale;
+    let scale = (dst_w / w).min(dst_h / h).max(1);
+    let (draw_w, draw_h) = (w * scale, h * scale);
     // A window smaller than one console pixel per pixel still gets the
     // top-left corner rather than an out-of-bounds write.
-    let ox = dst_w.saturating_sub(draw) / 2;
-    let oy = dst_h.saturating_sub(draw) / 2;
+    let ox = dst_w.saturating_sub(draw_w) / 2;
+    let oy = dst_h.saturating_sub(draw_h) / 2;
 
-    for y in 0..draw.min(dst_h) {
-        let src_row = (y / scale) * dim;
+    for y in 0..draw_h.min(dst_h) {
+        let src_row = (y / scale) * w;
         let dst_row = ((oy + y) * dst_w) as usize;
-        for x in 0..draw.min(dst_w) {
+        for x in 0..draw_w.min(dst_w) {
             let s = ((src_row + x / scale) * 4) as usize;
             // softbuffer wants 0RGB packed into a u32; the console's alpha is
             // always opaque, so it is simply dropped.
@@ -510,14 +515,19 @@ fn blit(dst: &mut [u32], dst_w: u32, dst_h: u32, src: &[u8], dim: u32) {
 /// function for the same reason `blit` is: an off-by-a-margin here puts a
 /// game's cursor a few pixels from the player's finger, which reads as a
 /// sloppy game rather than a wrong transform.
-fn window_to_console(x: f64, y: f64, win_w: u32, win_h: u32, dim: u32) -> Option<(u16, u16)> {
-    if dim == 0 {
+fn window_to_console(
+    x: f64,
+    y: f64,
+    win_w: u32,
+    win_h: u32,
+    (w, h): (u32, u32),
+) -> Option<(u16, u16)> {
+    if w == 0 || h == 0 {
         return None;
     }
-    let scale = (win_w / dim).min(win_h / dim).max(1);
-    let draw = dim * scale;
-    let ox = win_w.saturating_sub(draw) / 2;
-    let oy = win_h.saturating_sub(draw) / 2;
+    let scale = (win_w / w).min(win_h / h).max(1);
+    let ox = win_w.saturating_sub(w * scale) / 2;
+    let oy = win_h.saturating_sub(h * scale) / 2;
 
     // Negative coordinates exist — a drag can leave the window — and casting
     // one to u32 would wrap it into the picture.
@@ -526,7 +536,7 @@ fn window_to_console(x: f64, y: f64, win_w: u32, win_h: u32, dim: u32) -> Option
     }
     let cx = (x as u32 - ox) / scale;
     let cy = (y as u32 - oy) / scale;
-    (cx < dim && cy < dim).then_some((cx as u16, cy as u16))
+    (cx < w && cy < h).then_some((cx as u16, cy as u16))
 }
 
 /// Derive an analog stick from the held direction bits.
@@ -629,13 +639,39 @@ mod tests {
     #[test]
     fn window_to_console_inverts_the_blit() {
         // 4× scale, no letterbox: window (9,13) is console (2,3).
-        assert_eq!(window_to_console(9.0, 13.0, 512, 512, 128), Some((2, 3)));
+        assert_eq!(
+            window_to_console(9.0, 13.0, 512, 512, (128, 128)),
+            Some((2, 3))
+        );
         // Same window, centred with a margin: 5 wide for a 1-px console at 3×
         // puts the image at x=1..4, so window x=1 is console x=0.
-        assert_eq!(window_to_console(1.0, 0.0, 5, 3, 1), Some((0, 0)));
+        assert_eq!(window_to_console(1.0, 0.0, 5, 3, (1, 1)), Some((0, 0)));
         // The letterbox is not the screen.
-        assert_eq!(window_to_console(0.0, 0.0, 5, 3, 1), None);
-        assert_eq!(window_to_console(4.5, 0.0, 5, 3, 1), None);
+        assert_eq!(window_to_console(0.0, 0.0, 5, 3, (1, 1)), None);
+        assert_eq!(window_to_console(4.5, 0.0, 5, 3, (1, 1)), None);
+    }
+
+    /// A rectangular console in a square window: the scale is the tighter axis
+    /// and the margin lands on the other one. 320×240 in 640×640 is 2× with a
+    /// 80-px band above and below, so window y=80 is the first console row.
+    #[test]
+    fn window_to_console_letterboxes_a_rectangular_screen_on_one_axis() {
+        assert_eq!(
+            window_to_console(0.0, 80.0, 640, 640, (320, 240)),
+            Some((0, 0))
+        );
+        assert_eq!(
+            window_to_console(639.0, 559.0, 640, 640, (320, 240)),
+            Some((319, 239))
+        );
+        assert_eq!(window_to_console(0.0, 79.0, 640, 640, (320, 240)), None);
+        assert_eq!(window_to_console(0.0, 560.0, 640, 640, (320, 240)), None);
+        // And the portrait screen puts the band on the sides instead.
+        assert_eq!(
+            window_to_console(80.0, 0.0, 640, 640, (240, 320)),
+            Some((0, 0))
+        );
+        assert_eq!(window_to_console(79.0, 0.0, 640, 640, (240, 320)), None);
     }
 
     /// A drag can leave the window, and winit reports negative coordinates for
@@ -643,10 +679,14 @@ mod tests {
     /// picture — a cursor that teleports to the far corner.
     #[test]
     fn window_to_console_refuses_coordinates_outside_the_window() {
-        assert_eq!(window_to_console(-3.0, 10.0, 512, 512, 128), None);
-        assert_eq!(window_to_console(10.0, -3.0, 512, 512, 128), None);
-        assert_eq!(window_to_console(9000.0, 10.0, 512, 512, 128), None);
-        assert_eq!(window_to_console(1.0, 1.0, 512, 512, 0), None, "no ROM yet");
+        assert_eq!(window_to_console(-3.0, 10.0, 512, 512, (128, 128)), None);
+        assert_eq!(window_to_console(10.0, -3.0, 512, 512, (128, 128)), None);
+        assert_eq!(window_to_console(9000.0, 10.0, 512, 512, (128, 128)), None);
+        assert_eq!(
+            window_to_console(1.0, 1.0, 512, 512, (0, 0)),
+            None,
+            "no ROM yet"
+        );
     }
 
     /// A keyboard diagonal must not travel faster than a cardinal one. This is
@@ -684,7 +724,7 @@ mod tests {
     fn blit_packs_rgb_in_the_right_order() {
         let src = vec![0xAA, 0xBB, 0xCC, 0xFF]; // 1×1 RGBA
         let mut dst = vec![0u32; 1];
-        blit(&mut dst, 1, 1, &src, 1);
+        blit(&mut dst, 1, 1, &src, (1, 1));
         assert_eq!(dst[0], 0x00AA_BBCC);
     }
 
@@ -698,7 +738,7 @@ mod tests {
             0, 0, 255, 255, 255, 255, 255, 255, // row 1
         ];
         let mut dst = vec![0u32; 4 * 4];
-        blit(&mut dst, 4, 4, &src, 2);
+        blit(&mut dst, 4, 4, &src, (2, 2));
 
         let at = |x: usize, y: usize| dst[y * 4 + x];
         for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
@@ -715,7 +755,7 @@ mod tests {
     fn blit_centres_and_letterboxes() {
         let src = vec![255, 255, 255, 255]; // 1×1 white
         let mut dst = vec![0u32; 5 * 3];
-        blit(&mut dst, 5, 3, &src, 1);
+        blit(&mut dst, 5, 3, &src, (1, 1));
 
         // scale = min(5,3) = 3 → a 3×3 block centred in 5 wide, 3 tall.
         let at = |x: usize, y: usize| dst[y * 5 + x];
@@ -732,9 +772,29 @@ mod tests {
     /// case a naive scale calculation panics on.
     #[test]
     fn blit_survives_a_window_smaller_than_the_console() {
-        let src = vec![0u8; 128 * 128 * 4];
+        let src = vec![0u8; 320 * 240 * 4];
         let mut dst = vec![0u32; 10 * 10];
-        blit(&mut dst, 10, 10, &src, 128); // would overflow if unclamped
+        blit(&mut dst, 10, 10, &src, (320, 240)); // would overflow if unclamped
+    }
+
+    /// A rectangular source keeps its shape: one scale for both axes, and the
+    /// stride is the source *width*. A 2×1 image in a 4×4 window is 2× wide,
+    /// so it fills the width and leaves a band above and below — never a 2×2
+    /// stretch, and never the second pixel read from the wrong row.
+    #[test]
+    fn blit_keeps_a_rectangular_screen_rectangular() {
+        let src = vec![255, 0, 0, 255, 0, 255, 0, 255]; // red, green
+        let mut dst = vec![0u32; 4 * 4];
+        blit(&mut dst, 4, 4, &src, (2, 1));
+        let at = |x: usize, y: usize| dst[y * 4 + x];
+        assert_eq!(at(0, 0), 0, "band above");
+        assert_eq!(at(0, 3), 0, "band below");
+        for y in 1..3 {
+            assert_eq!(at(0, y), 0x00FF_0000);
+            assert_eq!(at(1, y), 0x00FF_0000);
+            assert_eq!(at(2, y), 0x0000_FF00);
+            assert_eq!(at(3, y), 0x0000_FF00);
+        }
     }
 
     /// A missing file is a clean error naming the file, not a panic or a blank

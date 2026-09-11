@@ -40,7 +40,8 @@ fun GameSurface(
     contentDescription: String,
     modifier: Modifier = Modifier,
     touchable: Boolean = false,
-    screenDim: Int = 0,
+    screenWidth: Int = 0,
+    screenHeight: Int = 0,
 ) {
     Box(modifier) {
         AndroidView(
@@ -63,18 +64,18 @@ fun GameSurface(
             },
         )
 
-        if (touchable && screenDim > 0) {
+        if (touchable && screenWidth > 0 && screenHeight > 0) {
             // Slot assignment is state that outlives one event — a finger has
             // to keep its slot across every event of its life. See TouchTracker.
-            val tracker = remember(screenDim) { TouchTracker() }
+            val tracker = remember(screenWidth, screenHeight) { TouchTracker() }
             Box(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(screenDim) {
+                    .pointerInput(screenWidth, screenHeight) {
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
-                                tracker.begin(size.width, size.height, screenDim)
+                                tracker.begin(size.width, size.height, screenWidth, screenHeight)
                                 for (change in event.changes) {
                                     // Lifted pointers are offered too: that is
                                     // what frees their slot for the next finger.

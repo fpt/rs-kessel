@@ -26,9 +26,13 @@ extern "C" {
 /* Opaque console handle. */
 typedef struct KesselPlayer KesselPlayer;
 
-/* Screen edge lengths, by video mode. The screen is square in both. */
-#define KESSEL_CLASSIC_DIM  128
-#define KESSEL_EXTENDED_DIM 240
+/*
+ * Screen sides, by video mode: Square240 is 240x240, Portrait320 is 240 wide
+ * by 320 tall, Landscape320 is 320 wide by 240 tall. The short side is 240 on
+ * every screen.
+ */
+#define KESSEL_SHORT_SIDE 240
+#define KESSEL_LONG_SIDE  320
 
 /* Gamepad bits, as passed to kessel_player_tick. */
 #define KESSEL_BTN_LEFT   0x01
@@ -108,20 +112,23 @@ void kessel_player_tick(KesselPlayer *p, uint8_t buttons);
 void kessel_player_tick_input(KesselPlayer *p, const KesselInput *input);
 
 /*
- * Screen edge length in pixels; a frame is dim*dim*4 bytes.
+ * Screen size in pixels; a frame is width*height*4 bytes, row-major, so the
+ * width is also the row stride.
  *
- * Read this AFTER kessel_player_load, not before: the resolution comes from
- * the ROM's `screen { ... }` block (128 by default, 240 for Extended240), so a
- * host that sizes its buffer at start-up will tear a 240x240 game across it.
+ * Read these AFTER kessel_player_load, not before: the resolution comes from
+ * the ROM's `screen { ... }` block (240x240 by default; 240x320 for
+ * Portrait320, 320x240 for Landscape320), so a host that sizes its buffer at
+ * start-up will tear a 320x240 game across it.
  */
-uint32_t kessel_player_screen_dim(KesselPlayer *p);
+uint32_t kessel_player_screen_width(KesselPlayer *p);
+uint32_t kessel_player_screen_height(KesselPlayer *p);
 
 /*
  * Write the current frame into `dst` as packed RGBA.
  *
  * True if a frame was written. False — with `dst` untouched, so the caller can
  * keep presenting its last good frame — if there is no ROM, `dst` is NULL, or
- * `len` is under kessel_player_screen_dim(p)^2 * 4.
+ * `len` is under width * height * 4.
  */
 bool kessel_player_framebuffer(KesselPlayer *p, uint8_t *dst, size_t len);
 
