@@ -5,6 +5,7 @@
 //! kessel run <file.lua|.asm>    # open a window and play a game yourself
 //! kessel attach [workdir]        # join a running mcp session and play its VM
 //! kessel render-audio <file>    # render a game's sound to a .wav, headless
+//! kessel shot <file>            # write a frame to a .png, headless
 //! ```
 //!
 //! Both drive the same [`kessel_vm`] console; they differ only in who is at the
@@ -19,6 +20,7 @@ mod mcp;
 #[cfg(feature = "play")]
 mod play;
 mod render_audio;
+mod shot;
 
 use std::path::{Path, PathBuf};
 
@@ -34,6 +36,8 @@ USAGE:
     kessel attach [workdir]       Join a running `kessel mcp` and play ITS VM
     kessel render-audio <file>    Render a game's sound to a .wav (no window,
                                   no audio device — works headless and over ssh)
+    kessel shot <file>            Write one frame to a .png (no window, no GPU —
+                                  the way to see a layout without a screen)
 
 THE WORKSPACE (`mcp`):
     `mcp` takes no options — the agent names its own workspace. An ABSOLUTE path
@@ -52,6 +56,12 @@ OPTIONS:
     --out, -o <file>   Where to write the .wav (default: <name>.wav here)
     --buttons <list>   Buttons held for the whole run, e.g. A,RIGHT — a sound
                        behind a button needs the button pressed
+
+    For `shot`:
+    --frames, -n <n>   Which frame to capture (default 60 = one second in)
+    --out, -o <file>   Where to write the .png (default: <name>.png here)
+    --buttons <list>   Buttons held for the whole run, e.g. A,RIGHT — to reach
+                       a screen that only shows up once something is pressed
 
 RUN vs ATTACH:
     `kessel run` plays a file on a VM of its own — nothing else can see or
@@ -106,6 +116,7 @@ fn run() -> Result<(), String> {
         Some("run") => run_play(parse_run(&args[1..])?),
         Some("attach") => run_attach(parse_attach(&args[1..])?),
         Some("render-audio") => render_audio::run(render_audio::parse(&args[1..])?),
+        Some("shot") => shot::run(shot::parse(&args[1..])?),
         // `play` was split into `run` and `attach`; name both rather than
         // leaving someone with muscle memory at a bare "unknown command".
         Some("play") => Err(
@@ -117,8 +128,8 @@ fn run() -> Result<(), String> {
         // A bare path is almost certainly a run attempt; say so rather than
         // dumping the whole usage block on someone who nearly had it right.
         Some(other) => Err(format!(
-            "unknown command '{other}' — expected `mcp`, `run`, `attach`, or \
-             `render-audio`\n\n\
+            "unknown command '{other}' — expected `mcp`, `run`, `attach`, \
+             `render-audio`, or `shot`\n\n\
              Did you mean: kessel run {other}"
         )),
     }

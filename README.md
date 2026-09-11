@@ -10,6 +10,7 @@ and debugs — then you play the result in a window.
 ```bash
 kessel mcp                      # serve the console to an agent over MCP
 kessel run games/tetris.lua    # play a game yourself
+kessel shot games/outrun.lua   # write a frame to a .png, no window needed
 ```
 
 ## Why

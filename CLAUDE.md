@@ -360,6 +360,7 @@ pixels; a game's logic and its pixels in one file means neither can be read.
 | `src/mcp/server.rs` | Method dispatch: `initialize`, `tools/list`, `tools/call`, `ping`. Pure function of request + VM state, so it tests without a process. |
 | `src/mcp/wire.rs` | MCP / JSON-RPC wire types, including the `image` content block. |
 | `src/render_audio.rs` | `kessel render-audio` — headless WAV render plus the report. No window, no audio device, so it works under `--no-default-features` and over ssh. |
+| `src/shot.rs` | `kessel shot` — headless PNG of one frame, the visual counterpart. Same headless rule, and the only way to see the *plausible-but-wrong picture* class of bug without a screen. |
 | `src/audio.rs` | The cpal output stream for `kessel run`, and the lock-free queue the game thread feeds it. `render_block` is the callback body, factored out so it is testable without a sound card. |
 | `src/play.rs` | winit window, 60 Hz tick, key→gamepad mapping, and `blit` (nearest-neighbour upscale to a `0RGB` CPU surface). `Source` picks local vs. attached. |
 | `src/attach/session.rs` | Session files in the cache dir: publish, list, discover. Directory is a parameter, never read from env inside logic — the tests run in parallel. |
@@ -720,7 +721,7 @@ with `UnsatisfiedLinkError` and debug builds stay fine — the worst shape of bu
   `kessel mcp`. `audio` **implies `play`** — the window is the only thing that
   plays sound — but stays a separate feature because the reverse is a real
   machine: a screen with no sound card wants `play` alone, and
-  `kessel render-audio` needs neither.
+  `kessel render-audio` and `kessel shot` need neither.
 - Prefer `vm_run_frames` over looping `vm_run_frame`: an MCP round trip per frame
   is pure overhead. It stops at the first fault/halt and caps at 1800 frames.
 
@@ -733,6 +734,7 @@ cd crates && cargo build --release --no-default-features   # headless
 
 ./crates/target/release/kessel mcp
 ./crates/target/release/kessel run games/tetris.lua
+./crates/target/release/kessel shot games/outrun.lua -o /tmp/outrun.png
 
 cd crates && cargo run -p kessel-audio --example preview   # → target/audio-preview/*.wav
 ```
