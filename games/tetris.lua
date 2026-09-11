@@ -1,4 +1,4 @@
--- tetris.lua — a compact but real Tetris on a 10x15 well. Left/Right move,
+-- tetris.lua — a compact but real Tetris on a 12x17 well. Left/Right move,
 -- A/B (Z/X keys) rotate clockwise/counterclockwise, Down soft-drops. Full rows
 -- clear. Top out and press A to restart.
 --
@@ -8,8 +8,17 @@
 -- around a stable, piece-specific origin.
 -- The well is a tilemap: cell 0 = empty (sprite id 0, an opaque dark tile so the
 -- well is visible), cells 1-7 = coloured blocks matching each piece kind.
+--
+-- The screen is 240x320 — the tall one — because that is the shape a well is.
+-- On the square screen the well took a third of the width and the HUD sat in a
+-- 120-px column that was mostly empty; here the HUD is a 48-px strip across the
+-- top and everything below it is playfield. The cells are drawn at 2x for the
+-- same reason: 12 columns of 8-px tiles is 96 px of a 240-px screen, and the
+-- blocks are the thing you are reading.
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
+screen { mode = Portrait320 }
+
 controls {
   dpad = true       -- left/right move, down soft-drops
   a = "rotate cw"
@@ -105,12 +114,13 @@ sprite block_l {
   99999999
 }
 
-tilemap well(12, 26)
+tilemap well(12, 17)
 
 local BW = 12
-local BH = 26
-local OX = 8         -- leave room for the score HUD to the right of the well
-local OY = 16
+local BH = 17
+local CELL = 16      -- cells drawn at 2x; `map` is 1:1, so `draw` walks them
+local OX = 24        -- (240 - BW*CELL) / 2
+local OY = 48        -- under the HUD strip, and OY + BH*CELL is exactly 320
 
 local shape: array(7, word)   -- the 7 tetromino spawn masks
 local cur_kind = 0            -- index into shape; also selects the rotation origin
@@ -337,26 +347,37 @@ end
 
 function draw()
   cls(0)
-  map(0, 0, OX, OY, BW, BH)
+  -- `map` draws the tilemap 1:1, so the well is walked a cell at a time and
+  -- each tile blown up — the same trade `sokoban` makes for the same reason.
+  for y = 0, BH - 1 do
+    for x = 0, BW - 1 do
+      spr_scaled(mget(x, y), OX + x * CELL, OY + y * CELL, 512, 0)
+    end
+  end
   local b = 0
   while b < 16 do
     if ((cur >> b) & 1) == 1 then
       local cx = px + b % 4
       local cy = py + b / 4
-      if cy >= 0 then spr(piece_tile(cur_kind), OX + cx * 8, OY + cy * 8, 0) end
+      if cy >= 0 then
+        spr_scaled(piece_tile(cur_kind), OX + cx * CELL, OY + cy * CELL, 512, 0)
+      end
     end
     b = b + 1
   end
-  text("SCORE", 120, 24, 7)
-  number(score, 120, 36, 10)
-  text("LINES", 120, 60, 7)
-  number(lines, 120, 72, 11)
-  text("NEXT", 120, 96, 7)
+
+  -- The HUD strip: three readouts across the top, the preview at 1:1 beside
+  -- them. The preview stays small on purpose — it is a glance, not a target.
+  text("SCORE", 4, 4, 7)
+  number(score, 4, 16, 10)
+  text("LINES", 68, 4, 7)
+  number(lines, 68, 16, 11)
+  text("NEXT", 132, 4, 7)
   local next_mask = shape[next_kind]
-  local preview_x = 124
-  local preview_y = 112
-  if next_kind == 0 then preview_x = 120  preview_y = 104 end
-  if next_kind == 1 then preview_x = 120 end
+  local preview_x = 172
+  local preview_y = 12
+  if next_kind == 0 then preview_x = 168  preview_y = 4 end
+  if next_kind == 1 then preview_x = 168 end
   local n = 0
   while n < 16 do
     if ((next_mask >> n) & 1) == 1 then
@@ -364,9 +385,13 @@ function draw()
     end
     n = n + 1
   end
+
+  -- The well fills the screen below the strip, so the end-of-run message sits
+  -- over it on its own backing rather than in a column that no longer exists.
   if dead == 1 then
-    text("GAME OVER", 120, 184, 8)
-    text("PRESS A", 120, 196, 7)
+    rect(40, 144, 160, 32, 0)
+    text("GAME OVER", 102, 150, 8)
+    text("PRESS A", 106, 162, 7)
   end
-  entity(OX + px * 8, OY + py * 8, 1)
+  entity(OX + px * CELL, OY + py * CELL, 1)
 end

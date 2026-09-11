@@ -46,7 +46,7 @@ what an index means.
 
 ## Two sizes, one colour model
 
-The console has two screens, and **only the size differs** — same ports, same
+The console has three screens, and **only the size differs** — same ports, same
 4bpp sprite sheet, same palette:
 
 | mode | screen | framebuffer | selected by |
@@ -64,6 +64,13 @@ with the **width** as its stride.
 The mode is fixed when the ROM loads and never changes under a running game. The
 framebuffer lives outside the 64 KiB address space, so the wider screen costs a
 game no RAM.
+
+Pick the one the *game* is shaped like, not the one the art fits in. The worked
+examples are `outrun` and `dnb` (`Landscape320` — a road needs width, and a step
+sequencer spends it on wider cells), `piano` (`Landscape320`, where the width
+buys two full octaves of keybed instead of an octave and a half), and `tetris`
+(`Portrait320` — a well is tall, and the HUD that used to sit in a half-empty
+column is a 48-px strip across the top).
 
 A second mode that also changed the *colour* model would have forked the blitter,
 the PNG encoder and every host's upload path for nothing, so it doesn't exist.
@@ -348,7 +355,10 @@ with no usable GPU.
 collision, gravity, wall-jumps), `rogue` (`tilemap` + `fset`/`solid`), `sokoban` (twelve Microban puzzles as
 `data` grids, centred from their own bounding box), `shooter` (sprite pools, three
 sprite banks plus a `pal` ramp of its own for the terrain, and a `text`/`number`
-HUD), `2048` (a 16×16 `sprn` panel frame), `lantern` (the light layer: a dark cave, a
+HUD), `2048` (a `rect` board that sizes itself off one `TILE` constant), `tetris` and
+`sokoban` again for `spr_scaled` cells — the way to fill a screen with a grid
+whose *cell count* is fixed by the game's rules, since `map` draws 1:1 —
+`lantern` (the light layer: a dark cave, a
 torch whose radius is its fuel, coloured glows on the things hunting you, walls
 that cast, and a `light_rect` HUD). `rogue` and `sokoban` light the same three
 ways at two very different depths — a dungeon you can only half see, and a
