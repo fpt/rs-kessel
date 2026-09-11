@@ -36,7 +36,7 @@
 -- sounding: a voice's velocity is fixed when it starts, and re-triggering a
 -- held chord to fake it would stutter every note in it.
 
-screen { mode = Square240 }
+screen { mode = Landscape320 }
 
 controls {
   dpad  = false
@@ -191,20 +191,20 @@ instrument syn_sin_3 {
   reverb = 30  volume = 140
 }
 
-local DIM = 240
+local DIM = 320
 
 -- Panel geometry, top to bottom: a header carrying the octave buttons, the
 -- mode row, the mode's own parameter panel, then the keybed filling the rest.
 local HDR_H = 26
 local OCT_Y = 2
 local OCT_H = 22
-local OCT_DN_X = 140
-local OCT_UP_X = 190
+local OCT_DN_X = 220
+local OCT_UP_X = 270
 local OCT_W = 46
 
 local MODE_Y = 28
 local MODE_H = 24
-local MODE_W = 60          -- 4 * 60 = 240, drawn 2px narrower for a seam
+local MODE_W = 80          -- 4 * 80 = 320, drawn 2px narrower for a seam
 
 local PAR_Y = 56
 local PAR_H = 48
@@ -216,13 +216,19 @@ local PAR_H = 48
 local BAR_Y = 65
 local BAR_H = 39
 
--- 240 / 10 divides exactly, so every white key is the same width with no
--- rounding remainder on the last one.
-local NUM_WHITE = 10
-local WHITE_W = 24
+-- The screen is 320 wide and 240 tall — the landscape one — and the whole
+-- reason is the keybed: ten white keys is an octave and a half, which is not
+-- enough to play two hands or a line with a bass note under it. Sixteen is two
+-- full octaves and a little over.
+--
+-- 320 / 16 divides exactly, so every white key is the same width with no
+-- rounding remainder on the last one. The height is unchanged, so nothing
+-- below the header had to move.
+local NUM_WHITE = 16
+local WHITE_W = 20
 local KB_Y = 108
 local KB_H = 132
-local BLACK_W = 14
+local BLACK_W = 12
 local BLACK_H = 78
 
 local NONE = 255           -- key_at's "no key here" answer
@@ -620,8 +626,8 @@ function draw_header()
   text("DN", OCT_DN_X + 16, OCT_Y + 8, 7)
   text("UP", OCT_UP_X + 16, OCT_Y + 8, 7)
 
-  text("OCT", 100, OCT_Y + 8, 6)
-  number(base_note / 12 - 1, 124, OCT_Y + 8, 10)
+  text("OCT", 180, OCT_Y + 8, 6)
+  number(base_note / 12 - 1, 204, OCT_Y + 8, 10)
   text("PIANO", 4, OCT_Y + 8, 7)
 end
 
@@ -633,10 +639,10 @@ function draw_modes()
   end
   -- `text` takes a literal, so the four names are four calls rather than a
   -- lookup — there is no string type to hold them in.
-  text("PIANO", 8, MODE_Y + 9, 7)
-  text("E.PNO", 68, MODE_Y + 9, 7)
-  text("ORGAN", 128, MODE_Y + 9, 7)
-  text("SYNTH", 188, MODE_Y + 9, 7)
+  text("PIANO", 18, MODE_Y + 9, 7)
+  text("E.PNO", 98, MODE_Y + 9, 7)
+  text("ORGAN", 178, MODE_Y + 9, 7)
+  text("SYNTH", 258, MODE_Y + 9, 7)
 end
 
 -- The organ panel: four drawbars, filled from the bottom to their level, with
@@ -655,9 +661,9 @@ function draw_bars()
   -- Footage, the name of the pitch each bar sounds. 2 2/3' has no room and no
   -- fraction glyphs, so it goes by its harmonic instead.
   text("16", 6, PAR_Y + 2, 6)
-  text("8", 66, PAR_Y + 2, 6)
-  text("4", 126, PAR_Y + 2, 6)
-  text("3RD", 186, PAR_Y + 2, 6)
+  text("8", 86, PAR_Y + 2, 6)
+  text("4", 166, PAR_Y + 2, 6)
+  text("3RD", 246, PAR_Y + 2, 6)
 end
 
 -- The synth panel: waveform across the top row, cutoff across the bottom.
@@ -672,17 +678,17 @@ function draw_synth()
     if i == syn_cut then c2 = 9 end
     rect(i * MODE_W, PAR_Y + PAR_H / 2, MODE_W - 2, h, c2)
   end
-  text("TRI", 12, PAR_Y + 6, 7)
-  text("SAW", 72, PAR_Y + 6, 7)
-  text("SQR", 132, PAR_Y + 6, 7)
-  text("SIN", 192, PAR_Y + 6, 7)
+  text("TRI", 22, PAR_Y + 6, 7)
+  text("SAW", 102, PAR_Y + 6, 7)
+  text("SQR", 182, PAR_Y + 6, 7)
+  text("SIN", 262, PAR_Y + 6, 7)
   -- The cutoff row names its own positions rather than carrying a "CUT" label
   -- beside a 1-4: the label had to sit inside the first button, which read as
   -- that button being called CUT.
-  text("DARK", 8, PAR_Y + PAR_H / 2 + 5, 7)
-  text("WARM", 68, PAR_Y + PAR_H / 2 + 5, 7)
-  text("BRT", 132, PAR_Y + PAR_H / 2 + 5, 7)
-  text("OPEN", 188, PAR_Y + PAR_H / 2 + 5, 7)
+  text("DARK", 18, PAR_Y + PAR_H / 2 + 5, 7)
+  text("WARM", 98, PAR_Y + PAR_H / 2 + 5, 7)
+  text("BRT", 182, PAR_Y + PAR_H / 2 + 5, 7)
+  text("OPEN", 258, PAR_Y + PAR_H / 2 + 5, 7)
 end
 
 function draw_panel()

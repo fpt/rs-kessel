@@ -1494,13 +1494,13 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
 
     // --- the octave buttons on the panel do what A and B do ----------------
     assert_eq!(tagged(&c.run_frame(Input::default()), 10), (0, 60));
-    tap(&mut c, 160, 12); // OCT DN
+    tap(&mut c, 240, 12); // OCT DN
     assert_eq!(
         tagged(&c.run_frame(Input::default()), 10),
         (0, 48),
         "the panel's DN button did not drop an octave"
     );
-    tap(&mut c, 210, 12); // OCT UP
+    tap(&mut c, 290, 12); // OCT UP
     assert_eq!(tagged(&c.run_frame(Input::default()), 10), (0, 60));
 
     // --- a mode button switches the patch a key plays ----------------------
@@ -1519,7 +1519,7 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
     );
     c.run_frame(Input::default());
 
-    tap(&mut c, 90, 40); // the E.PNO button
+    tap(&mut c, 120, 40); // the E.PNO button
     assert_eq!(tagged(&c.run_frame(Input::default()), 10).0, 1);
     let obs = c.run_frame(at(KEY_X, KEY_Y));
     assert_eq!(
@@ -1540,7 +1540,7 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
     // It takes a *second* finger, because a role is fixed when a finger lands
     // and does not change while it is down — dragging from a key up onto the
     // ORGAN button is still that key's glissando, and presses nothing.
-    let obs = c.run_frame(at2(KEY_X, KEY_Y, 140, 40));
+    let obs = c.run_frame(at2(KEY_X, KEY_Y, 200, 40));
     assert_eq!(
         tagged(&obs, 10).0,
         2,
@@ -1656,13 +1656,13 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
     // followed by a drag past the bottom of the panel — which is what the
     // clamp in `pull_bar` is for, since the hit test that started the drag
     // never fires again once the finger leaves.
-    c.run_frame(at(200, 60));
+    c.run_frame(at(270, 60));
     assert_eq!(
-        tagged(&c.run_frame(at(200, 60)), 13).1,
+        tagged(&c.run_frame(at(270, 60)), 13).1,
         8,
         "pressing at the top of the drawbar did not pull it to full"
     );
-    let dragged = c.run_frame(at(200, 210));
+    let dragged = c.run_frame(at(270, 210));
     c.run_frame(Input::default());
     assert_eq!(
         tagged(&dragged, 13),
@@ -1688,7 +1688,7 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
     assert_eq!(c.run_frame(Input::default()).sound.len(), 3);
 
     // --- the synth's two knobs pick between pre-declared patches -----------
-    tap(&mut c, 200, 40); // the SYNTH button
+    tap(&mut c, 280, 40); // the SYNTH button
     assert_eq!(tagged(&c.run_frame(Input::default()), 10).0, 3);
     assert_eq!(
         tagged(&c.run_frame(Input::default()), 11),
@@ -1705,7 +1705,7 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
     // Waveform on the panel's top row, cutoff on the bottom. The ids are
     // contiguous in declaration order, so moving one knob moves the id by a
     // known step — four cutoffs per waveform.
-    tap(&mut c, 90, 65); // SAW
+    tap(&mut c, 120, 65); // SAW
     assert_eq!(tagged(&c.run_frame(Input::default()), 11), (1, 2));
     let obs = c.run_frame(at(KEY_X, KEY_Y));
     assert_eq!(
@@ -1720,7 +1720,7 @@ fn piano_modes_drawbars_and_panel_octave_buttons() {
     );
     c.run_frame(Input::default());
 
-    tap(&mut c, 200, 90); // the fourth cutoff
+    tap(&mut c, 280, 90); // the fourth cutoff
     assert_eq!(tagged(&c.run_frame(Input::default()), 11), (1, 3));
     let obs = c.run_frame(at(KEY_X, KEY_Y));
     assert_eq!(

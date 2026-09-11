@@ -36,7 +36,7 @@
 -- sample-accurate thing here is a compile-time `track`, which a sequencer the
 -- player edits at runtime cannot be.)
 
-screen { mode = Square240 }
+screen { mode = Landscape320 }
 
 controls {
   dpad  = false
@@ -140,13 +140,19 @@ instrument clap {
 -- ---------------------------------------------------------------------------
 -- Layout. 240 across: a 32 px name column and sixteen 13 px steps.
 
-local DIM = 240
+local DIM = 320
 
 local HDR_Y = 0
 local HDR_H = 22
 
 local LBL_W = 32
-local CELL_W = 13
+-- The screen is 320 wide — the landscape one — and the width goes into the
+-- step cells rather than into more steps. A bar is sixteen steps and the bar
+-- buttons page by a bar, so showing two at once would quietly redefine what
+-- "bar" means to `clear_bar` and to the playhead cap. Wider cells instead:
+-- 18 px against 13 is a 38% bigger target for the finger that is doing all
+-- the work here, and GRID_X + VIS*CELL_W is exactly 320.
+local CELL_W = 18
 local ROW_H = 22
 local GRID_X = 32
 local GRID_Y = 46
@@ -170,11 +176,11 @@ local VIS = 16                 -- steps on screen; the other bar is a toggle
 -- because a digit needs no room.
 local BTN_Y = 24
 local BTN_H = 18
-local BAR_BTN_W = 30
-local LOOP_X = 124
-local LOOP_W = 62
-local CLR_X = 190
-local CLR_W = 48
+local BAR_BTN_W = 40
+local LOOP_X = 170
+local LOOP_W = 70
+local CLR_X = 248
+local CLR_W = 64
 
 -- The mixer's legend takes the row the grid does not need, directly under the
 -- loop row. Grid view has nothing there: the grid starts at 46 and the band
@@ -192,14 +198,14 @@ local MIX_H = 18
 -- row; a strip gives it 108 px standing up, and the eight stops are 13 px apart
 -- instead of 16 px apart but *aligned across all six channels*, so the shape of
 -- the mix is a skyline.
-local STRIP_W = 40
+local STRIP_W = 53         -- 6 * 53 = 318 of the 320-px width
 local NAME_Y = 68
 local FDR_Y = 82
 local FDR_H = 108
-local FDR_IN_X = 3
-local FDR_IN_W = 18
-local MTR_IN_X = 24
-local MTR_IN_W = 13
+local FDR_IN_X = 4
+local FDR_IN_W = 24
+local MTR_IN_X = 32
+local MTR_IN_W = 17
 local MUTE_Y = 194
 local SOLO_Y = 216
 local MS_H = 18
@@ -867,7 +873,7 @@ end
 -- Where a finger landed, and what role it takes for the rest of its life.
 function press_at(i, x, y)
   if y < HDR_H then
-    if x >= 160 then toggle_play() end
+    if x >= 220 then toggle_play() end
     return ROLE_BTN
   end
 
@@ -919,9 +925,9 @@ function press_at(i, x, y)
   if y >= DET_Y then
     if y >= ATT_Y then
       if sel_step == NONE then return ROLE_BTN end
-      if x < 120 then cycle_roll() else cycle_mic() end
+      if x < 160 then cycle_roll() else cycle_mic() end
     elseif y >= PEN_Y then
-      local c = x / 80
+      local c = x / 106
       if c > 2 then c = 2 end
       set_pen(c + 1)
     end
@@ -1078,11 +1084,11 @@ function draw_header()
 
   -- The transport is a button, not a lamp. A is the same thing for a keyboard.
   if playing == 1 then
-    rect(160, 2, 78, 18, 34)
-    text("PLAYING", 184, 8, 255)
+    rect(220, 2, 96, 18, 34)
+    text("PLAYING", 254, 8, 255)
   else
-    rect(160, 2, 78, 18, 238)
-    text("STOPPED", 184, 8, 250)
+    rect(220, 2, 96, 18, 238)
+    text("STOPPED", 254, 8, 250)
   end
 end
 
@@ -1101,17 +1107,17 @@ function draw_pen()
   if sel_step ~= NONE then sl = pat[sel_trk * NSTEP + sel_step] & 3 end
 
   for i = 0, 2 do
-    local x0 = i * 80 + 2
+    local x0 = i * 106 + 2
     local c = 234
     if pen == i + 1 then c = 245 end
-    rect(x0, PEN_Y, 77, PEN_H, c)
+    rect(x0, PEN_Y, 103, PEN_H, c)
     if sl == i + 1 then
-      rect(x0, PEN_Y + PEN_H - 3, 77, 3, col[sel_trk])
+      rect(x0, PEN_Y + PEN_H - 3, 103, 3, col[sel_trk])
     end
   end
-  text("GHOST", 30, PEN_Y + 7, 250)
-  text("NORM", 112, PEN_Y + 7, 250)
-  text("ACC", 194, PEN_Y + 7, 250)
+  text("GHOST", 43, PEN_Y + 7, 250)
+  text("NORM", 151, PEN_Y + 7, 250)
+  text("ACC", 259, PEN_Y + 7, 250)
 end
 
 function draw_buttons()
@@ -1131,23 +1137,23 @@ function draw_buttons()
       end
     end
   end
-  text("B1", 10, BTN_Y + 7, 252)
-  text("B2", 40, BTN_Y + 7, 252)
-  text("B3", 70, BTN_Y + 7, 252)
-  text("B4", 100, BTN_Y + 7, 252)
+  text("B1", 15, BTN_Y + 7, 252)
+  text("B2", 55, BTN_Y + 7, 252)
+  text("B3", 95, BTN_Y + 7, 252)
+  text("B4", 135, BTN_Y + 7, 252)
 
   -- The loop toggle carries its state in its colour as well as its word: a
   -- two-state button whose only difference is the text is a button you read.
   if loop_all == 1 then
     rect(LOOP_X, BTN_Y, LOOP_W, BTN_H, 245)
-    text("LOOP ALL", LOOP_X + 15, BTN_Y + 7, 252)
+    text("LOOP ALL", LOOP_X + 19, BTN_Y + 7, 252)
   else
     rect(LOOP_X, BTN_Y, LOOP_W, BTN_H, 234)
-    text("LOOP 1", LOOP_X + 19, BTN_Y + 7, 252)
+    text("LOOP 1", LOOP_X + 23, BTN_Y + 7, 252)
   end
 
   rect(CLR_X, BTN_Y, CLR_W, BTN_H, 234)
-  text("CLR BAR", CLR_X + 10, BTN_Y + 7, 250)
+  text("CLR BAR", CLR_X + 18, BTN_Y + 7, 250)
 end
 
 function draw_labels()
@@ -1255,27 +1261,27 @@ function draw_detail()
   local extra = (b >> 2) & 3
   local mic = (b >> 4) & 3
 
-  rect(2, ATT_Y, 117, ATT_H, 237)
+  rect(2, ATT_Y, 157, ATT_H, 237)
   if extra == 0 then
-    text("ROLL 1", 48, ATT_Y + 7, 248)
+    text("ROLL 1", 68, ATT_Y + 7, 248)
   elseif extra == 1 then
-    text("ROLL 2", 48, ATT_Y + 7, 252)
+    text("ROLL 2", 68, ATT_Y + 7, 252)
   else
-    text("ROLL 3", 48, ATT_Y + 7, 255)
+    text("ROLL 3", 68, ATT_Y + 7, 255)
   end
 
-  rect(121, ATT_Y, 117, ATT_H, 237)
+  rect(161, ATT_Y, 157, ATT_H, 237)
   if mic == 0 then
-    text("MIC EARLY", 161, ATT_Y + 7, 250)
+    text("MIC EARLY", 221, ATT_Y + 7, 250)
   elseif mic == 1 then
-    text("MIC ON", 167, ATT_Y + 7, 248)
+    text("MIC ON", 227, ATT_Y + 7, 248)
   else
-    text("MIC LATE", 163, ATT_Y + 7, 253)
+    text("MIC LATE", 223, ATT_Y + 7, 253)
   end
 end
 
 -- What the two bars in every strip are. Said once above them rather than six
--- times down the side — there is no room in a 40 px strip for a column
+-- times down the side — there is no room in a strip this narrow for a column
 -- heading, and the answer is the same for all of them.
 --
 -- It sits in the row grid view gives to the top of the grid, so the strips
@@ -1283,10 +1289,10 @@ end
 function draw_mix_head()
   rect(0, MIX_Y, DIM, MIX_H, 234)
   text("MIXER", 6, MIX_Y + 7, 252)
-  rect(62, MIX_Y + 5, 8, 8, 208)
-  text("LEVEL", 74, MIX_Y + 7, 245)
-  rect(132, MIX_Y + 5, 8, 8, 252)
-  text("HIT", 144, MIX_Y + 7, 245)
+  rect(82, MIX_Y + 5, 8, 8, 208)
+  text("LEVEL", 94, MIX_Y + 7, 245)
+  rect(176, MIX_Y + 5, 8, 8, 252)
+  text("HIT", 188, MIX_Y + 7, 245)
 end
 
 function draw_mixer()
@@ -1299,7 +1305,7 @@ function draw_mixer()
     -- answers both, so a strip never looks live while it is silent.
     local nc = col[t]
     if on == 0 then nc = 236 end
-    track_name(t, x0 + 5, NAME_Y, nc)
+    track_name(t, x0 + 8, NAME_Y, nc)
 
     rect(x0 + FDR_IN_X, FDR_Y, FDR_IN_W, FDR_H, 233)
     -- Nine notches, drawn under the fill: the ones still showing are the travel
@@ -1331,12 +1337,12 @@ function draw_mixer()
     local mc = 234
     if mute[t] == 1 then mc = 208 end
     rect(x0 + 1, MUTE_Y, STRIP_W - 3, MS_H, mc)
-    text("MUTE", x0 + 11, MUTE_Y + 7, 252)
+    text("MUTE", x0 + 18, MUTE_Y + 7, 252)
 
     local sc = 234
     if solo[t] == 1 then sc = 226 end
     rect(x0 + 1, SOLO_Y, STRIP_W - 3, MS_H, sc)
-    text("SOLO", x0 + 11, SOLO_Y + 7, 252)
+    text("SOLO", x0 + 18, SOLO_Y + 7, 252)
   end
 end
 

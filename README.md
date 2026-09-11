@@ -104,12 +104,14 @@ the screen changed — an MCP round trip per frame is pure overhead.
 
 ```bash
 kessel run games/2048.lua      # arrows slide tiles, A starts a new game
-kessel run games/tetris.lua    # L/R move, A rotates, Down soft-drops
+kessel run games/tetris.lua    # L/R move, A rotates; on the 240x320 screen
 kessel run games/platform.lua  # arrows move, A jumps and wall-jumps
 kessel run games/outrun.lua    # pseudo-3D road racer, on the 320x240 screen
 kessel run games/spectrum.lua  # 240x240, the 256-colour palette, sprite banks
 kessel run games/popn.lua      # six keys, no d-pad at all
 kessel run games/paint.lua     # drag to draw; arrows steer the brush
+kessel run games/piano.lua     # two octaves of keybed, on 320x240
+kessel run games/dnb.lua       # a four-bar drum sequencer, on 320x240
 kessel run games/swarm.lua     # dodge the sparks; #include over games/lib/
 ```
 
