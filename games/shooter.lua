@@ -1,4 +1,4 @@
--- shooter.lua — a vertical shoot-em-up in the Raiden mould, on the 240x240
+-- shooter.lua — a vertical shoot-em-up in the Raiden mould, on the 240x320
 -- screen. One stage: out over open sea, in across the surf and the beach, over
 -- fields and a supply road, and into a super-heavy tank that fills a quarter of
 -- the screen. Arrows move, A fires, B drops a bomb. The vulcan starts as one
@@ -44,7 +44,7 @@
 --   was immortal whenever two rounds landed on the same frame, and a bomb could
 --   not finish anything whose health it overshot.
 
-screen { mode = Square240 }
+screen { mode = Portrait320 }
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {
@@ -147,8 +147,18 @@ sfx gameover {
 }
 
 -- ------------------------------------------------------------ constants ----
-local DIM = 240
-local RIGHT_EDGE = 208               -- DIM - 32, the ship's right limit
+-- The screen is 240x320 — the tall one — because a vertical scroller is a
+-- vertical thing: the extra 80 rows are 80 more rows of sky to see an enemy
+-- coming in, which is the whole game. The width is unchanged, so nothing the
+-- ship does sideways moved.
+--
+-- A width and a height, not one number for both. They were the same on the
+-- square screen, so every use had to be re-read to find out which it meant —
+-- and `x > edge` against `y > edge` is exactly the confusion a scroller hides
+-- well: the wrong one despawns a shot early instead of crashing.
+local W = 240
+local H = 320
+local RIGHT_EDGE = 208               -- W - 32, the ship's right limit
 
 -- How far into the stage each thing happens, in world rows.
 local SEA_END = 900
@@ -212,7 +222,7 @@ local invuln = 0           -- frames of grace after a respawn
 local score = 0
 local flash = 0            -- bomb screen-flash timer
 
-local scroll = 239         -- world row at the top of the screen
+local scroll = 319         -- world row at the top of the screen (H - 1)
 local wave = 0             -- animates the surf
 
 -- The wave machine. `wv_t` counts down to the next release; when a formation is
@@ -237,10 +247,10 @@ local bactive = 0
 
 function init()
   clear(pshot)  clear(eshot)  clear(foes)  clear(pups)  clear(booms)
-  px = 104  py = 170  lean = 0
+  px = 104  py = 250  lean = 0
   cd = 0  mcd = 0  power = 1  bombs = 3  lives = 3  invuln = 90
   score = 0  flash = 0
-  scroll = 239  wave = 0
+  scroll = 319  wave = 0
   wv_t = 20  wv_left = 0  wv_i = 0  wv_form = 0  wv_kind = 0
   wv_base = 100  wv_count = 0
   state = 0  warn_t = 0
@@ -402,7 +412,7 @@ function kill_player()
     music_stop()                     -- the tune gets out of the way
     sfx(gameover)
   else
-    px = 104  py = 170  invuln = 120
+    px = 104  py = 250  invuln = 120
     if bombs < 2 then bombs = 2 end
   end
 end
@@ -570,7 +580,7 @@ function update_player()
   if px < 0 then px = 0 end
   if px > RIGHT_EDGE then px = RIGHT_EDGE end
   if py < 0 then py = 0 end
-  if py > 200 then py = 200 end
+  if py > 280 then py = 280 end
 
   -- The bank pose eases rather than snapping: at three frames from level to
   -- full lock the fighter flickers between two sprites on every tap.
@@ -635,16 +645,16 @@ function update_shots()
       pshot[i].y = pshot[i].y + pshot[i].vy
       if pshot[i].y < 0 - 8 then pshot[i].alive = 0 end
       if pshot[i].x < 0 - 8 then pshot[i].alive = 0 end
-      if pshot[i].x > DIM then pshot[i].alive = 0 end
+      if pshot[i].x > W then pshot[i].alive = 0 end
     end
   end
   for i = 0, len(eshot) - 1 do
     if eshot[i].alive == 1 then
       eshot[i].x = eshot[i].x + eshot[i].vx
       eshot[i].y = eshot[i].y + eshot[i].vy
-      if eshot[i].y > DIM then eshot[i].alive = 0 end
+      if eshot[i].y > H then eshot[i].alive = 0 end
       if eshot[i].x < 0 - 8 then eshot[i].alive = 0 end
-      if eshot[i].x > DIM then eshot[i].alive = 0 end
+      if eshot[i].x > W then eshot[i].alive = 0 end
       if eshot[i].alive == 1 and invuln == 0 then
         if rect_overlap(px + SHIP_HIT_OFF, py + SHIP_HIT_OFF, SHIP_HIT, SHIP_HIT,
                         eshot[i].x, eshot[i].y, 6, 6) then
@@ -671,7 +681,7 @@ function update_foes()
         if s > 0 then foes[i].x = foes[i].x + s / 160
         else foes[i].x = foes[i].x - (0 - s) / 160 end
       end
-      if foes[i].y > DIM then foes[i].alive = 0 end
+      if foes[i].y > H then foes[i].alive = 0 end
       if foes[i].t % 70 == 30 then foe_shoot(i) end
 
       if foes[i].alive == 1 and invuln == 0 then
@@ -738,7 +748,7 @@ function update_pups()
   for i = 0, len(pups) - 1 do
     if pups[i].alive == 1 then
       pups[i].y = pups[i].y + 1
-      if pups[i].y > DIM then pups[i].alive = 0 end
+      if pups[i].y > H then pups[i].alive = 0 end
       if rect_overlap(px + 4, py + 4, 24, 24, pups[i].x, pups[i].y, 16, 16) then
         pups[i].alive = 0
         sfx(pickup)
@@ -856,7 +866,7 @@ end
 -- renderer is "which band is `wy` in".
 function draw_terrain()
   local y = 0
-  while y < DIM do
+  while y < H do
     local wy = scroll - y
     local c = C_SEA
     if wy < SEA_END then
@@ -885,7 +895,7 @@ function draw_terrain()
       elseif block == 2 then c = C_GRASS_L end
       if wy < GRASS_AT then c = C_DUNE end
     end
-    hline(0, DIM - 1, y, c)
+    hline(0, W - 1, y, c)
 
     -- Whitecaps. `wave` crawls independently of `scroll`, so the sea still moves
     -- when the boss stops the stage.
@@ -910,13 +920,13 @@ end
 -- decoration, and a tree the player mistakes for an enemy is worse than none.
 function draw_props()
   local s = 0
-  if scroll > DIM then s = (scroll - DIM) / 64 end
+  if scroll > H then s = (scroll - H) / 64 end
   local top = scroll / 64
   for i = s, top do
     local wy = i * 64
     if wy <= scroll then
       local y = scroll - wy
-      if y < DIM then
+      if y < H then
         local id = tree
         if wy < BEACH_END then id = rock end
         -- Nothing stands in open water, and an empty sea is the point of the
@@ -925,7 +935,7 @@ function draw_props()
           -- A computed id, so the raw six-argument form: the short one reads the
           -- size off a declared sprite *name*, and there is no name here.
           sprn(id, i * 37 % 26, y, 2, 2, 0)
-          sprn(id, DIM - 18 - (i * 53 % 22), y, 2, 2, 0)
+          sprn(id, W - 18 - (i * 53 % 22), y, 2, 2, 0)
         end
       end
     end
@@ -946,11 +956,11 @@ function draw_hud()
   -- trap, and it only springs once you have spent your last bomb.
   local i = 0
   while i < bombs do
-    sprn(pup_b, 4 + i * 18, 220, 0)
+    sprn(pup_b, 4 + i * 18, 300, 0)
     i = i + 1
   end
-  text("SHIPS", 172, 222, 7)
-  number(lives, 216, 222, 7)
+  text("SHIPS", 172, 302, 7)
+  number(lives, 216, 302, 7)
 
   if bactive == 1 then
     -- Boss health, drawn as a bar because a number would not read at a glance.
@@ -1048,8 +1058,8 @@ function draw()
   -- screen-clear as an event rather than as eight enemies quietly vanishing.
   if flash > 0 then
     local y = flash % 3
-    while y < DIM do
-      hline(0, DIM - 1, y, 7)
+    while y < H do
+      hline(0, W - 1, y, 7)
       y = y + 3
     end
   end
@@ -1057,15 +1067,15 @@ function draw()
   draw_hud()
 
   if warn_t > 0 and bactive == 0 and warn_t % 24 < 14 then
-    text("WARNING", 88, 100, 8)
+    text("WARNING", 88, 140, 8)
   end
   if state == 1 then
-    text("GAME OVER", 84, 110, 8)
-    text("PRESS A", 92, 124, 7)
+    text("GAME OVER", 84, 150, 8)
+    text("PRESS A", 92, 164, 7)
   end
   if state == 2 then
-    text("STAGE CLEAR", 76, 110, 10)
-    text("PRESS A", 92, 124, 7)
+    text("STAGE CLEAR", 76, 150, 10)
+    text("PRESS A", 92, 164, 7)
   end
   -- Reported for observation.
   --

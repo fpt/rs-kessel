@@ -112,6 +112,7 @@ kessel run games/popn.lua      # six keys, no d-pad at all
 kessel run games/paint.lua     # drag to draw; arrows steer the brush
 kessel run games/piano.lua     # two octaves of keybed, on 320x240
 kessel run games/dnb.lua       # a four-bar drum sequencer, on 320x240
+kessel run games/shooter.lua   # vertical shmup, on the 240x320 screen
 kessel run games/swarm.lua     # dodge the sparks; #include over games/lib/
 ```
 
