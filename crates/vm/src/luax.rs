@@ -1132,8 +1132,8 @@ impl Parser {
     /// same way it reads `controls`.
     ///
     /// An unknown mode name is a diagnostic rather than a silent fallback: a
-    /// game that asked for a bigger screen and quietly got 128×128 would draw
-    /// its HUD off the edge, which looks like a game bug rather than a typo.
+    /// game that asked for a rectangular screen and quietly got 240×240 would
+    /// draw its HUD off the edge, which looks like a game bug rather than a typo.
     fn parse_screen(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
         let line = self.line();
         self.eat_kw("screen");

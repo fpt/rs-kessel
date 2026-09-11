@@ -36,7 +36,7 @@
 -- sample-accurate thing here is a compile-time `track`, which a sequencer the
 -- player edits at runtime cannot be.)
 
-screen { mode = Extended240 }
+screen { mode = Square240 }
 
 controls {
   dpad  = false

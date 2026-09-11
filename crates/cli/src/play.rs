@@ -4,7 +4,7 @@
 //! and hands us RGBA; all this module does is nearest-neighbour upscale it to
 //! the window and map keys onto the gamepad bitfield. That's why it uses
 //! `softbuffer` (a CPU surface) rather than a GPU stack: there is no pipeline to
-//! build for a 128×128 image, and keeping pixels on the CPU means what you see
+//! build for a 240×240 image, and keeping pixels on the CPU means what you see
 //! is exactly the buffer an agent would get back from `vm_get_framebuffer`.
 //!
 //! Sound follows the same shape: the VM records what a game asked for and

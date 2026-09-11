@@ -44,7 +44,7 @@
 --   was immortal whenever two rounds landed on the same frame, and a bomb could
 --   not finish anything whose health it overshot.
 
-screen { mode = Extended240 }
+screen { mode = Square240 }
 
 -- Host-UI control metadata (ignored by the VM; see docs/VM.md).
 controls {

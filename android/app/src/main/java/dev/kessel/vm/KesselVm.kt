@@ -73,7 +73,7 @@ class VmInput {
  * Every method is `synchronized` **except [renderAudio]**. The native console
  * is internally locked and would be safe to call concurrently, but `close`
  * racing a `tick` would not be, and one lock here removes the whole question.
- * The cost is bounded — a frame of a 128×128 machine is microseconds, so a UI
+ * The cost is bounded — a frame of a 240×240 machine is microseconds, so a UI
  * thread asking [isPaused] never waits long enough to notice.
  *
  * The audio thread is the exception, and has to be: it would be waiting on a

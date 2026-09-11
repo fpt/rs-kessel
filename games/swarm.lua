@@ -14,7 +14,7 @@ controls {
   pause = START
 }
 
-local DIM = 128
+local DIM = 240
 local SIZE = 4            -- everything on screen is a 4x4 block
 local EDGE = 2            -- how close to the wall a spark may get
 local SPEED = 2           -- player pixels per frame
@@ -40,7 +40,7 @@ end
 -- land on the player, and a run that is over before the first frame is drawn
 -- reads as a broken game rather than a hard one.
 function restart()
-  player.x = 62  player.y = 62
+  player.x = 118  player.y = 118
   player.vx = 0  player.vy = 0
   score = 0
   ramp = 0
@@ -136,9 +136,9 @@ function draw()
   local bar = min(score / 8, DIM - 8)
   hline(4, 4 + bar, 4, 10)
 
-  -- 4 px per glyph, so these are centred by hand on a 128-wide screen.
+  -- 4 px per glyph, so these are centred by hand on a 240-wide screen.
   if dead == 1 then
-    text("HIT", 58, 44, 8)
-    text("PRESS A", 50, 54, 7)
+    text("HIT", 114, 112, 8)
+    text("PRESS A", 106, 122, 7)
   end
 end

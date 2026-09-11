@@ -105,18 +105,18 @@ sprite block_l {
   99999999
 }
 
-tilemap well(10, 15)
+tilemap well(12, 26)
 
-local BW = 10
-local BH = 15
-local OX = 4         -- leave room for the score HUD to the right of the well
-local OY = 4
+local BW = 12
+local BH = 26
+local OX = 8         -- leave room for the score HUD to the right of the well
+local OY = 16
 
 local shape: array(7, word)   -- the 7 tetromino spawn masks
 local cur_kind = 0            -- index into shape; also selects the rotation origin
 local next_kind = 0           -- queued piece shown in the HUD
 local cur = 0                 -- current piece mask
-local px: int = 3             -- 4x4 box top-left in board cells
+local px: int = 4             -- 4x4 box top-left in board cells
 local py: int = 0
 local gtick = 0
 local mcd = 0                 -- move/rotate cooldown
@@ -347,16 +347,16 @@ function draw()
     end
     b = b + 1
   end
-  text("SCORE", 88, 8, 7)
-  number(score, 88, 15, 10)
-  text("LINES", 88, 28, 7)
-  number(lines, 88, 35, 11)
-  text("NEXT", 88, 48, 7)
+  text("SCORE", 120, 24, 7)
+  number(score, 120, 36, 10)
+  text("LINES", 120, 60, 7)
+  number(lines, 120, 72, 11)
+  text("NEXT", 120, 96, 7)
   local next_mask = shape[next_kind]
-  local preview_x = 92
-  local preview_y = 58
-  if next_kind == 0 then preview_x = 88  preview_y = 50 end
-  if next_kind == 1 then preview_x = 88 end
+  local preview_x = 124
+  local preview_y = 112
+  if next_kind == 0 then preview_x = 120  preview_y = 104 end
+  if next_kind == 1 then preview_x = 120 end
   local n = 0
   while n < 16 do
     if ((next_mask >> n) & 1) == 1 then
@@ -365,8 +365,8 @@ function draw()
     n = n + 1
   end
   if dead == 1 then
-    text("GAME OVER", 88, 96, 8)
-    text("PRESS A", 88, 104, 7)
+    text("GAME OVER", 120, 184, 8)
+    text("PRESS A", 120, 196, 7)
   end
   entity(OX + px * 8, OY + py * 8, 1)
 end

@@ -42,28 +42,28 @@ sprite brick {
   ........
 }
 
-local BCOLS = 12
-local BROWS = 5
-local BX0 = 8
-local BY0 = 16
-local PADY = 118
-local PADW = 24     -- 3 tiles wide
+local BCOLS = 26
+local BROWS = 8
+local BX0 = 16
+local BY0 = 24
+local PADY = 230
+local PADW = 40     -- 5 tiles wide
 
-local alive: array(60, byte)    -- BCOLS*BROWS brick flags
-local padx: int = 52
-local bx: int = 60              -- ball position (signed so it can go < 0 briefly)
-local by: int = 90
+local alive: array(208, byte)   -- BCOLS*BROWS brick flags
+local padx: int = 100
+local bx: int = 116             -- ball position (signed so it can go < 0 briefly)
+local by: int = 168
 local vx: int = 1
 local vy: int = 0 - 1
 
 function launch_ball()
-  bx = 60  by = 90  vx = 1  vy = 0 - 1
+  bx = 116  by = 168  vx = 1  vy = 0 - 1
 end
 
 function init()
   -- len(alive) tracks the array's declared size (BCOLS*BROWS) automatically.
   for i = 0, len(alive) - 1 do alive[i] = 1 end
-  padx = 52
+  padx = 100
   launch_ball()
 end
 
@@ -71,13 +71,13 @@ function update()
   if btn(LEFT)  then padx = padx - 2 end
   if btn(RIGHT) then padx = padx + 2 end
   if padx < 0 then padx = 0 end
-  if padx > 128 - PADW then padx = 128 - PADW end
+  if padx > 240 - PADW then padx = 240 - PADW end
 
   bx = bx + vx
   by = by + vy
 
   if bx <= 0 then bx = 0  vx = 0 - vx end
-  if bx >= 120 then bx = 120  vx = 0 - vx end
+  if bx >= 232 then bx = 232  vx = 0 - vx end
   if by <= 0 then by = 0  vy = 0 - vy end
 
   -- paddle bounce
@@ -99,7 +99,7 @@ function update()
     end
   end
 
-  if by >= 128 then launch_ball() end
+  if by >= 240 then launch_ball() end
 end
 
 function draw()
@@ -119,6 +119,8 @@ function draw()
   spr(pad, padx, PADY, 0)
   spr(pad, padx + 8, PADY, 0)
   spr(pad, padx + 16, PADY, 0)
+  spr(pad, padx + 24, PADY, 0)
+  spr(pad, padx + 32, PADY, 0)
 
   spr(ballspr, bx, by, 0)
   entity(bx, by, 1)

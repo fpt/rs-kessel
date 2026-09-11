@@ -20,9 +20,9 @@ function update()
   b.x = b.x + b.vx
   b.y = b.y + b.vy
   -- vx/vy are u16; "0 - v" wraps to the negative step, so the block reverses.
-  if b.x >= 118 then b.vx = 0 - b.vx end
+  if b.x >= 235 then b.vx = 0 - b.vx end
   if b.x <= 2 then b.vx = 0 - b.vx end
-  if b.y >= 118 then b.vy = 0 - b.vy end
+  if b.y >= 235 then b.vy = 0 - b.vy end
   if b.y <= 2 then b.vy = 0 - b.vy end
 end
 

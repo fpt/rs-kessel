@@ -20,8 +20,8 @@ sprite face {
   .aaaaaa.
 }
 
-local x = 60
-local y = 60
+local x = 116
+local y = 116
 
 function update()
   if btn(LEFT) then x = x - 1 end

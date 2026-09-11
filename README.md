@@ -3,8 +3,8 @@
 A tiny **fantasy console** for AI agents and humans.
 
 Kessel gives a model a real machine to write games for: a 16-bit stack VM with a
-240×240 screen, a gamepad, and a statically-typed Lua-ish language that compiles
-to it. The model writes a game, assembles it, runs frames, looks at the screen,
+240×240 screen (or 240×320 / 320×240, if the game says so), a gamepad, and a
+statically-typed Lua-ish language that compiles to it. The model writes a game, assembles it, runs frames, looks at the screen,
 and debugs — then you play the result in a window.
 
 ```bash
@@ -105,7 +105,7 @@ the screen changed — an MCP round trip per frame is pure overhead.
 kessel run games/2048.lua      # arrows slide tiles, A starts a new game
 kessel run games/tetris.lua    # L/R move, A rotates, Down soft-drops
 kessel run games/platform.lua  # arrows move, A jumps and wall-jumps
-kessel run games/outrun.lua    # pseudo-3D road racer
+kessel run games/outrun.lua    # pseudo-3D road racer, on the 320x240 screen
 kessel run games/spectrum.lua  # 240x240, the 256-colour palette, sprite banks
 kessel run games/popn.lua      # six keys, no d-pad at all
 kessel run games/paint.lua     # drag to draw; arrows steer the brush

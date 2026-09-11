@@ -124,23 +124,23 @@ fn platform_has_clear_background_and_smooth_jump() {
     for _ in 0..20 {
         player = c.run_frame(0).entities[0];
     }
-    assert_eq!(player.y, 104, "player did not settle flush on the floor");
+    assert_eq!(player.y, 216, "player did not settle flush on the floor");
 
     player = c.run_frame(A).entities[0];
     let mut min_y = player.y;
-    let mut airborne_frames = u32::from(player.y < 104);
+    let mut airborne_frames = u32::from(player.y < 216);
     for _ in 0..44 {
         player = c.run_frame(0).entities[0];
         min_y = min_y.min(player.y);
-        airborne_frames += u32::from(player.y < 104);
+        airborne_frames += u32::from(player.y < 216);
     }
 
-    assert!(min_y <= 78, "jump was too low: apex y={min_y}");
+    assert!(min_y <= 190, "jump was too low: apex y={min_y}");
     assert!(
         airborne_frames >= 24,
         "jump arc was too fast: {airborne_frames} airborne frames"
     );
-    assert_eq!(player.y, 104, "player did not land after the jump");
+    assert_eq!(player.y, 216, "player did not land after the jump");
 }
 
 #[test]
@@ -176,29 +176,29 @@ fn platform_camera_follows_player_across_stage() {
     }
 
     let mut player = c.run_frame(0).entities[0];
-    for _ in 0..160 {
+    for _ in 0..300 {
         player = c.run_frame(RIGHT).entities[0];
     }
-    assert!(player.x > 128, "player never entered the second screen");
+    assert!(player.x > 240, "player never entered the second screen");
     let width = c.screen_size().0 as usize;
     let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba(), width).expect("hero is visible");
     assert!(
-        (50..=70).contains(&min_x),
+        (108..=124).contains(&min_x),
         "camera did not centre hero: x={min_x}"
     );
     assert!(
-        max_x < 80,
+        max_x < 132,
         "hero rendered too far right while camera followed"
     );
 
-    for _ in 0..100 {
+    for _ in 0..300 {
         player = c.run_frame(RIGHT).entities[0];
     }
-    assert_eq!(player.x, 240, "right boundary did not stop the player");
+    assert_eq!(player.x, 464, "right boundary did not stop the player");
     let width = c.screen_size().0 as usize;
     let (min_x, max_x) = white_x_bounds(&c.framebuffer_rgba(), width).expect("hero is visible");
     assert!(
-        min_x >= 112 && max_x < 128,
+        min_x >= 216 && max_x < 240,
         "hero disappeared at stage edge"
     );
 }
@@ -211,8 +211,8 @@ fn platform_wall_jump_launches_away_from_wall() {
 
     let wall_jump = include_str!("../../../games/platform.lua")
         .replace(
-            "p.x = 16  p.y = 96  p.y4 = 96 * 4",
-            "p.x = 56  p.y = 72  p.y4 = 72 * 4",
+            "p.x = 16  p.y = 208  p.y4 = 208 * 4",
+            "p.x = 56  p.y = 184  p.y4 = 184 * 4",
         )
         .replace("enemies[0].alive = 1", "enemies[0].alive = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
@@ -230,7 +230,7 @@ fn platform_wall_jump_launches_away_from_wall() {
         "wall-jump did not detach from the wall"
     );
     assert!(
-        launched.entities[0].y < 72,
+        launched.entities[0].y < 184,
         "wall-jump did not launch upward"
     );
     let launch_x = launched.entities[0].x;
@@ -263,28 +263,50 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
     c.load_rom("p.lua").unwrap();
     let first = c.run_frame(0);
     let solid_tiles = [
-        (4, 11),
-        (5, 11),
-        (6, 11),
-        (10, 9),
-        (11, 9),
-        (16, 11),
-        (17, 11),
-        (18, 11),
-        (22, 8),
-        (23, 8),
-        (24, 8),
-        (28, 10),
-        (29, 10),
-        (6, 8),
-        (6, 9),
-        (6, 10),
-        (18, 8),
-        (18, 9),
-        (18, 10),
-        (24, 5),
-        (24, 6),
-        (24, 7),
+        (4, 25),
+        (5, 25),
+        (6, 25),
+        (10, 23),
+        (11, 23),
+        (16, 25),
+        (17, 25),
+        (18, 25),
+        (22, 22),
+        (23, 22),
+        (24, 22),
+        (28, 24),
+        (29, 24),
+        (33, 25),
+        (34, 25),
+        (35, 25),
+        (39, 22),
+        (40, 22),
+        (44, 24),
+        (45, 24),
+        (46, 24),
+        (50, 21),
+        (51, 21),
+        (52, 21),
+        (55, 24),
+        (56, 24),
+        (6, 22),
+        (6, 23),
+        (6, 24),
+        (18, 22),
+        (18, 23),
+        (18, 24),
+        (35, 22),
+        (35, 23),
+        (35, 24),
+        (24, 19),
+        (24, 20),
+        (24, 21),
+        (46, 19),
+        (46, 20),
+        (46, 21),
+        (52, 18),
+        (52, 19),
+        (52, 20),
     ];
     for coin in first.entities.iter().filter(|e| e.tag == 3) {
         assert!(
@@ -297,7 +319,7 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
     let raised = first
         .entities
         .iter()
-        .find(|e| e.tag == 2 && e.y == 80)
+        .find(|e| e.tag == 2 && e.y == 192)
         .unwrap();
     assert_eq!(raised.x, 136, "enemy moved before its patrol tick");
     let mut raised_x = raised.x;
@@ -306,7 +328,7 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         raised_x = obs
             .entities
             .iter()
-            .find(|e| e.tag == 2 && e.y == 80)
+            .find(|e| e.tag == 2 && e.y == 192)
             .unwrap()
             .x;
     }
@@ -334,12 +356,12 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         !collected
             .entities
             .iter()
-            .any(|e| e.tag == 3 && (e.x, e.y) == (24, 104)),
+            .any(|e| e.tag == 3 && (e.x, e.y) == (24, 216)),
         "collected coin remained visible"
     );
 
     let stomp = PLATFORM
-        .replace("enemies[0].x = 64", "enemies[0].x = 16")
+        .replace("enemies[0].x = 120", "enemies[0].x = 16")
         .replace("enemies[0].dir = 1", "enemies[0].dir = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
@@ -359,10 +381,10 @@ fn platform_coins_patrols_stomps_and_knockback_work() {
         }
     }
     assert!(stomped, "falling onto an enemy did not defeat it");
-    assert!(player_y <= 96, "stomp did not bounce the player upward");
+    assert!(player_y <= 208, "stomp did not bounce the player upward");
 
     let side_hit = PLATFORM
-        .replace("enemies[0].x = 64", "enemies[0].x = 32")
+        .replace("enemies[0].x = 120", "enemies[0].x = 32")
         .replace("enemies[0].dir = 1", "enemies[0].dir = 0")
         .replace("enemies[1].alive = 1", "enemies[1].alive = 0")
         .replace("enemies[2].alive = 1", "enemies[2].alive = 0")
@@ -702,8 +724,8 @@ fn rogue_sword_hearts_and_invulnerability_work() {
 
     // Put the first orc directly to the hero's right, which is the initial facing.
     let adjacent = ROGUE.replace(
-        "enemies[0].x = 12  enemies[0].y = 3",
-        "enemies[0].x = 3   enemies[0].y = 2",
+        "enemies[0].x = 23  enemies[0].y = 5",
+        "enemies[0].x = 4   enemies[0].y = 3",
     );
     let mut c = VmConsole::new();
     c.write_source("r.lua", &adjacent).unwrap();
@@ -715,7 +737,7 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         before
             .entities
             .iter()
-            .any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
+            .any(|e| e.tag == 10 && (e.x, e.y) == (32, 24)),
         "adjacent test orc was not present"
     );
     let after = c.run_frame(A);
@@ -723,10 +745,10 @@ fn rogue_sword_hearts_and_invulnerability_work() {
         !after
             .entities
             .iter()
-            .any(|e| e.tag == 10 && (e.x, e.y) == (24, 16)),
+            .any(|e| e.tag == 10 && (e.x, e.y) == (32, 24)),
         "sword did not defeat the adjacent orc"
     );
-    assert_eq!(index_at(&c, 31, 19), 10, "sword attack was not rendered");
+    assert_eq!(index_at(&c, 39, 27), 10, "sword attack was not rendered");
 
     // Keep one adjacent orc alive to exercise repeated contact attempts.
     let contact = adjacent
@@ -750,14 +772,14 @@ fn rogue_sword_hearts_and_invulnerability_work() {
     assert_eq!(index_at(&c, 38, 1), 6, "fifth heart should have emptied");
 
     assert_eq!(
-        index_at(&c, 18, 16),
+        index_at(&c, 26, 24),
         5,
         "hero should begin the blink hidden"
     );
     obs = c.run_frame(0);
     player = *obs.entities.iter().find(|e| e.tag <= 5).unwrap();
     assert_eq!(
-        index_at(&c, 18, 16),
+        index_at(&c, 26, 24),
         7,
         "hero should alternate visible during invulnerability"
     );
@@ -802,16 +824,16 @@ fn rogue_chests_and_stairs_advance_stages() {
     c.load_rom("r.lua").unwrap();
 
     let chest_routes: [&[(u8, usize)]; 4] = [
-        &[(RIGHT, 5)],
-        &[(LEFT, 5), (DOWN, 4)],
-        &[(UP, 5), (RIGHT, 5)],
-        &[(UP, 7), (LEFT, 8)],
+        &[(RIGHT, 10)],
+        &[(LEFT, 10), (DOWN, 10)],
+        &[(UP, 8), (RIGHT, 10)],
+        &[(UP, 12), (LEFT, 16)],
     ];
     let stair_routes: [&[(u8, usize)]; 4] = [
-        &[(RIGHT, 6), (DOWN, 11)],
-        &[(LEFT, 6), (DOWN, 7)],
-        &[(UP, 6), (RIGHT, 6)],
-        &[(LEFT, 3), (UP, 4)],
+        &[(RIGHT, 12), (DOWN, 22)],
+        &[(LEFT, 12), (DOWN, 12)],
+        &[(DOWN, 6), (RIGHT, 12), (UP, 20)],
+        &[(LEFT, 6), (UP, 10)],
     ];
 
     for index in 0..4 {
@@ -938,13 +960,13 @@ fn game_2048_merges_wins_loses_and_restarts() {
     assert!(first
         .entities
         .iter()
-        .any(|e| e.tag == 4 && (e.x, e.y) == (32, 29)));
+        .any(|e| e.tag == 4 && (e.x, e.y) == (24, 32)));
     assert!(first
         .entities
         .iter()
-        .any(|e| e.tag == 4 && (e.x, e.y) == (48, 29)));
+        .any(|e| e.tag == 4 && (e.x, e.y) == (72, 32)));
     let rgba = c.framebuffer_rgba();
-    let nudged_edge = (29 * c.screen_size().0 as usize + 30) * 4;
+    let nudged_edge = (32 * c.screen_size().0 as usize + 22) * 4;
     assert_eq!(
         &rgba[nudged_edge..nudged_edge + 4],
         &[0xc2, 0xc3, 0xc7, 0xff],
@@ -969,7 +991,7 @@ fn game_2048_merges_wins_loses_and_restarts() {
     assert!(second
         .entities
         .iter()
-        .any(|e| e.tag == 8 && (e.x, e.y) == (32, 29)));
+        .any(|e| e.tag == 8 && (e.x, e.y) == (24, 32)));
 
     c.run_frame(0);
     let restarted = c.run_frame(A);

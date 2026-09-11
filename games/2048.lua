@@ -19,137 +19,6 @@ controls {
   pause = START
 }
 
--- A 16x16 panel frame, drawn as one sprite: the compiler slices it into the
--- four 8x8 tiles sprn walks.
-sprite panel {
-  6666666666666666
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6555555555555556
-  6666666666666666
-}
-
-sprite fill_2 {
-  66666666
-  66666666
-  66666666
-  66666666
-  66666666
-  66666666
-  66666666
-  66666666
-}
-sprite fill_4 {
-  ffffffff
-  ffffffff
-  ffffffff
-  ffffffff
-  ffffffff
-  ffffffff
-  ffffffff
-  ffffffff
-}
-sprite fill_8 {
-  99999999
-  99999999
-  99999999
-  99999999
-  99999999
-  99999999
-  99999999
-  99999999
-}
-sprite fill_16 {
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-  aaaaaaaa
-}
-sprite fill_32 {
-  88888888
-  88888888
-  88888888
-  88888888
-  88888888
-  88888888
-  88888888
-  88888888
-}
-sprite fill_64 {
-  eeeeeeee
-  eeeeeeee
-  eeeeeeee
-  eeeeeeee
-  eeeeeeee
-  eeeeeeee
-  eeeeeeee
-  eeeeeeee
-}
-sprite fill_128 {
-  bbbbbbbb
-  bbbbbbbb
-  bbbbbbbb
-  bbbbbbbb
-  bbbbbbbb
-  bbbbbbbb
-  bbbbbbbb
-  bbbbbbbb
-}
-sprite fill_256 {
-  33333333
-  33333333
-  33333333
-  33333333
-  33333333
-  33333333
-  33333333
-  33333333
-}
-sprite fill_512 {
-  cccccccc
-  cccccccc
-  cccccccc
-  cccccccc
-  cccccccc
-  cccccccc
-  cccccccc
-  cccccccc
-}
-sprite fill_1024 {
-  dddddddd
-  dddddddd
-  dddddddd
-  dddddddd
-  dddddddd
-  dddddddd
-  dddddddd
-  dddddddd
-}
-sprite fill_2048 {
-  77777777
-  77777777
-  77777777
-  77777777
-  77777777
-  77777777
-  77777777
-  77777777
-}
 
 local cells: array(16, word)
 local line: array(4, word)
@@ -160,8 +29,9 @@ local changed = 0
 local anim_timer = 0
 local anim_dir = 0    -- 1 left, 2 right, 3 up, 4 down
 
-local OX = 32
-local OY = 29
+local TILE = 48       -- board pitch: 4 tiles fill 192 of the 240-px screen
+local OX = 24         -- (240 - 4*TILE) / 2
+local OY = 32         -- under the title and score
 local draw_ox: int = OX
 local draw_oy: int = OY
 
@@ -318,18 +188,21 @@ function update()
   end
 end
 
-function fill_sprite(value)
-  if value == 2 then return fill_2 end
-  if value == 4 then return fill_4 end
-  if value == 8 then return fill_8 end
-  if value == 16 then return fill_16 end
-  if value == 32 then return fill_32 end
-  if value == 64 then return fill_64 end
-  if value == 128 then return fill_128 end
-  if value == 256 then return fill_256 end
-  if value == 512 then return fill_512 end
-  if value == 1024 then return fill_1024 end
-  return fill_2048
+-- The tile's fill colour. This was eleven solid-colour 8x8 sprites; at a
+-- 48-px tile they would each need redrawing, and a `rect` says the same thing
+-- at any size.
+function fill_color(value)
+  if value == 2 then return 6 end
+  if value == 4 then return 15 end
+  if value == 8 then return 9 end
+  if value == 16 then return 10 end
+  if value == 32 then return 8 end
+  if value == 64 then return 14 end
+  if value == 128 then return 11 end
+  if value == 256 then return 3 end
+  if value == 512 then return 12 end
+  if value == 1024 then return 13 end
+  return 7
 end
 
 function number_color(value)
@@ -338,27 +211,29 @@ function number_color(value)
 end
 
 function draw_tile(index)
-  local x = draw_ox + (index % 4) * 16
-  local y = draw_oy + (index / 4) * 16
-  sprn(panel, x, y, 0)
+  local x = draw_ox + (index % 4) * TILE
+  local y = draw_oy + (index / 4) * TILE
+  rect(x, y, TILE, TILE, 6)                       -- the frame
+  rect(x + 1, y + 1, TILE - 2, TILE - 2, 5)       -- the well
 
   local value = cells[index]
   if value ~= 0 then
-    spr(fill_sprite(value), x + 4, y + 4, 0)
-    local nx = x
-    if value < 10 then nx = x + 6
-    elseif value < 100 then nx = x + 4
-    elseif value < 1000 then nx = x + 2 end
-    number(value, nx, y + 5, number_color(value))
-    entity(OX + (index % 4) * 16, OY + (index / 4) * 16, value)
+    rect(x + 8, y + 8, TILE - 16, TILE - 16, fill_color(value))
+    -- 4 px a glyph, so this centres the number over its tile.
+    local nx = x + 16
+    if value < 10 then nx = x + 22
+    elseif value < 100 then nx = x + 20
+    elseif value < 1000 then nx = x + 18 end
+    number(value, nx, y + 21, number_color(value))
+    entity(OX + (index % 4) * TILE, OY + (index / 4) * TILE, value)
   end
 end
 
 function draw()
   cls(1)
-  text("2048", 56, 5, 7)
-  text("SCORE", 34, 17, 6)
-  number(score, 76, 17, 10)
+  text("2048", 112, 6, 7)
+  text("SCORE", 80, 18, 6)
+  number(score, 124, 18, 10)
 
   -- Soft four-frame nudge: move toward the swipe, then ease back to rest.
   local amount: int = 0
@@ -372,12 +247,16 @@ function draw()
   if anim_dir == 4 then draw_oy = OY + amount end
   for i = 0, 15 do draw_tile(i) end
 
+  -- The board fills the screen now, so the end-of-run message sits *over* it
+  -- on its own backing rather than in a margin that no longer exists.
   if state == 1 then
-    text("YOU WIN", 50, 103, 11)
-    text("PRESS A", 50, 112, 7)
+    rect(48, 104, 144, 32, 0)
+    text("YOU WIN", 106, 112, 11)
+    text("PRESS A", 106, 124, 7)
   elseif state == 2 then
-    text("GAME OVER", 46, 103, 8)
-    text("PRESS A", 50, 112, 7)
+    rect(48, 104, 144, 32, 0)
+    text("GAME OVER", 102, 112, 8)
+    text("PRESS A", 106, 124, 7)
   end
   entity(score, state, 30)
   entity(anim_dir, anim_timer, 31)

@@ -11,7 +11,7 @@
 --
 -- On a keyboard the six keys are, left to right: ← ↓ ↑ → Z X.
 
-screen { mode = Extended240 }
+screen { mode = Square240 }
 
 -- Six labelled buttons and no d-pad. `dpad = false` is required alongside the
 -- labels: the same four bits cannot be a direction and a key at once, and the
