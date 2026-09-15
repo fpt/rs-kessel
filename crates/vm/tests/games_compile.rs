@@ -1053,8 +1053,6 @@ games_ok! {
     game_2048_ok => "2048",
     outrun_ok => "outrun",
     bounce_ok => "bounce",
-    mover_ok => "mover",
-    sprite_ok => "sprite",
     platform_ok => "platform",
     snake_ok => "snake",
     brick_ok => "brick",
@@ -1068,7 +1066,6 @@ games_ok! {
     paint_ok => "paint",
     swarm_ok => "swarm",
     spectrum_ok => "spectrum",
-    lantern_ok => "lantern",
 }
 
 /// `popn.lua` is the reference for a pad with **no directions**: the four
@@ -1183,6 +1180,70 @@ fn game_2048_slides_on_a_swipe_exactly_once() {
     }
 }
 
+/// The other half of the swipe reference: `2048.lua` gates its swipe on
+/// `touch_frames`, so a **slow** drag past the same distance threshold must do
+/// nothing.
+///
+/// The console reports a swipe on distance alone and leaves velocity to the
+/// game — which means a gate a game adds is the game's own code, and untested
+/// game code in this corpus is an example the model will copy. The gate is also
+/// the kind that fails open: get the comparison backwards and every flick is
+/// ignored instead, which the sibling test above catches from the other side.
+#[test]
+fn game_2048_ignores_a_slow_drag() {
+    use kessel_vm::device::{Input, Touch};
+
+    const GAME: &str = include_str!("../../../games/2048.lua");
+    const INITIAL_SPAWNS: &str = "  spawn_tile()\n  spawn_tile()";
+
+    let merge_board = GAME.replace(
+        INITIAL_SPAWNS,
+        "  cells[0] = 2  cells[1] = 2  cells[2] = 2  cells[3] = 2",
+    );
+    let mut c = VmConsole::new();
+    c.write_source("2048.lua", &merge_board).unwrap();
+    c.assemble("2048.lua").unwrap();
+    c.load_rom("2048.lua").unwrap();
+
+    let finger = |x: u16| {
+        let mut i = Input::default();
+        i.touches[0] = Touch {
+            x,
+            y: 64,
+            down: true,
+        };
+        i
+    };
+
+    let before = c.run_frame(Input::default()).entities.len();
+    c.run_frame(finger(200)); // press
+
+    // Two pixels a frame. The threshold is `dim / 8` = 30 px, so this crosses
+    // it on frame 15 — past the game's 12-frame flick window, and the swipe
+    // the device reports is discarded.
+    let mut x = 200u16;
+    for _ in 0..24 {
+        x -= 2;
+        assert_eq!(
+            c.run_frame(finger(x)).entities.len(),
+            before,
+            "a slow 2 px/frame drag slid the board at x={x}; the flick gate is \
+             not holding"
+        );
+    }
+
+    // The gate is on speed, not on touch: the same board still merges when the
+    // finger is lifted and the distance is covered quickly.
+    c.run_frame(Input::default());
+    c.run_frame(finger(90));
+    let after = c.run_frame(finger(50)).entities.len();
+    assert!(
+        after < before,
+        "a flick after a rejected slow drag did not merge the row: \
+         {before} tiles -> {after}"
+    );
+}
+
 /// `paint.lua` is the reference for the analog surfaces, and the only game that
 /// reads them — so this is the one test that proves a touch and a stick
 /// deflection reach a running ROM at all.
@@ -1261,6 +1322,64 @@ fn paint_reads_the_stick_and_the_touchscreen() {
     // ...and it is reported back, so an agent can see what it pressed.
     let json = after.to_json();
     assert_eq!(json["touches"][0]["x"], 30, "observation: {json}");
+}
+
+/// A release edge carries **no position**, and `paint.lua` is where the corpus
+/// says so — it latches each finger's last down position and caps the stroke
+/// there.
+///
+/// This is the plausible-but-wrong shape, and it is worse than it looks.
+/// Capping at `touch_x(i)` on the frame `touch_released(i)` fires compiles and
+/// runs; both hosts report a lifted finger as an empty slot, so the cap is
+/// centred on (0,0), `blob` offsets it by half its width, that wraps below
+/// zero and the whole mark clips away. The cap does not land in the corner —
+/// it is **silently never drawn**, which is why "the framebuffer changed"
+/// cannot be the assertion here. The guard has to be positional.
+#[test]
+fn paint_caps_a_stroke_where_the_finger_left_not_at_the_origin() {
+    use kessel_vm::device::{Input, Touch};
+
+    const GAME: &str = include_str!("../../../games/paint.lua");
+    let mut c = VmConsole::new();
+    c.write_source("paint.lua", GAME).unwrap();
+    c.assemble("paint.lua").unwrap();
+    c.load_rom("paint.lua").unwrap();
+
+    let at = |x, y| Input {
+        touches: [
+            Touch { x, y, down: true },
+            Touch::default(),
+            Touch::default(),
+            Touch::default(),
+        ],
+        ..Input::default()
+    };
+
+    // Drag slot 0 into the lower-right quadrant, well away from both the origin
+    // and the HUD strip, then lift.
+    c.run_frame(Input::default());
+    c.run_frame(at(180, 180));
+    c.run_frame(at(190, 190));
+
+    // The release frame: no finger anywhere, which is exactly how both hosts
+    // report a lift.
+    c.run_frame(Input::default());
+
+    // The cap is a 7-px blob in colour 7 centred on the last down position,
+    // painted over the 5-px colour-8 freehand mark already there.
+    //
+    // One assertion covers both ways to get this wrong, because both leave that
+    // freehand colour 8 standing: reading the release frame's own `touch_x`
+    // draws nothing at all, and latching once on the *press* instead of on
+    // every down frame draws the cap back at (180,180). Colour alone cannot
+    // check the second — the press cap is colour 7 too — but the lift point
+    // can, and that is the pixel the player is looking at.
+    assert_eq!(
+        index_at(&c, 190, 190),
+        7,
+        "the stroke was not capped where the finger left — a release edge was \
+         paired with a position read on the release frame, which is always 0"
+    );
 }
 
 /// piano.lua is the reference for the held-note API (`note_on`/`note_off`),

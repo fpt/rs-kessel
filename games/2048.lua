@@ -8,6 +8,11 @@
 -- the one frame a finger passes the distance threshold — the same constants
 -- `btnp` takes, so the two input paths below collapse into one `direction()`.
 --
+-- It is also the `touch_frames` reference. The console reports a swipe on
+-- distance alone and leaves velocity to the game, because a fling threshold is
+-- feel rather than hardware — `direction()` below is what spending that number
+-- looks like.
+--
 -- Note the `touch` declaration: the ports work regardless, but a host only
 -- routes screen touches to a game that asks for them, so a swipe game that
 -- forgets this line works on a keyboard and does nothing on a phone.
@@ -29,6 +34,7 @@ local changed = 0
 local anim_timer = 0
 local anim_dir = 0    -- 1 left, 2 right, 3 up, 4 down
 
+local FLICK = 12      -- longest drag, in frames, still read as a flick
 local TILE = 48       -- board pitch: 4 tiles fill 192 of the 240-px screen
 local OX = 24         -- (240 - 4*TILE) / 2
 local OY = 32         -- under the title and score
@@ -160,8 +166,17 @@ end
 -- Only slot 0 is read. A second finger on a puzzle board is a stray thumb, not
 -- a second move.
 function direction()
+  -- A swipe fires the frame it crosses the distance threshold, mid-gesture, and
+  -- the console deliberately does **not** gate it on velocity: `touch_frames`
+  -- makes that computable and a fling threshold is per-game feel. This board
+  -- wants a flick, not a slow drag — a finger resting on the tiles and easing
+  -- across is someone reading the board, not someone moving it.
+  --
+  -- So: the threshold is `dim / 8` = 30 px, and 12 frames is a fifth of a
+  -- second to cover it. Anything slower is ignored, and the arrows below still
+  -- work regardless.
   local s = swipe(0)
-  if s ~= 0 then return s end
+  if s ~= 0 and touch_frames(0) <= FLICK then return s end
   if btnp(LEFT) then return LEFT end
   if btnp(RIGHT) then return RIGHT end
   if btnp(UP) then return UP end

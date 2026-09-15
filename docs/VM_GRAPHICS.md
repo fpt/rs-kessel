@@ -177,18 +177,18 @@ function draw()
   map(0, 0, 0, 0, 16, 16)
   spr(hero, hx, hy, 0)
 
-  ambient(5, 5, 9)                      -- cave dark, and cold
-  light(hx + 4, hy + 4, fuel, 58, 42, 22)  -- the torch, warm; radius = fuel
-  light(wx + 4, wy + 4, 16, 46, 6, 10)     -- a wisp, its own red
+  ambient(18, 17, 24)                      -- cold stone
+  light(hx + 4, hy + 4, reach, 36, 28, 17) -- the hero's lamp; radius = reach
+  light(ex + 4, ey + 4, 14, 34, 4, 7)      -- an orc, its own red
 
-  light_rect(0, 0, 128, 9, 64, 64, 64)  -- a readable HUD strip
-  rect(0, 0, 128, 9, 0)
-  text("DEPTH", 2, 2, 6)
+  light_rect(0, 0, 240, 8, 64, 64, 64)  -- a readable HUD strip
+  rect(0, 0, 240, 8, 0)
+  text("DEPTH", 2, 1, 6)
 end
 ```
 
-`games/lantern.lua` is the worked example: a cave lit only by what the player
-carries, where the torch's *radius is its fuel*, so the number being managed is
+`games/rogue.lua` is the worked example: a dungeon lit only by what the player
+carries, where the lamp's *radius is a resource*, so the number being managed is
 the number you can see.
 
 ### Why a layer and not alpha
@@ -359,9 +359,10 @@ sprite banks plus a `pal` ramp of its own for the terrain, a `text`/`number` HUD
 and a terrain that is one `hline` per screen row indexed by distance flown), `2048` (a `rect` board that sizes itself off one `TILE` constant), `tetris` and
 `sokoban` again for `spr_scaled` cells — the way to fill a screen with a grid
 whose *cell count* is fixed by the game's rules, since `map` draws 1:1 —
-`lantern` (the light layer: a dark cave, a
-torch whose radius is its fuel, coloured glows on the things hunting you, walls
-that cast, and a `light_rect` HUD). `rogue` and `sokoban` light the same three
-ways at two very different depths — a dungeon you can only half see, and a
-puzzle that stays fully readable while its crates cast into the corners they are
-stuck in.
+`rogue` again for the light layer (a dark
+dungeon, a lamp whose radius is a resource, coloured glows on the things hunting
+you, walls that cast, and a `light_rect` HUD). `rogue` and `sokoban` light the
+same three ways at two very different depths — a dungeon you can only half see,
+and a puzzle that stays fully readable while its crates cast into the corners
+they are stuck in. `dnb` is the other shape the layer takes: `light_rect` as UI
+chrome and additive `light` as meters, on a screen with no world in it at all.

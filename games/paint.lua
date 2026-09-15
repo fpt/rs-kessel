@@ -10,10 +10,24 @@
 --     the numbers `pset` draws with. Slot 0 is the first finger down, and a
 --     finger keeps its slot until it lifts, which is what makes
 --     `touch_pressed`/`touch_released` mean anything.
+--   * `touch_dx`/`touch_dy` are the drag's **signed** displacement from where
+--     the press landed, so the origin comes back for free as `touch_x(0) - dx`.
+--     Both read 0 once the finger lifts.
 --   * `stick_x`/`stick_y` are signed 8.8 fixed point, ±256 at full deflection —
 --     the same scale, and the same `int` type, that `sin`/`cos` return. Which
 --     means the same caveat: `/` is unsigned on this machine, so a deflection's
---     sign has to be branched on before its magnitude is divided. See `travel`.
+--     sign has to be branched on before its magnitude is divided. See `mag`.
+--
+-- The trap worth reading before you copy this file: **a release edge carries no
+-- position.** `touch_released(i)` fires on a frame when that finger is already
+-- gone, so `touch_x(i)` reads 0 and not the lift point. A game that wants to
+-- know where a stroke ended has to latch it while the finger was still down —
+-- `lastx`/`lasty` below.
+--
+-- Nothing crashes if you get this wrong, and nothing appears in the corner
+-- either: a mark centred on (0,0) has its top-left offset wrap below zero and
+-- clips away entirely, so the cap is simply never drawn. A bug you cannot see
+-- is the reason this one has a test.
 --
 -- On a machine with no touchscreen the mouse is slot 0 and the arrow keys
 -- deflect the stick, so every path here is reachable from a keyboard.
@@ -39,23 +53,48 @@ local color = 8
 local drawing = 0         -- whether the stick brush is laying down paint
 local touched = 0         -- fingers seen this frame, for the HUD
 
+-- Where each finger was on the last frame it was still down.
+--
+-- `touch_released(i)` tells you a finger left, but **not where it left from**:
+-- the position ports read the slot's current state, and on the release frame
+-- that finger is no longer down. Both hosts say so in their own way — the
+-- desktop window rebuilds its touch array from empty every frame, and Android's
+-- `TouchTracker` skips a pointer that is not pressed — so `touch_x(i)` on the
+-- frame `touch_released(i)` fires is 0, not the lift point.
+--
+-- So the release edge has to be paired with a position the game latched while
+-- the finger was still down. That is this array.
+local lastx: array(4, word)
+local lasty: array(4, word)
+
 function init()
   cx = 120
   cy = 120
   color = 8
   drawing = 0
   touched = 0
+  for i = 0, SLOTS - 1 do
+    lastx[i] = 0
+    lasty[i] = 0
+  end
+end
+
+-- A signed value's magnitude, as a plain unsigned number.
+--
+-- `/`, `<` and `number()` are all **unsigned** on this machine, so anything
+-- signed — the stick, `sin`/`cos`, a drag delta — has to have its sign branched
+-- on before its magnitude is used. This is the shape `outrun.lua` uses for
+-- `sin()`, and it is the single most common way to get a signed reading wrong
+-- here: feeding 0xFF00 straight to `/ 256` gives 255, and to `number()` gives
+-- 65280.
+function mag(v: int)
+  if v < 0 then return 0 - v end
+  return v
 end
 
 -- Deflection -> pixels of travel this frame, always non-negative.
---
--- `/` is **unsigned** on this machine, so a negative deflection has to have its
--- magnitude taken before the divide — the same branch-on-the-sign shape
--- `outrun.lua` uses for `sin()`. Feeding 0xFF00 straight to `/ 256` would give
--- 255 pixels of travel instead of one.
 function travel(v: int)
-  if v < 0 then return (0 - v) * SPEED / 256 end
-  return v * SPEED / 256
+  return mag(v) * SPEED / 256
 end
 
 -- Move `p` along one axis by `v`'s deflection, clamped to the screen. Clamping
@@ -114,11 +153,24 @@ function draw()
   for i = 0, SLOTS - 1 do
     if touch_down(i) then
       blob(touch_x(i), touch_y(i), 5, color)
+      -- Latch it for the release edge below, which cannot read a position of
+      -- its own. See `lastx`/`lasty`.
+      lastx[i] = touch_x(i)
+      lasty[i] = touch_y(i)
     end
     -- A fresh press marks its landing spot, so a tap leaves something behind
     -- even if the finger never moves.
     if touch_pressed(i) then
       blob(touch_x(i), touch_y(i), 9, 7)
+    end
+    -- And a lift caps the stroke, from the latched spot rather than from
+    -- `touch_x(i)` — which is 0 on this exact frame.
+    --
+    -- The slot is a finger's *identity*, held for that finger's whole life, so
+    -- this caps the stroke the finger that actually left was drawing. A host
+    -- that renumbered its fingers between frames would cap someone else's.
+    if touch_released(i) then
+      blob(lastx[i], lasty[i], 7, 7)
     end
   end
 
@@ -135,5 +187,20 @@ function draw()
   number(touched, 66, 1, 7)
   text("COLOUR", 100, 1, 6)
   number(color, 156, 1, color)
+
+  -- How far slot 0 has dragged from where it landed.
+  --
+  -- `touch_dx`/`touch_dy` are **signed** and measure displacement from the
+  -- press, not the origin itself — the origin is `touch_x(0) - dx`, handed back
+  -- for free. They also read 0 once the finger lifts: a released finger has no
+  -- displacement, so this is a live readout and not a record of the last drag.
+  --
+  -- Chebyshev distance because it needs no multiply, and `mag` first because
+  -- `number` is unsigned and a leftward drag is negative.
+  local dx: int = touch_dx(0)
+  local dy: int = touch_dy(0)
+  text("DRAG", 176, 1, 6)
+  number(max(mag(dx), mag(dy)), 208, 1, 10)
+
   entity(cx, cy, 1)
 end
