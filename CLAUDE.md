@@ -85,8 +85,9 @@ Lighting is **one r/g/b light level per pixel, resolved on the way to RGBA** —
 `framebuffer_rgba_into` and nowhere else. `64` is neutral, `0` black, `255` 4×.
 Four ops: `ambient` floods the layer, `light` adds a radial source, `light_rect`
 sets a box, `shadow_rect` marks a box solid to light. See `docs/VM_GRAPHICS.md`;
-`games/lantern.lua`, `games/rogue.lua` and `games/sokoban.lua` are the corpus's
-worked examples, at three different depths of darkness.
+`games/rogue.lua` and `games/sokoban.lua` are the corpus's worked examples, at
+two different depths of darkness, and `games/dnb.lua` is the layer used as UI
+chrome rather than as a world.
 
 It is deliberately **not** per-sprite alpha, and that is the whole reason it is
 cheap. Blending would have to happen in *index* space, where there is no answer:
@@ -750,7 +751,7 @@ kessel/
 ├── crates/audio/       kessel-audio: the synth (host-free, VM-free)
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
-│                     (`lantern.lua` is the lighting example)
+│                     (`rogue.lua` is the lighting example)
 ├── tools/              build-time asset pipeline (see tools/README.md) —
 │                     generate art, quantise it, print `sprite` blocks, and
 │                     check a frame set actually animates. Defaults to the

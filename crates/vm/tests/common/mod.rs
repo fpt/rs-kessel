@@ -18,8 +18,6 @@ pub const GAMES: &[(&str, &str)] = &[
     ("bounce.lua", include_str!("../../../../games/bounce.lua")),
     ("brick.lua", include_str!("../../../../games/brick.lua")),
     ("dnb.lua", include_str!("../../../../games/dnb.lua")),
-    ("lantern.lua", include_str!("../../../../games/lantern.lua")),
-    ("mover.lua", include_str!("../../../../games/mover.lua")),
     ("outrun.lua", include_str!("../../../../games/outrun.lua")),
     ("paint.lua", include_str!("../../../../games/paint.lua")),
     ("piano.lua", include_str!("../../../../games/piano.lua")),
@@ -36,7 +34,6 @@ pub const GAMES: &[(&str, &str)] = &[
         "spectrum.lua",
         include_str!("../../../../games/spectrum.lua"),
     ),
-    ("sprite.lua", include_str!("../../../../games/sprite.lua")),
     ("swarm.lua", include_str!("../../../../games/swarm.lua")),
     ("tetris.lua", include_str!("../../../../games/tetris.lua")),
 ];
