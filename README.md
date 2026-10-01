@@ -170,9 +170,8 @@ shows only the buttons that game actually reads, captioned with what they do —
 `tetris.lua` gets a d-pad plus A "rotate cw" and B "rotate ccw"; `bounce.lua`
 declares `dpad = false` and gets no pad at all.
 
-An editor, cloud upload, and an in-app LLM coding loop are later releases. The
-FFI is scoped to the play surface for now (`crates/ffi`), so those are additions
-rather than a rewrite — and because the portable layer is a C ABI with a header,
+An editor and cloud upload are later releases. The FFI is scoped to the play
+surface for now (`crates/ffi`), so those are additions rather than a rewrite — and because the portable layer is a C ABI with a header,
 an iOS app is a build-system problem rather than a second port.
 
 ### Screens and colour
