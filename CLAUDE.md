@@ -11,10 +11,6 @@ A tiny fantasy console, shipped three ways from one VM:
 - **The Android app** (`android/`) — a plain-Kotlin player for the games bundled
   in `games/`, over the same VM compiled to a `.so`.
 
-Kessel does no LLM inference and hosts no agent. It used to be a macOS/Windows
-voice assistant that embedded the VM; that frontend and its ACP client were
-removed, leaving only the console.
-
 - **Rust**: workspace in `crates/`, four members — `vm` (`kessel-vm`),
   `audio` (`kessel-audio`), `cli` (`kessel`), and `ffi` (`kessel-ffi`)
 - **Platforms**: macOS, Windows, Linux, Android. `kessel mcp` is headless-safe.
@@ -612,9 +608,9 @@ test, because that's a security property rather than an incidental literal.
 
 ### The Android app (`android/`)
 
-Run-only: pick a game from the bundled library, play it. The editor, cloud
-upload, and LLM coding loop are later releases — the FFI is scoped so they are
-additions rather than a rewrite.
+Run-only: pick a game from the bundled library, play it. The editor and cloud
+upload are later releases — the FFI is scoped so they are additions rather than
+a rewrite.
 
 | File | Purpose |
 |------|---------|
