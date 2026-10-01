@@ -1,10 +1,24 @@
 name: CI
 
+# Only what the Rust build and tests can see. `games/` is embedded into the
+# corpus tests with `include_str!`, and `crates/audio/tests/docs.rs` embeds the
+# two audio docs to check every field they show is one the parser accepts — so
+# those are inputs, not prose. The rest of `docs/`, the README, CLAUDE.md,
+# `android/` and `tools/` are not, and a change to them alone runs nothing.
+# Safe because no status check is required on `main`: a required check skipped
+# by a path filter would sit at "pending" and block the merge.
 on:
   push:
     branches: [main]
+    paths: &ci-paths
+      - "crates/**"
+      - "games/**"
+      - "docs/VM_AUDIO.md"
+      - "docs/SYNTH.md"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [main]
+    paths: *ci-paths
 
 jobs:
   # Windows is in the matrix because the attach layer makes platform claims it
