@@ -330,7 +330,11 @@ For racers and mode-7-ish effects:
   this reason, and its road a row at a time for the opposite one.
 - `spr_scaled(id,x,y,scale,flags)` — nearest-neighbour scaled sheet tile; `scale`
   is 8.8 fixed (`256` = 1.0, `512` = 2×, `128` = ½×). For distance-scaled cars,
-  trees and signs. Prefer angle-specific sprites over runtime rotation (there is
+  trees and signs. The tile draws `dst = 8 * scale / 256` px square (at least 1),
+  and pixel `i` samples source column `((step >> 1) + i * step) >> 16` with
+  `step = 8 * 65536 / dst` — the pixel's centre, which is also the
+  `STRETCH_BLIT` rule of the tang-verilog VDP, so both draw the same pixels. A
+  flip mirrors the drawn tile. Prefer angle-specific sprites over runtime rotation (there is
   no rotate builtin — it costs a lot for little).
 - `sin(a)→int` / `cos(a)→int` — fixed-point trig with `a` in `0..255` for a full
   turn (`64` = 90°). The result is **signed** 8.8 fixed in `[-256,256]`
