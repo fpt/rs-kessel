@@ -1613,9 +1613,10 @@ impl Devices {
             .min(self.width.max(self.height) as u32) as u16;
         // The VDP's `STRETCH_BLIT` rule, so both draw the same pixels: a 16.16
         // step truncated once, sampled at the pixel's *centre*. Centre sampling
-        // also keeps a shrink from favouring the top-left of the tile.
+        // also keeps a shrink from favouring the top-left of the tile. `src`
+        // stays in 0..7 because the step was truncated.
         let step = 8 * 65536 / dst as u32;
-        let src = |i: u16| (((step >> 1) + i as u32 * step) >> 16) as u16; // 0..7
+        let src = |i: u16| (((step >> 1) + i as u32 * step) >> 16) as u16;
         // A flip mirrors the *destination* (the last column draws first), not
         // the source index — the two differ wherever the step was truncated.
         let last = dst - 1;
