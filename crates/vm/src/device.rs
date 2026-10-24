@@ -1468,9 +1468,14 @@ impl Devices {
 
     /// Draw a pixel at world coordinate (x, y). The camera offset translates
     /// world→screen; off-screen pixels are clipped.
+    ///
+    /// The coordinates are read **signed**, like every other drawing op here
+    /// and like the VDP's `POINT` / `BLIT`. Read unsigned, a sprite at x = -1
+    /// under `camera(-5, 0)` landed at 65540 and vanished instead of drawing
+    /// at column 4.
     fn put_pixel(&mut self, x: u16, y: u16, color: u8) {
-        let sx = x as i32 - self.cam_x as i32;
-        let sy = y as i32 - self.cam_y as i32;
+        let sx = x as i16 as i32 - self.cam_x as i32;
+        let sy = y as i16 as i32 - self.cam_y as i32;
         let (w, h) = (self.width as i32, self.height as i32);
         if (0..w).contains(&sx) && (0..h).contains(&sy) {
             self.framebuffer[sy as usize * self.width + sx as usize] = color;
@@ -1606,12 +1611,19 @@ impl Devices {
         // Destination side length in px = 8 * scale / 256, at least 1.
         let dst = ((8u32 * self.scale_fp as u32 / 256).max(1))
             .min(self.width.max(self.height) as u32) as u16;
+        // The VDP's `STRETCH_BLIT` rule, so both draw the same pixels: a 16.16
+        // step truncated once, sampled at the pixel's *centre*. Centre sampling
+        // also keeps a shrink from favouring the top-left of the tile. `src`
+        // stays in 0..7 because the step was truncated.
+        let step = 8 * 65536 / dst as u32;
+        let src = |i: u16| (((step >> 1) + i as u32 * step) >> 16) as u16;
+        // A flip mirrors the *destination* (the last column draws first), not
+        // the source index — the two differ wherever the step was truncated.
+        let last = dst - 1;
         for dy in 0..dst {
-            let src_row0 = (dy as u32 * 8 / dst as u32) as u16; // 0..7
-            let src_row = if flip_y { 7 - src_row0 } else { src_row0 };
+            let src_row = src(if flip_y { last - dy } else { dy });
             for dx in 0..dst {
-                let src_col0 = (dx as u32 * 8 / dst as u32) as u16;
-                let src_col = if flip_x { 7 - src_col0 } else { src_col0 };
+                let src_col = src(if flip_x { last - dx } else { dx });
                 let byte_addr = addr.wrapping_add(src_row * 4 + src_col / 2) as usize;
                 let byte = mem.get(byte_addr).copied().unwrap_or(0);
                 let ci = if src_col % 2 == 0 {
@@ -1750,6 +1762,55 @@ mod tests {
         d.write(0x12, 0, &mem);
         d.write(0x14, 0, &mem);
         assert_eq!(d.framebuffer[0], 0);
+    }
+
+    #[test]
+    fn negative_world_coordinates_survive_a_negative_camera() {
+        let mut d = Devices::new();
+        let mem = [0u8; 8];
+        d.write(0x17, -5i16 as u16, &mem); // camera(-5, 0)
+        d.write(0x13, 6, &mem);
+        // World (-1, 0) -> screen (4, 0), as hline/rect and the VDP's POINT read it.
+        d.write(0x11, -1i16 as u16, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0x14, 0, &mem);
+        assert_eq!(d.framebuffer[4], 6);
+    }
+
+    /// Every row of tile 0 = colours 1..8, so a drawn colour names the source
+    /// column it was sampled from (colour c = column c - 1) whichever row a
+    /// scale lands on.
+    fn ramp_row_tile() -> [u8; 32] {
+        [0x12, 0x34, 0x56, 0x78].repeat(8).try_into().unwrap()
+    }
+
+    fn top_row_of_scaled(scale_fp: u16, flags: u16, dst: usize) -> Vec<u8> {
+        let mut d = Devices::new();
+        let mem = ramp_row_tile();
+        d.write(0x19, flags, &mem);
+        d.write(0x11, 0, &mem);
+        d.write(0x12, 0, &mem);
+        d.write(0xb0, scale_fp, &mem);
+        d.write(0xb1, 0, &mem);
+        d.framebuffer[..dst].to_vec()
+    }
+
+    #[test]
+    fn scaled_sprite_samples_pixel_centres_like_stretch_blit() {
+        // Half size: step 2.0 from 1.0, so columns 1, 3, 5, 7 — not 0, 2, 4, 6,
+        // which is what sampling at the pixel's left edge picked.
+        assert_eq!(top_row_of_scaled(128, 0, 4), [2, 4, 6, 8]);
+        // dst 3: step = 8 * 65536 / 3 truncated, so the centre of i = 1 lands a
+        // hair under column 4. The VDP truncates the same way.
+        assert_eq!(top_row_of_scaled(96, 0, 3), [2, 4, 7]);
+    }
+
+    #[test]
+    fn scaled_sprite_flip_mirrors_the_destination() {
+        // STRETCH_BLIT flips by drawing the columns right to left, so the
+        // flipped row is the unflipped one reversed — not `7 - src`, which
+        // would give [8, 5, 2] here.
+        assert_eq!(top_row_of_scaled(96, 0x01, 3), [7, 4, 2]);
     }
 
     #[test]
