@@ -86,7 +86,8 @@ triangle has no palette index to be, and the GPU it models has no 8-bit
 surface; the exception is the hardware's, not a convenience. It costs what the
 rule said it would cost and no more, because every host already reads pixels
 through `framebuffer_rgba_into` — the fork is one branch there, and none in a
-host. `docs/VM_3D.md` is the reference; `games/gates.lua` the worked example.
+host. `docs/VM_3D.md` is the reference; `games/gates.lua` the worked example,
+and `games/demo3d.lua` tang-verilog's own 3D demo rebuilt on it.
 
 The split follows the PS1's, and the board's:
 
@@ -830,7 +831,8 @@ kessel/
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
 │                     (`rogue.lua` is the lighting example,
-│                     `gates.lua` the Kessel3D one)
+│                     `gates.lua` the Kessel3D one, `demo3d.lua`
+│                     tang-verilog's 3D demo on it)
 ├── tools/              build-time asset pipeline (see tools/README.md) —
 │                     generate art, quantise it, print `sprite` blocks, and
 │                     check a frame set actually animates. Defaults to the
