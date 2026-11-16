@@ -163,11 +163,13 @@ pub fn run(args: Args) -> Result<(), String> {
     // the frames after a fault are the same frame over and over.
     let mut ran = 0u64;
     let mut stopped: Option<String> = None;
-    for frame in 0..args.frames {
+    for _ in 0..args.frames {
         // A frame's words only upload the textures that changed since the
         // frame before. A dump is read on its own, so its frame has to carry
-        // every texture it samples.
-        if args.words.is_some() && frame + 1 == args.frames {
+        // every texture it samples — and the dumped frame is whichever one
+        // the loop stops on, which a fault or halt makes earlier than the
+        // last. So every frame re-uploads; pixels never depend on the cache.
+        if args.words.is_some() {
             console.invalidate_gpu_textures();
         }
         let obs = console.run_frame(args.buttons);
