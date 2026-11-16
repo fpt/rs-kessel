@@ -16,6 +16,7 @@ reads or plays through has its own reference:
 | | |
 |---|---|
 | [**VM_GRAPHICS.md**](VM_GRAPHICS.md) | screens, palette, sprites, tilemap, drawing builtins |
+| [**VM_3D.md**](VM_3D.md) | Kessel3D: the 3D screen, `mesh`, `draw3d`, camera, light, fog |
 | [**VM_CONTROLS.md**](VM_CONTROLS.md) | buttons, the analog stick, touch, gestures, `controls { }` |
 | [**VM_AUDIO.md**](VM_AUDIO.md) | instruments, `sfx`, music, and reading the render report |
 | [**SYNTH.md**](SYNTH.md) | how the synth itself is built (`kessel-audio`) |
@@ -29,6 +30,8 @@ reads or plays through has its own reference:
   Only the size differs between them; the framebuffer lives outside the 64 KiB
   address space, so the wider screen costs a game no RAM. See
   [**VM_GRAPHICS.md**](VM_GRAPHICS.md).
+  A fourth screen, **Kessel3D**, is the 3D GPU's: 320×240 RGB565, drawn in
+  triangles, with the 2D API as an overlay — see [**VM_3D.md**](VM_3D.md).
 - Flat 64 KiB memory (`u16` addresses — no out-of-range accesses).
 - ROMs load at `0x0100`; the **reset vector** runs once (init).
 - Each frame calls the installed **frame vector**; it runs until `RET` (to the
@@ -106,6 +109,7 @@ documents own the detail.
 | scale | `0xb0` `0xb1` | scaled sprite: scale, then blit-id — [graphics](VM_GRAPHICS.md) |
 | trig | `0xc0` `0xc1` | write an angle (0..255 = a turn) → read sin / cos, signed 8.8 fixed |
 | touch | `0xd0`–`0xd7` | touch points and gestures — [controls](VM_CONTROLS.md) |
+| 3d | `0xf1`–`0xfd` | Kessel3D only: argument latches, then `draw3d`/`camera3d`/`light3d`/`ambient3d`/`fog3d`/`lens3d` — [3d](VM_3D.md) |
 
 The **frame vector** (`0x10`) is how a game runs at all: install an address once
 and the console calls it every frame. Everything else is optional.

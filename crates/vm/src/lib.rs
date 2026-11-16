@@ -28,6 +28,7 @@ pub mod luax;
 pub mod player;
 pub mod playtest;
 pub mod png;
+pub mod scene3d;
 pub mod tool;
 pub mod tools;
 pub mod vm;
@@ -383,7 +384,7 @@ impl VmConsole {
         let outcome = self.vm.load_rom(&rom, self.active_mode);
         self.rom_loaded = true;
         self.frame = 0;
-        self.prev_fb = self.vm.devices.framebuffer.clone();
+        self.prev_fb = self.vm.devices.screen_bytes().0;
         self.prev_light = self.vm.devices.light.clone();
         self.active_controls = self.controls.get(path).cloned().unwrap_or_default();
         self.active_bank = self.banks.get(path).cloned().unwrap_or_default();
@@ -464,13 +465,14 @@ impl VmConsole {
         let outcome = self.vm.run_frame(input, vm::cap());
         self.frame += 1;
         let obs = self.observe(input, outcome);
-        self.prev_fb = self.vm.devices.framebuffer.clone();
+        self.prev_fb = self.vm.devices.screen_bytes().0;
         self.prev_light = self.vm.devices.light.clone();
         obs
     }
 
     fn observe(&self, input: device::Input, outcome: RunOutcome) -> Observation {
-        let fb = &self.vm.devices.framebuffer;
+        let (fb, bytes_per_pixel) = self.vm.devices.screen_bytes();
+        let fb = &fb;
         let light = &self.vm.devices.light;
         let bbox = changed_bbox(
             &self.prev_fb,
@@ -478,6 +480,7 @@ impl VmConsole {
             &self.prev_light,
             light,
             self.vm.devices.width(),
+            bytes_per_pixel,
         );
         let fault = match outcome {
             RunOutcome::CapExceeded => Some(format!("frame cycle cap ({}) exceeded", vm::cap())),
@@ -525,6 +528,23 @@ impl VmConsole {
                 .collect(),
             sound: self.vm.devices.sound.clone(),
             halted: self.vm.halted,
+            scene3d: self.vm.devices.scene3d().map(|s| s.stats()),
+        }
+    }
+
+    /// Kessel3D's engine and picture, or `None` on a 2D screen. The words of
+    /// the last frame are what a board with the FPGA's 3D GPU would be sent.
+    pub fn scene3d(&self) -> Option<&scene3d::Scene3d> {
+        self.vm.devices.scene3d()
+    }
+
+    /// Make the next Kessel3D frame upload every texture it uses, as if the
+    /// GPU's memory had been lost — for a host whose real GPU did lose it, or
+    /// a dump of one frame that has to stand on its own. Nothing on screen
+    /// changes. Does nothing on a 2D screen.
+    pub fn invalidate_gpu_textures(&mut self) {
+        if let Some(scene) = self.vm.devices.scene3d.as_mut() {
+            scene.invalidate_textures();
         }
     }
 
@@ -638,11 +658,14 @@ pub struct Observation {
     pub signals: Vec<(String, i32, bool)>,
     pub sound: Vec<kessel_audio::AudioEvent>,
     pub halted: bool,
+    /// On Kessel3D, what the frame cost the GPU and what its limits dropped.
+    /// `None` on a 2D screen, and absent from the JSON there.
+    pub scene3d: Option<scene3d::Stats3d>,
 }
 
 impl Observation {
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut json = serde_json::json!({
             "frame": self.frame,
             "cycles": self.cycles,
             "buttons": self.buttons,
@@ -669,7 +692,18 @@ impl Observation {
                 .filter(|(_, t)| t.down)
                 .map(|(slot, t)| serde_json::json!({"slot": slot, "x": t.x, "y": t.y}))
                 .collect::<Vec<_>>()),
-        })
+        });
+        if let Some(s) = self.scene3d {
+            json["scene3d"] = serde_json::json!({
+                "tris": s.tris,
+                "culled": s.culled,
+                "dropped": s.dropped,
+                "bad_meshes": s.bad_meshes,
+                "tex_overflow": s.tex_overflow,
+                "words": s.words,
+            });
+        }
+        json
     }
 }
 
@@ -814,6 +848,7 @@ fn changed_bbox(
     prev_light: &[u8],
     light: &[u8],
     width: usize,
+    bytes_per_pixel: usize,
 ) -> Option<[u16; 4]> {
     let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
     let mut any = false;
@@ -821,7 +856,8 @@ fn changed_bbox(
     // or the frame lighting was first enabled leaves them mismatched, and the
     // index framebuffer is the honest answer for that one frame.
     let lit = !light.is_empty() && light.len() == prev_light.len();
-    for (i, (&a, &b)) in prev.iter().zip(cur.iter()).enumerate() {
+    for (byte, (&a, &b)) in prev.iter().zip(cur.iter()).enumerate() {
+        let i = byte / bytes_per_pixel;
         let l = lit && prev_light[i * 3..i * 3 + 3] != light[i * 3..i * 3 + 3];
         if a != b || l {
             any = true;

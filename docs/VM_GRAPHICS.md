@@ -55,6 +55,10 @@ The console has three screens, and **only the size differs** — same ports, sam
 | `Portrait320` | 240 wide × 320 tall | 75 KiB | `screen { mode = Portrait320 }` |
 | `Landscape320` | 320 wide × 240 tall | 75 KiB | `screen { mode = Landscape320 }` |
 
+A fourth screen, `Kessel3D` (`screen { mode = Kessel3D }`), is the exception:
+320×240 **RGB565**, drawn in triangles, with everything on this page drawn
+over it as an overlay. It has its own reference, [**VM_3D.md**](VM_3D.md).
+
 The short side is 240 on every screen, so art and gestures are the same fraction
 of the picture whichever a game picks. `240x320` and `320x240` are accepted as
 plain spellings of the two rectangular modes, and `Extended240` — the old name

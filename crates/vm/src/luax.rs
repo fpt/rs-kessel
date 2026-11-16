@@ -33,8 +33,9 @@
 //! generated labels are `lx_`-prefixed so a function named `add` can't emit the
 //! `ADD` opcode.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use kessel_3d::mesh::SpriteRef;
 use kessel_audio::bank::{
     name_conflict, set_fx_field, set_instrument_field, set_sfx_field, set_track_field, OwnedValue,
     SfxDef, SoundBank, TrackDef, MAX_INSTRUMENTS, MAX_SFX, MAX_TRACKS,
@@ -321,6 +322,7 @@ pub fn compile_with(src: &str, resolver: &mut dyn SourceResolver) -> Compiled {
         };
     }
     let mut compiler = Compiler::new();
+    compiler.mode = mode;
     let asm = compiler.compile(&decls, &mut diagnostics);
     map.locate(&mut diagnostics);
     Compiled {
@@ -640,7 +642,9 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
             // body: grid rows like `..2222..` aren't lexable as normal tokens,
             // so once we see the opening `{` of such a block, scan
             // whitespace-separated rows verbatim (each becomes an Ident) up to
-            // the matching `}`.
+            // the matching `}`. A `mesh` body is captured the same way: `f 1/2`
+            // and `v -8` are not luax either, and each word keeps its line,
+            // which is all a line-based grammar needs.
             //
             // Both keys are exactly three tokens back, which is why `data` takes
             // its size from its body rather than a `(w, h)` header: a header
@@ -648,7 +652,7 @@ fn lex(src: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<Token> {
             // brace, and this trigger would have to start parsing to find it.
             if *sym == "{"
                 && out.len() >= 3
-                && matches!(&out[out.len() - 3].tok, Tok::Ident(k) if k == "sprite" || k == "data")
+                && matches!(&out[out.len() - 3].tok, Tok::Ident(k) if k == "sprite" || k == "data" || k == "mesh")
             {
                 while i < b.len() {
                     let cc = b[i];
@@ -850,6 +854,14 @@ enum Decl {
         rows: Vec<String>,
         line: usize,
     },
+    /// `mesh NAME { … }` — a Kessel3D model, in the grammar `kessel-3d`
+    /// owns. `NAME` is the address of the compiled bytes, as for `data`.
+    /// Each word of the body is kept with its line.
+    Mesh {
+        name: String,
+        words: Vec<(String, usize)>,
+        line: usize,
+    },
     /// Control-layout metadata for the host UI. Emits no code.
     Controls {
         controls: Controls,
@@ -981,6 +993,8 @@ impl Parser {
                 decls.push(self.parse_sprite(d));
             } else if self.is_kw("data") {
                 decls.push(self.parse_data(d));
+            } else if self.is_kw("mesh") {
+                decls.push(self.parse_mesh(d));
             } else if self.is_kw("tilemap") {
                 decls.push(self.parse_tilemap(d));
             } else if self.is_kw("controls") {
@@ -1007,7 +1021,7 @@ impl Parser {
             } else {
                 d.push(err(
                     self.line(),
-                    "expected 'record', 'function', 'local', 'sprite', 'data', 'tilemap', 'controls', \
+                    "expected 'record', 'function', 'local', 'sprite', 'data', 'mesh', 'tilemap', 'controls', \
                      'instrument', 'sfx', 'track', 'signal', 'fx', or '#include'",
                 ));
                 self.advance();
@@ -1111,6 +1125,28 @@ impl Parser {
         Decl::Data { name, rows, line }
     }
 
+    /// `mesh NAME { … }`: the words were raw-captured by the lexer, each with
+    /// its line, and `kessel-3d` gives them meaning in the compiler pass.
+    fn parse_mesh(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
+        let line = self.line();
+        self.eat_kw("mesh");
+        let name = self.ident(d);
+        self.expect_sym("{", d);
+        let mut words = Vec::new();
+        while !matches!(self.peek(), Tok::Sym("}") | Tok::Eof) {
+            let at = self.line();
+            match self.advance() {
+                Tok::Ident(w) => words.push((w, at)),
+                _ => {
+                    d.push(err(self.line(), "expected a mesh line"));
+                    break;
+                }
+            }
+        }
+        self.expect_sym("}", d);
+        Decl::Mesh { name, words, line }
+    }
+
     fn parse_tilemap(&mut self, d: &mut Vec<Diagnostic>) -> Decl {
         let line = self.line();
         self.eat_kw("tilemap");
@@ -1151,7 +1187,7 @@ impl Parser {
                         None => d.push(err(
                             key_line,
                             format!(
-                                "unknown screen mode '{name}' (expected Square240, Portrait320 or Landscape320)"
+                                "unknown screen mode '{name}' (expected Square240, Portrait320, Landscape320 or Kessel3D)"
                             ),
                         )),
                     }
@@ -1821,6 +1857,12 @@ struct Compiler {
     /// mechanism a sprite name uses to become its tile id, one level of
     /// indirection further out.
     data_labels: HashMap<String, String>,
+    /// Names declared by `mesh`. Their addresses live in `data_labels` — a mesh
+    /// is a `data` block whose bytes `kessel-3d` wrote — and this set is only
+    /// so a name conflict can say which kind of thing took the name.
+    mesh_names: HashSet<String>,
+    /// The screen the ROM asked for. The 3D builtins need `Kessel3D`.
+    mode: VideoMode,
     /// Declared size in tiles per sprite name. This is what lets `spr`/`sprn`
     /// check a call against the picture the author actually drew.
     sprite_dims: HashMap<String, (u16, u16)>,
@@ -1967,6 +2009,12 @@ fn builtin(name: &str) -> Option<(usize, bool)> {
         "play" => (4, false),
         "note_on" => (4, false),
         "note_off" => (1, false),
+        "draw3d" => (7, false),
+        "camera3d" => (6, false),
+        "light3d" => (6, false),
+        "ambient3d" => (3, false),
+        "fog3d" => (3, false),
+        "lens3d" => (2, false),
         _ => return None,
     })
 }
@@ -1996,6 +2044,8 @@ impl Compiler {
             tiles: Vec::new(),
             sprite_ids: HashMap::new(),
             data_labels: HashMap::new(),
+            mesh_names: HashSet::new(),
+            mode: VideoMode::default(),
             sprite_dims: HashMap::new(),
             bank: SoundBank::default(),
             instrument_ids: HashMap::new(),
@@ -2063,6 +2113,9 @@ impl Compiler {
     fn name_taken(&self, name: &str) -> Option<&'static str> {
         if self.sprite_ids.contains_key(name) {
             return Some("sprite");
+        }
+        if self.mesh_names.contains(name) {
+            return Some("mesh");
         }
         if self.data_labels.contains_key(name) {
             return Some("data");
@@ -2165,6 +2218,54 @@ impl Compiler {
                         self.data_labels.insert(name.clone(), label);
                     }
                     Err(msg) => d.push(err(*line, format!("data '{name}': {msg}"))),
+                }
+            }
+        }
+        // Pass 1.53: meshes. After sprites, because a face names its texture
+        // by sprite; after data, so the two share one namespace check.
+        for decl in decls {
+            if let Decl::Mesh { name, words, line } = decl {
+                if let Some(kind) = self.name_taken(name) {
+                    d.push(err(
+                        *line,
+                        format!(
+                            "'{name}' is already declared as a {kind} — one name means one thing"
+                        ),
+                    ));
+                    continue;
+                }
+                let mut lines: Vec<(usize, Vec<&str>)> = Vec::new();
+                for (w, at) in words {
+                    match lines.last_mut() {
+                        Some((l, ws)) if *l == *at => ws.push(w),
+                        _ => lines.push((*at, vec![w.as_str()])),
+                    }
+                }
+                let sprite = |n: &str| {
+                    let id = *self.sprite_ids.get(n)?;
+                    let (w, h) = *self.sprite_dims.get(n)?;
+                    Some(SpriteRef {
+                        tile: id,
+                        w: w * 8,
+                        h: h * 8,
+                    })
+                };
+                match kessel_3d::mesh::compile(&lines, &sprite) {
+                    Ok(bytes) => {
+                        let label = format!("lx_mesh_{name}");
+                        self.data.push(format!("@{label}"));
+                        for chunk in bytes.chunks(16) {
+                            let cells: Vec<String> = chunk.iter().map(|b| b.to_string()).collect();
+                            self.data.push(format!(".byte {}", cells.join(" ")));
+                        }
+                        self.data_labels.insert(name.clone(), label);
+                        self.mesh_names.insert(name.clone());
+                    }
+                    Err(errs) => {
+                        for (at, msg) in errs {
+                            d.push(err(at, format!("mesh '{name}': {msg}")));
+                        }
+                    }
                 }
             }
         }
@@ -3071,6 +3172,16 @@ impl Compiler {
             return false;
         }
         if let Some((argc, yields)) = builtin(name) {
+            if name.ends_with("3d") && self.mode != VideoMode::Kessel3D {
+                d.push(err(
+                    line,
+                    format!(
+                        "{name}() draws on the 3D screen — declare it with \
+                         `screen {{ mode = Kessel3D }}`"
+                    ),
+                ));
+                return yields;
+            }
             // On an arity mismatch, report it and emit nothing — a partial call
             // would leave the data stack unbalanced.
             if args.len() != argc {
@@ -3321,8 +3432,20 @@ impl Compiler {
             "play" => "#93 DEO #94 DEO #95 DEO #96 DEO",
             // ( chan inst note vel ) hold a note on a game-owned channel
             "note_on" => "#94 DEO #95 DEO #97 DEO #98 DEO",
-            "note_off" => "#99 DEO",     // ( chan ) release that channel
-            "rnd" => "#30 DEI SWAP MOD", // ( n ) -> rand % n
+            "note_off" => "#99 DEO", // ( chan ) release that channel
+            // Kessel3D. Every one latches its arguments last-first into the
+            // 0xf page and commits on the register holding its first — the
+            // same latch-then-strobe as `pal` and `light`.
+            // ( mesh x y z yaw pitch roll ) queue a mesh
+            "draw3d" => "#f6 DEO #f5 DEO #f4 DEO #f3 DEO #f2 DEO #f1 DEO #f8 DEO",
+            // ( x y z yaw pitch roll ) place the eye
+            "camera3d" => "#f5 DEO #f4 DEO #f3 DEO #f2 DEO #f1 DEO #f9 DEO",
+            // ( dx dy dz r g b ) the light comes from (dx,dy,dz); 128 = 1x
+            "light3d" => "#f5 DEO #f4 DEO #f3 DEO #f2 DEO #f1 DEO #fa DEO",
+            "ambient3d" => "#f2 DEO #f1 DEO #fb DEO", // ( r g b ), 128 = 1x
+            "fog3d" => "#f2 DEO #f1 DEO #fc DEO",     // ( near far colour )
+            "lens3d" => "#f1 DEO #fd DEO",            // ( fov_degrees near )
+            "rnd" => "#30 DEI SWAP MOD",              // ( n ) -> rand % n
             "peek" => "LOAD8",
             "peek16" => "LOAD16",
             "entity" => {
@@ -6068,5 +6191,174 @@ mod include_tests {
         let c = compile("local util = require(\"util.lua\")\nfunction draw() cls(0) end");
         assert!(!c.ok());
         assert!(messages(&c).contains("#include"), "{}", messages(&c));
+    }
+}
+
+/// Kessel3D through the language: `mesh` blocks, the 3D builtins, and the 2D
+/// API as an overlay.
+#[cfg(test)]
+mod k3d_tests {
+    use super::*;
+    use crate::VmConsole;
+
+    fn load(src: &str) -> VmConsole {
+        let mut console = VmConsole::new();
+        console.write_source("game.lua", src).unwrap();
+        let built = console.assemble("game.lua").unwrap();
+        assert!(built.ok(), "diagnostics: {:?}", built.diagnostics);
+        console.load_rom("game.lua").unwrap();
+        console
+    }
+
+    fn messages(src: &str) -> String {
+        compile(src)
+            .diagnostics
+            .iter()
+            .map(|d| format!("line {}: {}", d.line, d.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The pixel at (x, y) as RGB.
+    fn pixel(c: &VmConsole, x: usize, y: usize) -> [u8; 3] {
+        let rgba = c.framebuffer_rgba();
+        let at = (y * 320 + x) * 4;
+        [rgba[at], rgba[at + 1], rgba[at + 2]]
+    }
+
+    /// A 40-unit square facing the eye, drawn 100 units ahead of it, so it
+    /// covers the middle of the screen.
+    const PANEL: &str = "
+        screen { mode = Kessel3D }
+        mesh panel {
+          v -20 -20 0
+          v  20 -20 0
+          v  20  20 0
+          v -20  20 0
+          color 8
+          f 1 2 3 4
+        }
+    ";
+
+    #[test]
+    fn a_mesh_draws_where_it_was_put() {
+        let mut c = load(&format!(
+            "{PANEL}
+             function draw()
+               cls(1)
+               camera3d(0, 0, 0 - 100, 0, 0, 0)
+               draw3d(panel, 0, 0, 0, 0, 0, 0)
+             end"
+        ));
+        let obs = c.run_frame(0);
+        assert_eq!(c.screen_size(), (320, 240));
+        // Palette 8 is (255, 0, 77); through RGB565 and the board's widening.
+        assert_eq!(pixel(&c, 160, 120), [255, 0, 74]);
+        // The background is cls's colour, (29, 43, 83), likewise widened.
+        assert_eq!(pixel(&c, 2, 2), [24, 40, 82]);
+        let s = obs.scene3d.expect("a 3D frame reports its cost");
+        assert_eq!((s.tris, s.dropped, s.bad_meshes), (2, 0, 0));
+        assert!(obs.to_json()["scene3d"]["words"].as_u64().unwrap() > 0);
+    }
+
+    /// Seen from behind, a single-sided face is not there at all.
+    #[test]
+    fn the_back_of_a_face_is_culled() {
+        let mut c = load(&format!(
+            "{PANEL}
+             function draw()
+               cls(1)
+               camera3d(0, 0, 100, 32768, 0, 0)
+               draw3d(panel, 0, 0, 0, 0, 0, 0)
+             end"
+        ));
+        let obs = c.run_frame(0);
+        assert_eq!(pixel(&c, 160, 120), [24, 40, 82]);
+        assert_eq!(obs.scene3d.unwrap().culled, 1);
+    }
+
+    /// The overlay is on top whatever order the calls came in: the GPU draws
+    /// the scene at END_SCENE, so a `rect` before `draw3d` still covers it.
+    #[test]
+    fn the_2d_api_draws_over_the_scene() {
+        let mut c = load(&format!(
+            "{PANEL}
+             function draw()
+               cls(1)
+               rect(150, 110, 20, 20, 11)
+               camera3d(0, 0, 0 - 100, 0, 0, 0)
+               draw3d(panel, 0, 0, 0, 0, 0, 0)
+             end"
+        ));
+        c.run_frame(0);
+        assert_eq!(pixel(&c, 160, 120), [0, 231, 49], "the rect, not the panel");
+        assert_eq!(pixel(&c, 140, 120), [255, 0, 74], "the panel around it");
+    }
+
+    #[test]
+    fn a_frame_is_the_same_after_a_restore() {
+        let mut c = load(&format!(
+            "{PANEL}
+             local t = 0
+             function draw()
+               t = t + 1
+               cls(1)
+               camera3d(0, 0, 0 - 100, 0, 0, 0)
+               draw3d(panel, 0, 0, 0, t * 900, t * 500, 0)
+             end"
+        ));
+        c.run_frame(0);
+        let id = c.snapshot();
+        let a = c.run_frame(0).framebuffer_hash;
+        c.restore(&id).unwrap();
+        let b = c.run_frame(0).framebuffer_hash;
+        assert_eq!(a, b);
+        // …and the panel did turn, so the hash is of a picture that moves.
+        assert_ne!(a, c.run_frame(0).framebuffer_hash);
+    }
+
+    #[test]
+    fn the_3d_builtins_need_the_3d_screen() {
+        let m = messages("function draw() camera3d(0, 0, 0, 0, 0, 0) end");
+        assert!(m.contains("screen { mode = Kessel3D }"), "{m}");
+    }
+
+    #[test]
+    fn a_mesh_error_names_the_mesh_and_its_line() {
+        let m = messages(
+            "screen { mode = Kessel3D }\nmesh m {\n  v 0 0 0\n  f 1 2 3\n}\nfunction draw() end",
+        );
+        assert!(
+            m.contains("line 4: mesh 'm': '2' is not one of the 1 vertices"),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn a_texture_is_a_declared_sprite_of_power_of_two_size() {
+        let wide = format!(
+            "sprite wide {{\n{}}}\n",
+            "111111111111111111111111\n".repeat(8)
+        );
+        let m = messages(&format!(
+            "screen {{ mode = Kessel3D }}\n{wide}mesh m {{\n  tex wide\n}}\nfunction draw() end"
+        ));
+        assert!(m.contains("24x8 pixels"), "{m}");
+    }
+
+    #[test]
+    fn a_mesh_name_is_one_thing() {
+        let m = messages("sprite m {\n11\n}\nmesh m {\n  v 0 0 0\n}\nfunction draw() end");
+        assert!(m.contains("already declared as a sprite"), "{m}");
+    }
+
+    /// A 2D game is untouched: no 3D state, no `scene3d` in the record.
+    #[test]
+    fn a_2d_screen_reports_no_scene() {
+        let mut c = load("function draw() cls(3) end");
+        let obs = c.run_frame(0);
+        assert!(obs.scene3d.is_none());
+        assert!(obs.to_json().get("scene3d").is_none());
+        assert!(c.scene3d().is_none());
     }
 }

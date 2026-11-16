@@ -29,6 +29,7 @@ audio = ["play", "dep:cpal"]
 [dependencies]
 kessel-vm = { path = "../vm" }
 kessel-audio = { path = "../audio" }
+kessel-3d = { path = "../3d" }
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true

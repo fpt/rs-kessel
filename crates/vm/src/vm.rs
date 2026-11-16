@@ -106,7 +106,10 @@ impl Vm {
         self.halted = false;
         self.fault = None;
         self.devices = Devices::with_mode(mode);
-        self.run_vector(ROM_ORIGIN, cap())
+        let outcome = self.run_vector(ROM_ORIGIN, cap());
+        // What init() drew is frame 0's picture, on a 3D screen as on a 2D one.
+        self.devices.end_frame(&self.mem);
+        outcome
     }
 
     /// Run the installed frame vector for one frame with `input` applied.
@@ -117,10 +120,15 @@ impl Vm {
     pub fn run_frame(&mut self, input: impl Into<Input>, cap_cycles: u64) -> RunOutcome {
         self.devices.begin_frame(input.into());
         let vector = self.devices.frame_vector;
-        if vector == 0 || self.halted {
-            return RunOutcome::Completed;
-        }
-        self.run_vector(vector, cap_cycles)
+        let outcome = if vector == 0 || self.halted {
+            RunOutcome::Completed
+        } else {
+            self.run_vector(vector, cap_cycles)
+        };
+        // Even an abandoned frame ends: a Kessel3D scene shows what was drawn
+        // before the fault, which is the frame worth looking at.
+        self.devices.end_frame(&self.mem);
+        outcome
     }
 
     /// Push `entry` as a call, then step until the matching `RET` pops the

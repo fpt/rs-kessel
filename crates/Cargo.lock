@@ -737,6 +737,7 @@ name = "kessel"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "kessel-3d",
  "kessel-audio",
  "kessel-vm",
  "parking_lot",
@@ -746,6 +747,10 @@ dependencies = [
  "tempfile",
  "winit",
 ]
+
+[[package]]
+name = "kessel-3d"
+version = "0.1.0"
 
 [[package]]
 name = "kessel-audio"
@@ -765,6 +770,7 @@ dependencies = [
 name = "kessel-vm"
 version = "0.1.0"
 dependencies = [
+ "kessel-3d",
  "kessel-audio",
  "parking_lot",
  "serde",
