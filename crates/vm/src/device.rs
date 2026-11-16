@@ -20,6 +20,9 @@
 //! | 0xb | scale   | 0 scale (8.8 fixed, 256 = 1.0) · 1 blit-id (scaled tile at screen x/y) |
 //! | 0xc | trig    | 0 angle (write, 0..255 = full turn) → sin (read) · 1 cos (read); results are signed 8.8 fixed (-256..256) |
 //! | 0xd | touch   | 0 slot (write) / count (read) · 1 x · 2 y · 3 state (bit0 down, bit1 pressed, bit2 released) · 4 swipe · 5 dx · 6 dy · 7 frames held |
+//! | 0xf | 3d      | Kessel3D only. 1–6 argument latches · 8 draw3d(mesh) · 9 camera3d · a light3d · b ambient3d · c fog3d · d lens3d — see `scene3d.rs` |
+
+use crate::scene3d::Scene3d;
 
 /// The short side of every screen: 240 px.
 pub const SHORT_SIDE: usize = 240;
@@ -45,6 +48,10 @@ pub enum VideoMode {
     Portrait320,
     /// 320 wide × 240 tall.
     Landscape320,
+    /// Kessel3D: the tang-verilog 3D GPU's screen — 320×240, **RGB565**, drawn
+    /// by triangles. The 2D API still works, as an overlay on the scene. See
+    /// `scene3d.rs` and `docs/VM_3D.md`.
+    Kessel3D,
 }
 
 impl VideoMode {
@@ -53,7 +60,7 @@ impl VideoMode {
         match self {
             VideoMode::Square240 => (SHORT_SIDE, SHORT_SIDE),
             VideoMode::Portrait320 => (SHORT_SIDE, LONG_SIDE),
-            VideoMode::Landscape320 => (LONG_SIDE, SHORT_SIDE),
+            VideoMode::Landscape320 | VideoMode::Kessel3D => (LONG_SIDE, SHORT_SIDE),
         }
     }
 
@@ -84,6 +91,7 @@ impl VideoMode {
             }
             "portrait320" | "portrait" | "240x320" => Some(VideoMode::Portrait320),
             "landscape320" | "landscape" | "320x240" => Some(VideoMode::Landscape320),
+            "kessel3d" | "3d" => Some(VideoMode::Kessel3D),
             _ => None,
         }
     }
@@ -93,6 +101,7 @@ impl VideoMode {
             VideoMode::Square240 => "Square240",
             VideoMode::Portrait320 => "Portrait320",
             VideoMode::Landscape320 => "Landscape320",
+            VideoMode::Kessel3D => "Kessel3D",
         }
     }
 }
@@ -586,6 +595,9 @@ pub struct Devices {
     // `vline` borrow them — a rectangle is not a different kind of drawing.
     rect_w: u16,
     rect_h: u16,
+    /// Kessel3D's engine, GPU and 2D overlay. `None` on every 2D screen, which
+    /// is what keeps a 2D game's frame exactly what it was.
+    pub(crate) scene3d: Option<Box<Scene3d>>,
 }
 
 impl Default for Devices {
@@ -674,6 +686,7 @@ impl Devices {
             touch_slot: 0,
             rect_w: 0,
             rect_h: 0,
+            scene3d: scene3d_for(mode),
         }
     }
 
@@ -822,6 +835,21 @@ impl Devices {
     pub fn write(&mut self, port: u8, val: u16, mem: &[u8]) {
         let dev = port >> 4;
         let reg = port & 0x0f;
+        if let Some(scene) = self.scene3d.as_mut() {
+            match dev {
+                // Kessel3D's own page.
+                0xf => return scene.write(reg, val, mem, &self.palette),
+                // The 3D GPU has no light layer; a 3D scene lights itself.
+                0x2 => return,
+                // cls clears the scene to a colour and wipes the overlay.
+                0x1 if reg == 0x6 => {
+                    scene.clear = val as u8;
+                    scene.drawn.fill(false);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match dev {
             0x0 => match reg {
                 0x0 => {
@@ -1144,6 +1172,46 @@ impl Devices {
         self.console.clear();
         self.sound.clear();
         self.halt_requested = false;
+        if let Some(scene) = self.scene3d.as_mut() {
+            scene.begin_frame();
+        }
+    }
+
+    /// Finish a frame. On a 2D screen there is nothing to do — every op drew
+    /// as it ran. On Kessel3D this is where the scene becomes the GPU's words
+    /// and the words become the picture.
+    pub fn end_frame(&mut self, mem: &[u8]) {
+        if let Some(scene) = self.scene3d.as_mut() {
+            scene.end_frame(
+                mem,
+                self.tileset_base,
+                &self.palette,
+                &self.framebuffer,
+                self.width,
+            );
+        }
+    }
+
+    /// Kessel3D's state, or `None` on a 2D screen.
+    pub fn scene3d(&self) -> Option<&Scene3d> {
+        self.scene3d.as_deref()
+    }
+
+    /// What is on screen, as bytes, and how many bytes make a pixel — for the
+    /// observation's hash and its changed-pixel box. A 2D screen is its index
+    /// framebuffer, one byte a pixel; Kessel3D is the RGB565 picture, two.
+    pub fn screen_bytes(&self) -> (Vec<u8>, usize) {
+        match &self.scene3d {
+            Some(scene) => (
+                scene
+                    .display()
+                    .iter()
+                    .flat_map(|p| p.to_le_bytes())
+                    .collect(),
+                2,
+            ),
+            None => (self.framebuffer.clone(), 1),
+        }
     }
 
     /// Screen width in pixels — also the framebuffer's row stride.
@@ -1186,6 +1254,7 @@ impl Devices {
         self.lit = false;
         self.shadow = Vec::new();
         self.occluded = false;
+        self.scene3d = scene3d_for(mode);
     }
 
     /// Whether this ROM has lit anything. False means the framebuffer presents
@@ -1466,6 +1535,13 @@ impl Devices {
         (self.sprite_bank << 4) | (nibble & 0x0f)
     }
 
+    /// On Kessel3D, note that the 2D API drew pixel `at` of the overlay.
+    fn mark_drawn(&mut self, at: usize) {
+        if let Some(scene) = self.scene3d.as_mut() {
+            scene.drawn[at] = true;
+        }
+    }
+
     /// Draw a pixel at world coordinate (x, y). The camera offset translates
     /// world→screen; off-screen pixels are clipped.
     ///
@@ -1478,7 +1554,9 @@ impl Devices {
         let sy = y as i16 as i32 - self.cam_y as i32;
         let (w, h) = (self.width as i32, self.height as i32);
         if (0..w).contains(&sx) && (0..h).contains(&sy) {
-            self.framebuffer[sy as usize * self.width + sx as usize] = color;
+            let at = sy as usize * self.width + sx as usize;
+            self.framebuffer[at] = color;
+            self.mark_drawn(at);
         }
     }
 
@@ -1530,6 +1608,7 @@ impl Devices {
         let mut sx = sxa;
         while sx <= sxb {
             self.framebuffer[row + sx as usize] = c;
+            self.mark_drawn(row + sx as usize);
             sx += 1;
         }
     }
@@ -1552,7 +1631,9 @@ impl Devices {
         let c = color;
         let mut sy = sya;
         while sy <= syb {
-            self.framebuffer[sy as usize * self.width + sx as usize] = c;
+            let at = sy as usize * self.width + sx as usize;
+            self.framebuffer[at] = c;
+            self.mark_drawn(at);
             sy += 1;
         }
     }
@@ -1593,6 +1674,7 @@ impl Devices {
             let mut sx = x0;
             while sx <= x1 {
                 self.framebuffer[row + sx as usize] = color;
+                self.mark_drawn(row + sx as usize);
                 sx += 1;
             }
             sy += 1;
@@ -1667,6 +1749,15 @@ impl Devices {
         if dst.len() < self.pixels() * 4 {
             return false;
         }
+        if let Some(scene) = &self.scene3d {
+            // The board's scan-out widening, so the PNG an agent reads is the
+            // board's picture to the bit.
+            for (px, &p) in dst.chunks_exact_mut(4).zip(scene.display()) {
+                let [r, g, b] = kessel_3d::cmd::expand565(p);
+                px.copy_from_slice(&[r, g, b, 0xff]);
+            }
+            return true;
+        }
         if !self.lit {
             for (px, &idx) in dst.chunks_exact_mut(4).zip(self.framebuffer.iter()) {
                 let (r, g, b) = self.palette[idx as usize];
@@ -1690,6 +1781,11 @@ impl Devices {
         }
         true
     }
+}
+
+/// Kessel3D's state for a screen that needs it.
+fn scene3d_for(mode: VideoMode) -> Option<Box<Scene3d>> {
+    (mode == VideoMode::Kessel3D).then(|| Box::new(Scene3d::new(mode.pixels())))
 }
 
 /// One channel through one light level. `LIGHT_UNIT` is the identity; above it

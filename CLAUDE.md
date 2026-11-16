@@ -11,8 +11,9 @@ A tiny fantasy console, shipped three ways from one VM:
 - **The Android app** (`android/`) — a plain-Kotlin player for the games bundled
   in `games/`, over the same VM compiled to a `.so`.
 
-- **Rust**: workspace in `crates/`, four members — `vm` (`kessel-vm`),
-  `audio` (`kessel-audio`), `cli` (`kessel`), and `ffi` (`kessel-ffi`)
+- **Rust**: workspace in `crates/`, five members — `vm` (`kessel-vm`),
+  `audio` (`kessel-audio`), `3d` (`kessel-3d`), `cli` (`kessel`), and `ffi`
+  (`kessel-ffi`)
 - **Platforms**: macOS, Windows, Linux, Android. `kessel mcp` is headless-safe.
 
 ## Architecture
@@ -39,7 +40,8 @@ The console has three screens — `Square240` (240×240, the default),
 the size differs**. All are an 8-bit palette-index framebuffer over one
 256-entry palette, with the same ports and the same 4bpp sprite sheet. A mode
 that also changed the colour model would fork the blitter, the PNG encoder, and
-every host's upload path for nothing.
+every host's upload path for nothing. (A fourth screen, `Kessel3D`, *does* change it —
+for a reason, and at the cost of one branch; see *Kessel3D* below.)
 
 The short side is 240 on every screen, so a sprite, a glyph and a swipe are the
 same fraction of the picture whichever a game picks. There is no 128×128 screen
@@ -74,6 +76,65 @@ Three things follow, and none of them should be re-litigated:
 - **The palette commits on the *index* write** (`0x01`), not blue. That is the
   order a stack machine yields for free: `pal(i,r,g,b)` pushes `i` first, so `b`
   pops first and `i` last.
+
+### Kessel3D: the one screen with another colour model
+
+`screen { mode = Kessel3D }` is a fourth screen, and the one exception to *only
+the size differs*: it is tang-verilog's 3D GPU (`docs/SPECIFICATION_3D.md`
+there) — 320×240 **RGB565**, drawn in triangles. A lit, fogged, Gouraud-shaded
+triangle has no palette index to be, and the GPU it models has no 8-bit
+surface; the exception is the hardware's, not a convenience. It costs what the
+rule said it would cost and no more, because every host already reads pixels
+through `framebuffer_rgba_into` — the fork is one branch there, and none in a
+host. `docs/VM_3D.md` is the reference; `games/gates.lua` the worked example.
+
+The split follows the PS1's, and the board's:
+
+- **`kessel-3d`'s `gte`** is the host half — transform, light, fog, clip,
+  project — and turns meshes into the GPU's command words. On a board it runs
+  on the RP2350 beside the VM, and only screen-space triangles cross HSTX.
+- **`kessel-3d`'s `raster`** is the GPU half in software: it *executes those
+  words*. The picture always comes from running them, never from the engine's
+  own idea of what it drew, so the PC shows what the board would.
+
+Decisions that should not be re-litigated:
+
+- **The rasterizer is a port of `raster.py` and `gpu_model.py`, and stays
+  one.** Those are the rule in tang-verilog — they produce the RTL's CRC bit
+  for bit — and `crates/3d/tests/parity.rs` pins a scene to the CRC the model
+  computed from the same words. Every odd-looking integer step (the 17-bit
+  reciprocal mantissa, the wrapping 32-bit accumulators, the top-left rule)
+  mirrors one of theirs. A cleaner version is a picture a pixel off the board's.
+- **Integers only, `no_std`, no dependencies.** A float pipeline rounds
+  differently on the PC and the RP2350, and a scene that drifts by a pixel
+  between the agent's machine and the board is exactly the plausibly-wrong
+  picture this project exists to catch. The sine table is built at compile
+  time from integer Taylor terms for the same reason — not by `f64::sin` in a
+  build script. `cargo build -p kessel-3d --target thumbv8m.main-none-eabihf`
+  is the check.
+- **The 2D API is an overlay**, drawn by the ordinary 2D rasterizer into the
+  index framebuffer and sent over the scene as `FILL_RECT` runs. The GPU draws a
+  scene at `END_SCENE` and forbids 2D commands inside one, so "3D under, 2D
+  over" is its rule first. `cls` sets the scene's clear colour; the 2D lighting
+  ops do nothing (the GPU has no light layer).
+- **A texture is a sprite** whose sides are powers of two. A multi-tile sprite
+  is stored row-major, which *is* the GPU's 4bpp block order, so its tiles
+  upload unchanged. The palette is the CLUT with entries `16k` forced to
+  `0x0000`, the GPU's transparent texel — which keeps *nibble 0 is transparent
+  in every bank*. A real black elsewhere is nudged to `0x0020` so it stays a
+  texel rather than a hole.
+- **Uploads are deltas, and the cache is derived state.** A texture gets an
+  SDRAM slot on first use and is re-sent only when its tiles change. Pixels never
+  depend on where a texture went, so a snapshot needs nothing special; a host
+  whose real GPU lost its memory calls `invalidate_gpu_textures`.
+  `kessel shot --words` invalidates before the last frame so a dump stands alone.
+- **Angles are 16-bit** (65536 a turn), not `sin()`'s 0..255: a 256-step turn
+  is a visible jump when a camera pans slowly.
+- **The GPU's limits are reported, not hidden**: the engine stops at 4,096
+  triangles a scene, the rasterizer drops a tile's past 1,024, and both land in
+  the observation's `scene3d` record beside the word count.
+- **Textured faces fog toward black.** The GPU's modulate multiplies; it cannot
+  add a fog colour. Untextured faces fade toward it. Same as a PS1.
 
 ### Light is a layer, not a blend
 
@@ -525,6 +586,25 @@ rest of an effect for free. It cancels **from its own timestamp forward** — a
 panic scheduled for frame 10 must not delete the sounds of frames 0–9 that are
 still queued.
 
+### `crates/3d` — `kessel-3d`
+
+Kessel3D: the geometry engine and the 3D GPU's reference rasterizer.
+`#![no_std]` + `alloc`, dependency-free, integers only — see *Kessel3D* above.
+
+| File | Purpose |
+|------|---------|
+| `src/fixed.rs` | Binary angles, the compile-time sine table, `isqrt`, Q14 rotation matrices. |
+| `src/mesh.rs` | The `mesh { }` grammar (OBJ-like) and the big-endian bytes it compiles to. Owns the grammar's meaning, as `bank.rs` does for sound. |
+| `src/gte.rs` | `Gte`: camera, lens, light, fog; transform → light → fog → clip → project; `emit` writes the frame's words. `TexCache` (delta uploads) and `clut_from_palette`. |
+| `src/cmd.rs` | Encoders for the GPU's command words, `to565`, and the board's `expand565`. |
+| `src/raster.rs` | `SoftGpu`: executes the words — scene, tiles and their limits, Z, textures, blend. `frame_crc` is the board's `FRAME_CRC`. |
+| `tests/parity.rs` | One scene through every path, pinned to the CRC tang-verilog's model computed. `examples/parity_scene.rs` writes its words to re-check. |
+
+In `kessel-vm`, `src/scene3d.rs` is the device page (`0xf`): argument latches,
+the six commands, and `end_frame`, which builds the words — scene, then overlay
+runs, then `SWAP` — and runs them. `Devices::end_frame` is called by
+`Vm::run_frame` and after the reset vector.
+
 ### `crates/ffi` — `kessel-ffi`
 
 The console's play surface for hosts that are not Rust. `VmPlayer` only: load,
@@ -732,6 +812,7 @@ cd crates && cargo build --release --no-default-features   # headless
 ./crates/target/release/kessel mcp
 ./crates/target/release/kessel run games/tetris.lua
 ./crates/target/release/kessel shot games/outrun.lua -o /tmp/outrun.png
+./crates/target/release/kessel shot games/gates.lua --words /tmp/gates.words   # + FRAME_CRC
 
 cd crates && cargo run -p kessel-audio --example preview   # → target/audio-preview/*.wav
 ```
@@ -745,9 +826,11 @@ cd crates && cargo run -p kessel-audio --example preview   # → target/audio-pr
 kessel/
 ├── crates/vm/          kessel-vm: the console (host-free)
 ├── crates/audio/       kessel-audio: the synth (host-free, VM-free)
+├── crates/3d/          kessel-3d: Kessel3D's engine + the 3D GPU rasterizer (no_std)
 ├── crates/cli/         kessel: `mcp` + `play`
 ├── games/              sample games / luax reference corpus
-│                     (`rogue.lua` is the lighting example)
+│                     (`rogue.lua` is the lighting example,
+│                     `gates.lua` the Kessel3D one)
 ├── tools/              build-time asset pipeline (see tools/README.md) —
 │                     generate art, quantise it, print `sprite` blocks, and
 │                     check a frame set actually animates. Defaults to the
@@ -759,6 +842,7 @@ kessel/
 ├── docs/VM.md          machine, ISA, device map, luax, agent loop
 ├── docs/VM_GRAPHICS.md screens, palette, sprites, tilemap, drawing
 ├── docs/VM_CONTROLS.md buttons, stick, touch, gestures, controls metadata
+├── docs/VM_3D.md       Kessel3D: meshes, camera, light, fog, limits, the board
 ├── docs/VM_AUDIO.md    declaring/triggering sound, the render report
 ├── docs/SYNTH.md       synth architecture, event surface, build order
 └── docs/GAMEPLAY_METRICS.md
@@ -766,6 +850,14 @@ kessel/
 ```
 
 ## Testing notes
+
+- `crates/3d/tests/parity.rs` is the line between this repo and tang-verilog:
+  a scene driven through every engine path, pinned to the `FRAME_CRC`
+  tang-verilog's `gpu_model.py` computes from the same words. To re-derive it,
+  `cargo run -p kessel-3d --example parity_scene -- scene.words` and run the
+  file through that model. `kessel shot --words` does the same for any game.
+  `kessel-3d` is built at `opt-level = 3` even in dev: unoptimized, the
+  rasterizer is most of a debug frame and the corpus runs hundreds of them.
 
 - `crates/audio/tests/docs.rs` guards the other direction from the corpus: every
   field name shown in an `instrument`/`sfx`/`fx` block in `docs/VM_AUDIO.md` or

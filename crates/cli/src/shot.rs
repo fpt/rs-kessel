@@ -12,6 +12,12 @@
 //! edge, a board that no longer centres — and none of them fault, fail a test,
 //! or show up in an observation record. They are only visible.
 //!
+//! On a `Kessel3D` screen it also prints the frame's `FRAME_CRC` — the board's
+//! own checksum of what it scans out — and `--words FILE` writes the GPU
+//! command words the frame was drawn from (little-endian `u32`s), which is
+//! what to hand tang-verilog's `gpu_model.py`, or the board, to check that
+//! they draw the same picture.
+//!
 //! The screen size is read **after** the ROM loads, never before: it is the
 //! ROM's `screen { … }` that decides, and sizing the buffer first silently
 //! yields 240×240 and tears a 320×240 game across it.
@@ -28,6 +34,8 @@ pub struct Args {
     pub out: PathBuf,
     /// Buttons held for the whole run, as gamepad bits.
     pub buttons: u8,
+    /// Where to write a Kessel3D frame's GPU command words.
+    pub words: Option<PathBuf>,
 }
 
 /// One second. Enough for a title to settle and an idle animation to move off
@@ -39,6 +47,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     let mut frames = DEFAULT_FRAMES;
     let mut out: Option<PathBuf> = None;
     let mut buttons = 0u8;
+    let mut words: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -73,6 +82,13 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 }
                 i += 2;
             }
+            "--words" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "'--words' needs a path".to_string())?;
+                words = Some(PathBuf::from(v));
+                i += 2;
+            }
             other if other.starts_with('-') => return Err(format!("unexpected option '{other}'")),
             other => {
                 if file.is_some() {
@@ -96,6 +112,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         frames,
         out,
         buttons,
+        words,
     })
 }
 
@@ -147,6 +164,14 @@ pub fn run(args: Args) -> Result<(), String> {
     let mut ran = 0u64;
     let mut stopped: Option<String> = None;
     for _ in 0..args.frames {
+        // A frame's words only upload the textures that changed since the
+        // frame before. A dump is read on its own, so its frame has to carry
+        // every texture it samples — and the dumped frame is whichever one
+        // the loop stops on, which a fault or halt makes earlier than the
+        // last. So every frame re-uploads; pixels never depend on the cache.
+        if args.words.is_some() {
+            console.invalidate_gpu_textures();
+        }
         let obs = console.run_frame(args.buttons);
         ran += 1;
         if let Some(fault) = obs.fault {
@@ -169,6 +194,23 @@ pub fn run(args: Args) -> Result<(), String> {
 
     if let Some(why) = &stopped {
         println!("{why}");
+    }
+    if let Some(scene) = console.scene3d() {
+        println!("FRAME_CRC {:08x}", kessel_3d::frame_crc(scene.display()));
+        if let Some(path) = &args.words {
+            let bytes: Vec<u8> = scene.words().iter().flat_map(|w| w.to_le_bytes()).collect();
+            std::fs::write(path, bytes)
+                .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            println!(
+                "wrote {} — {} GPU words",
+                path.display(),
+                scene.words().len()
+            );
+        }
+    } else if args.words.is_some() {
+        return Err(
+            "--words is for a Kessel3D ROM: a 2D screen sends the GPU no words".to_string(),
+        );
     }
     println!(
         "wrote {} — {w}x{h}, frame {ran} ({len} bytes)",
@@ -243,6 +285,7 @@ mod tests {
             frames: 2,
             out: out.clone(),
             buttons: 0,
+            words: None,
         })
         .unwrap();
 

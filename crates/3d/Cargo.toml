@@ -1,0 +1,12 @@
+[package]
+name = "kessel-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Kessel3D: the console's fixed-point geometry engine and the reference rasterizer of the tang-verilog 3D GPU. no_std + alloc, so the same code runs on a PC and on an RP2350."
+
+# Deliberately dependency-free and `no_std`. The geometry engine is the part
+# that runs on the RP2350 beside the VM and feeds the FPGA's 3D GPU; a crate it
+# cannot link is a crate it would have to fork.
+[dependencies]

@@ -1,0 +1,182 @@
+# Kessel3D
+
+A PS1-shaped 3D screen: meshes, a camera, a directional light, fog, textures
+from the sprite sheet, Gouraud shading, a Z-buffer and four semi-transparency
+equations. It is the 3D GPU of
+[tang-verilog](https://github.com/fpt/tang-tiny-gpu) — the FPGA console Kessel
+runs on — in software, plus the half of a PS1 that fed it. Its
+`docs/SPECIFICATION_3D.md` is the contract this page builds on.
+
+A ROM picks it the way it picks any screen:
+
+```lua
+screen { mode = Kessel3D }
+```
+
+`games/gates.lua` is the worked example.
+
+## What changes on this screen
+
+**The colour model, on purpose.** Every 2D screen is 8-bit palette indices;
+Kessel3D is the 3D GPU's own 320×240 **RGB565**. A lit, fogged, Gouraud-shaded
+triangle has no palette index to be, and the GPU it models has no 8-bit surface
+to draw one into. The palette still matters: it is what an untextured face's
+`color` means, and it is the CLUT textures are read through, so `pal()` still
+recolours every textured surface.
+
+**The 2D API is an overlay.** `cls`, `pset`, `rect`, `hline`, `vline`, `spr`,
+`sprn`, `spr_scaled`, `map`, `text`, `number` — all of it draws exactly as on a
+2D screen, and lands **on top of** the 3D scene whatever order the calls came
+in. That is the hardware's rule before it is this one's: the GPU draws a
+scene's triangles at `END_SCENE` and forbids 2D commands inside one. Write the
+HUD the way you always would.
+
+- `cls(c)` sets the colour the scene clears to, and wipes the overlay.
+- The 2D **lighting** ops (`ambient`, `light`, `light_rect`, `shadow_rect`) do
+  nothing here. The 3D GPU has no light layer; a scene lights itself.
+
+## Units and angles
+
+- **Positions** are the VM's `i16` units. What a unit *is* is yours to choose;
+  the default near plane (16 units) suits "a unit is about a centimetre".
+- **Angles** are 16-bit: `65536` is a full turn, so `16384` is 90°, and adding to
+  one wraps for free. This is *not* `sin()`'s 0..255 — a 256-step turn is a
+  visible 1.4° jump when a camera pans slowly.
+- **Orientation** is yaw, then pitch, then roll. y is up and z is forward:
+  positive yaw turns right, positive pitch looks up, positive roll tips the top
+  toward +x.
+
+luax's `/`, `min` and `max` are **unsigned**, and 3D coordinates go negative
+all the time. Clamp with `if` on `: int` values, and halve with care —
+`games/gates.lua` has `clamp` and `half` for exactly this.
+
+## Meshes
+
+A mesh is declared like a sprite and drawn by name. The grammar is OBJ's, cut
+down — `v` a vertex, `vt` a texture coordinate, `f` a face by **1-based** index
+— with a few state lines that apply to every face after them:
+
+```lua
+mesh crate {
+  v -8 -8 -8
+  v  8 -8 -8
+  v  8  8 -8
+  v -8  8 -8
+  vt 0 16
+  vt 16 16
+  vt 16 0
+  vt 0 0
+  color 9              -- untextured faces from here are palette colour 9
+  tex wood             -- …or textured with sprite `wood`
+  tex wood 2           -- …through sprite bank 2
+  smooth               -- light by vertex normals (default: flat, per face)
+  double               -- draw both sides (default: single, back culled)
+  blend add            -- semi-transparent: avg, add, sub, quarter; `blend off`
+  f 1 2 3 4            -- counter-clockwise, seen from the front
+  f 1/1 2/2 3/3 4/4    -- with texture coordinates
+}
+```
+
+- A face is a triangle or a **convex** quad, **counter-clockwise from the
+  front**, as in OBJ. A face you can't see is usually one wound the wrong way:
+  a floor is `f 1 2 3 4` over (-x,-z) (+x,-z) (+x,+z) (-x,+z).
+- A **texture** is a sprite whose sides are each 8, 16, 32, 64, 128 or 256
+  pixels. Nibble 0 is transparent, as it is for `spr`. Without `/vt`, a face
+  maps the texture's corners in order from the bottom-left: `(0,h)`, `(w,h)`,
+  `(w,0)`, `(0,0)`.
+- `vt u v` is in texels and may be fractional (`12.5`). Coordinates past the
+  texture's size repeat it.
+- Normals are computed when the ROM is built, so drawing never takes a square
+  root.
+
+The mesh's name is the address of its bytes, as a `data` block's is. The byte
+layout is documented in `crates/3d/src/mesh.rs`. It is big-endian like the VM,
+so a game can `peek16` a vertex, or build a mesh in RAM and draw that.
+
+## Builtins
+
+All of them are diagnostics on a 2D screen.
+
+| Call | |
+|------|---|
+| `draw3d(mesh, x, y, z, yaw, pitch, roll)` | queue a mesh at a position and orientation |
+| `camera3d(x, y, z, yaw, pitch, roll)` | place the eye |
+| `lens3d(fov, near)` | horizontal field of view in degrees (10–170; default 70) and the near plane in units (default 16) |
+| `light3d(dx, dy, dz, r, g, b)` | a directional light shining **from** `(dx, dy, dz)`; colour 128 = 1× |
+| `ambient3d(r, g, b)` | light every surface gets; 128 = 1× (default 128, with no directional light — every face in exactly its palette colour) |
+| `fog3d(near, far, colour)` | fog by view depth toward palette `colour`; `far <= near` turns it off |
+
+Camera, lens, light and fog persist from frame to frame, like `camera()` does.
+Meshes do not: a frame draws what was queued in it.
+
+### Light and fog
+
+Each vertex gets `ambient + max(0, n·L) × light` per channel, 128 being 1×,
+saturating at 255 (2×). An **untextured** face multiplies its palette colour by
+that. A **textured** face hands it to the GPU, which modulates the texel by it,
+which is the PS1's rule.
+
+Fog fades an untextured face *toward* the fog colour. A textured face can only
+be **darkened**: the GPU's modulate multiplies and cannot add, so textured
+faces fog toward black, as they did on a PS1. Choose a dark fog colour and
+the two read as one.
+
+### What draws in front
+
+Opaque faces are Z-buffered, so their order does not matter. Semi-transparent
+faces are drawn after all of them, sorted far to near by each face's average
+depth. The GPU has no order-independent transparency, and two transparent
+faces that cross each other will show it.
+
+## Limits
+
+These are the GPU's, and they are reported rather than hidden. Every frame's
+observation carries a `scene3d` record:
+
+```json
+"scene3d": { "tris": 118, "culled": 40, "dropped": 0, "bad_meshes": 0, "tex_overflow": 0, "words": 1767 }
+```
+
+| | |
+|---|---|
+| 4,096 triangles a scene | past that, triangles are not sent (`dropped`) |
+| 1,024 triangles touching one 32×32 tile | past that, the tile loses them (`dropped`) |
+| guard band | geometry is clipped to the near plane and to -480..800 pixels; the screen clips the rest |
+| textures | 1 MiB of texture memory; past it a face draws untextured (`tex_overflow`) |
+| no perspective correction | textures interpolate linearly across the screen, as a PS1's did. A big textured face seen at a slant will swim, so split it into smaller faces |
+
+A `draw3d` whose address holds no mesh draws nothing and counts in
+`bad_meshes`.
+
+## The board
+
+The picture on a PC comes from running the **GPU's command words**, which are
+the words a board with the FPGA would be sent:
+
+```text
+UPLOAD      textures whose sprite tiles changed since the last frame
+CLUT_WRITE  the palette, nibble 0 transparent in every bank
+BEGIN_SCENE clear to cls's colour, Z from far
+  TRI …     opaque, in draw3d order;   then semi-transparent, far to near
+END_SCENE
+FILL_RECT … the 2D overlay, one run of one colour at a time
+SWAP
+```
+
+The rasterizer that runs them (`crates/3d/src/raster.rs`) is a port of
+tang-verilog's reference model, and `crates/3d/tests/parity.rs` pins a scene's
+CRC to the one that model computes. The geometry engine (`crates/3d/src/gte.rs`)
+is integer-only and `no_std`, and builds for the RP2350
+(`thumbv8m.main-none-eabihf`). On a board it runs beside the VM, and only
+screen-space triangles cross the link.
+
+To check a frame against the model or the board:
+
+```text
+kessel shot games/gates.lua -n 600 --words gates.words
+# FRAME_CRC 29f59c75
+```
+
+`FRAME_CRC` is the board's own checksum of what it scans out (CRC-32 over the
+doubled 640×480 RGB888). The words file is self-contained: it re-uploads every
+texture the frame samples.

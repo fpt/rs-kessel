@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "3d",
     "audio",
     "cli",
     "ffi",
@@ -22,3 +23,10 @@ serde_json = "1.0"
 
 # Error handling
 thiserror = "1.0"
+
+# The 3D GPU's rasterizer touches every pixel of every frame. Unoptimized it is
+# most of a debug build's frame, and the corpus tests run every game for
+# hundreds of frames in debug — so it is optimized even there. It has no
+# dependencies, so this costs one small crate's compile time.
+[profile.dev.package.kessel-3d]
+opt-level = 3

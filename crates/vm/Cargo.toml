@@ -10,6 +10,9 @@ description = "A tiny deterministic fantasy-console VM: stack machine, assembler
 # The synth's event and bank types. The dependency points this way — never the
 # reverse — so a standalone instrument can link kessel-audio without the VM.
 kessel-audio = { path = "../audio" }
+# Kessel3D's engine and the 3D GPU's reference rasterizer. no_std, so the
+# firmware that runs this VM on an RP2350 links the same geometry code.
+kessel-3d = { path = "../3d" }
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
