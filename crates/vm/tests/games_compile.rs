@@ -1067,6 +1067,7 @@ games_ok! {
     swarm_ok => "swarm",
     spectrum_ok => "spectrum",
     gates_ok => "gates",
+    demo3d_ok => "demo3d",
 }
 
 /// `popn.lua` is the reference for a pad with **no directions**: the four

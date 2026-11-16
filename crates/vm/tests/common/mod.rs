@@ -17,6 +17,7 @@ pub const GAMES: &[(&str, &str)] = &[
     ("2048.lua", include_str!("../../../../games/2048.lua")),
     ("bounce.lua", include_str!("../../../../games/bounce.lua")),
     ("brick.lua", include_str!("../../../../games/brick.lua")),
+    ("demo3d.lua", include_str!("../../../../games/demo3d.lua")),
     ("dnb.lua", include_str!("../../../../games/dnb.lua")),
     ("gates.lua", include_str!("../../../../games/gates.lua")),
     ("outrun.lua", include_str!("../../../../games/outrun.lua")),
@@ -45,6 +46,14 @@ pub const GAMES: &[(&str, &str)] = &[
 ///
 /// Embedded for the same reason [`GAMES`] is.
 pub const INCLUDES: &[(&str, &str)] = &[
+    (
+        "demo3d/meshes.lua",
+        include_str!("../../../../games/demo3d/meshes.lua"),
+    ),
+    (
+        "demo3d/textures.lua",
+        include_str!("../../../../games/demo3d/textures.lua"),
+    ),
     (
         "lib/motion.lua",
         include_str!("../../../../games/lib/motion.lua"),

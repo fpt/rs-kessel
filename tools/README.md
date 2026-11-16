@@ -194,6 +194,17 @@ cannot fix that because it scales by one factor rather than fitting a silhouette
 `.claude/skills/sprite-art/SKILL.md` has the prompt recipe these numbers came
 from: what to write so a set comes out consistent in the first place.
 
+## demo3d_assets.py
+
+Not part of the pipeline above: it writes `games/demo3d/textures.lua` and
+`games/demo3d/meshes.lua` from the texture procedures and shapes of
+tang-verilog's `tools/harness/demo3d.py`, quantising each texture to 15
+colours in a sprite bank of its own. Standard library only, deterministic:
+
+```bash
+python3 tools/demo3d_assets.py
+```
+
 ## Notes
 
 And always look at `--preview`. Quantisation failures do not error, they just
